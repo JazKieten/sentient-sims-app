@@ -93,6 +93,16 @@ export function buildCognitionUserPrompt(
     if (brokenThings.length > 0) {
       lotLines.push(`Something is wrong on the lot: ${brokenThings.join('; ')}.`);
     }
+    // Dirty things get their own line — hidden from the prompt, the model never once
+    // chose clean_up while the offered list carried it (observed live: filthy counter,
+    // sim happily sitting around)
+    const dirtyThings = (lot.conditions ?? [])
+      .filter((condition) => condition.conditions.includes('dirty'))
+      .slice(0, 5)
+      .map((condition) => `${condition.name}`);
+    if (dirtyThings.length > 0) {
+      lotLines.push(`The place is getting gross — dirty: ${dirtyThings.join('; ')}.`);
+    }
     if (lotLines.length > 0) {
       sections.push(lotLines.join(' '));
     }

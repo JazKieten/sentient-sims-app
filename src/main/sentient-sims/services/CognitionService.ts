@@ -700,6 +700,12 @@ export class CognitionService {
       log.warn(
         `[Cognition] sim ${simId} '${runtime.pendingAction}' produced no outcome in ${Math.round(timeoutMs / 1000)}s; releasing`,
       );
+      // A timed-out action failed in every way that matters — suppress it like a failed
+      // outcome, or the model re-picks it immediately (observed live: sit -> timeout ->
+      // sit again 20s later)
+      if (runtime.pendingAction) {
+        runtime.failedActionsAt.set(runtime.pendingAction, Date.now());
+      }
       // Release the dispatcher's in-flight entry too — otherwise a lost dispatch (mod
       // websocket down) blocks every future dispatch for this sim until the 10-min TTL
       this.ctx.actionDispatcher.release?.(runtime.pendingRequestId);

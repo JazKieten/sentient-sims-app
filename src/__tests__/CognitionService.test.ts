@@ -167,6 +167,13 @@ describe('CognitionService', () => {
     // The dispatcher's in-flight entry dies with the state machine's view — a lost
     // dispatch must not block the sim until the dispatcher TTL
     expect(released).toEqual(['req-1']);
+
+    // The timed-out action is suppressed like a failure: the model re-picks it but the
+    // provider is filtered out, so it degrades to continue instead of looping
+    cache.ingest(idleSimReport(2));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toHaveLength(1);
+    expect(cognition.getStats().invalidIntents).toBe(1);
   });
 
   it('suggest mode logs the would-be intent without dispatching', async () => {

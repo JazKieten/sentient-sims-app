@@ -437,6 +437,26 @@ describe('CognitionService', () => {
     expect(dispatched[0].action).toBe('use_toilet');
   });
 
+  it('a hung model call cannot deadlock the cognition lane', async () => {
+    vi.useFakeTimers();
+    // Observed live: a provider request that never resolved left the runtime in
+    // DELIBERATING forever, and maxConcurrent 1 silenced every future tick
+    const hang = new Promise<never>(() => {});
+    const { cache, cognition, ctx } = buildCtx({});
+    (ctx as unknown as { ai: { runOneShot: () => Promise<never> } }).ai.runOneShot = () => hang;
+    cache.ingest(idleSimReport(1));
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+
+    // The lane is free again: a fresh report deliberates
+    (ctx as unknown as { ai: { runOneShot: () => Promise<unknown> } }).ai.runOneShot = () =>
+      Promise.resolve({ text: ACTION_INTENT, exchange: {} });
+    cache.ingest(idleSimReport(2));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(cognition.getStats().deliberations).toBe(2);
+  });
+
   it('holds cognition entirely while the database is not loaded', async () => {
     const { ctx, cache, cognition } = buildCtx({ intentJson: ACTION_INTENT });
     (ctx as unknown as { db: { isLoaded: () => boolean } }).db.isLoaded = () => false;

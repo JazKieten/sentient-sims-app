@@ -101,6 +101,29 @@ const CRITICAL_NEED_FIXES: Record<string, string[]> = {
 
 const RELEVANT_MEMORY_COUNT = 4;
 
+// A hung provider request (no response, no error) left a runtime in DELIBERATING
+// forever and — with maxConcurrent 1 — deadlocked every future tick (observed live:
+// total cognition silence after 21:41 while reports kept flowing). No model call may
+// outlive this.
+const LLM_CALL_TIMEOUT_MS = 45_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${LLM_CALL_TIMEOUT_MS}ms`)), LLM_CALL_TIMEOUT_MS);
+    (timer as { unref?: () => void }).unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export type CognitionStats = {
   deliberations: number;
   dispatches: number;
@@ -420,8 +443,11 @@ export class CognitionService {
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
     const userPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
 
-    const oneShot = await this.ctx.generationQueue.runCognition(() =>
-      this.ctx.ai.runOneShot('Cognition', COGNITION_SYSTEM_PROMPT, userPrompt, 400, undefined, AIActionType.COGNITION),
+    const oneShot = await withTimeout(
+      this.ctx.generationQueue.runCognition(() =>
+        this.ctx.ai.runOneShot('Cognition', COGNITION_SYSTEM_PROMPT, userPrompt, 400, undefined, AIActionType.COGNITION),
+      ),
+      'cognition deliberation',
     );
 
     const candidate = parseIntentJson(oneShot.text);
@@ -561,15 +587,18 @@ export class CognitionService {
     lotActionKeys?: string[],
   ): Promise<CognitionIntent> {
     try {
-      const review = await this.ctx.generationQueue.runCognition(() =>
-        this.ctx.ai.runOneShot(
-          'Cognition Review',
-          COGNITION_REVIEW_SYSTEM_PROMPT,
-          `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
-          300,
-          undefined,
-          AIActionType.COGNITION,
+      const review = await withTimeout(
+        this.ctx.generationQueue.runCognition(() =>
+          this.ctx.ai.runOneShot(
+            'Cognition Review',
+            COGNITION_REVIEW_SYSTEM_PROMPT,
+            `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
+            300,
+            undefined,
+            AIActionType.COGNITION,
+          ),
         ),
+        'cognition review',
       );
       const reviewed = validateIntent(parseIntentJson(review.text), entry, lotActionKeys);
       if (reviewed.ok) {

@@ -79,6 +79,9 @@ export async function playAudioStream(
   if (context.state === 'suspended') {
     await context.resume();
   }
+  if (context.state !== 'running') {
+    log.warn(`[TTS] AudioContext not running after resume: ${context.state} — stream will be silent`);
+  }
 
   const mediaSource = new MediaSource();
   const audio = new Audio();
@@ -158,6 +161,15 @@ export async function playAudioStream(
     audio.addEventListener(
       'ended',
       () => {
+        // currentTime near zero at 'ended' is the smoking gun for a silent death —
+        // observed live: a line logged 'playback started' and produced no audio, and
+        // with no completion logging the failure was invisible
+        const played = audio.currentTime;
+        if (played < 0.5) {
+          log.warn(`[TTS] Streaming playback ENDED after only ${played.toFixed(2)}s — likely silent failure (context state: ${context.state})`);
+        } else {
+          log.info(`[TTS] Streaming playback finished after ${played.toFixed(2)}s`);
+        }
         cleanup();
         resolve();
       },

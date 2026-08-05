@@ -336,6 +336,22 @@ describe('CognitionService', () => {
     expect(cognition.getStats().continues).toBe(1);
   });
 
+  it('cuts go_out from the vocabulary when the sim is too tired', async () => {
+    // Observed live: the wrecked-rule walked her home and the social drive sent her
+    // straight back out — home for 17 seconds between bar trips, sleep/fun/fridge
+    // starved of any home time
+    const intent = JSON.stringify({ kind: 'action', action: 'go_out', thought: 'people!' });
+    const { cache, dispatched } = buildCtx({ intentJson: intent });
+    const report = idleSimReport(1);
+    report.lot!.action_keys = ['go_out'];
+    report.sims![0].self!.needs = { social: -100, energy: -50 };
+    cache.ingest(report);
+    await settle();
+
+    // go_out was filtered before the model's pick validated -> inert continue
+    expect(dispatched).toHaveLength(0);
+  });
+
   it('suppresses a one-shot verb after success too (done is done)', async () => {
     // Observed live: hire_repair_service succeeded, the sink stayed flagged broken
     // until the repairman arrived, and the model re-picked it 15s later ('already hired')

@@ -121,6 +121,11 @@ const LLM_RETRIES = 1;
 // (observed live: hire_repair_service succeeded, re-picked 15s later, 'already hired')
 const ONE_SHOT_ACTIONS = new Set(['hire_repair_service', 'pay_bills', 'call_firefighter', 'go_out']);
 
+// Below this energy, go_out leaves the vocabulary entirely: sleep first, party later.
+// Without it the wrecked-rule and the social drive ping-ponged her home->bar->home
+// (observed live: home for 17 seconds between trips)
+const TOO_TIRED_TO_GO_OUT = -40;
+
 // Retry wrapper: each attempt gets a fresh request and its own timeout. Only the LAST
 // failure propagates; earlier ones are logged and retried.
 async function withRetry<T>(makeAttempt: () => Promise<T>, label: string): Promise<T> {
@@ -534,6 +539,14 @@ export class CognitionService {
     const suppressed = this.recentlyFailedActions(runtime);
     if (suppressed.size > 0) {
       log.debug(`[Cognition] sim ${simId} suppressing recently failed actions: ${[...suppressed].join(', ')}`);
+    }
+    // Too tired to go out: with social pinned worst, the model sent her BACK out the
+    // moment the wrecked-rule walked her home — a home->bar commute loop that starved
+    // sleep, fun, and the broken fridge of any home time (observed live: walked in the
+    // door and left again 17 seconds later)
+    const energy = entry.self?.needs?.energy;
+    if (typeof energy === 'number' && energy < TOO_TIRED_TO_GO_OUT) {
+      suppressed.add('go_out');
     }
     const entryView = this.withoutSuppressedActions(entry, suppressed);
     const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !suppressed.has(key));

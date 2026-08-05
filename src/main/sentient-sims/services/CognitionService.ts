@@ -190,6 +190,12 @@ export class CognitionService {
     // its fixing action dispatched directly — the model was watched fumbling this
     entries.forEach((entry) => this.maybeFixCriticalNeed(entry, now));
 
+    // A wrecked sim away from home goes HOME as a rule — checked before the walk-in
+    // rule so exhaustion outranks joining the party
+    if (report.lot?.is_home === false) {
+      entries.forEach((entry) => this.maybeGoHomeExhausted(entry, now));
+    }
+
     // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
     // at home send them home (go_home), at a venue walk them in (enter_lot); provenance
     // for both cases lives on maybeRejoinLot
@@ -340,6 +346,58 @@ export class CognitionService {
         this.toCooldown(simId);
       }
       return;
+    }
+  }
+
+  // Away from home, the game's own passout fallback is a terrible night out: an
+  // exhausted sim — or one starving somewhere with no food on offer — heads HOME as a
+  // rule, no LLM; bed and fridge live there (observed live: Energy -79 at the bar while
+  // the model kept trying the broken TV). Mid-social sims finish their conversation
+  // first; the rule fires on the next report after it ends.
+  private maybeGoHomeExhausted(entry: SimStateEntry, now: number) {
+    const simId = entry.sim_id;
+    if (!simId || entry.self?.in_ww_scene || entry.activity?.in_social) {
+      return;
+    }
+    const runtime = this.runtime(simId);
+    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+      return;
+    }
+    const needs = entry.self?.needs ?? {};
+    const offered = offeredActions(entry);
+    const exhausted = typeof needs.energy === 'number' && needs.energy < NEED_CRITICAL;
+    const starvingNoFood =
+      typeof needs.hunger === 'number' &&
+      needs.hunger < NEED_CRITICAL &&
+      !CRITICAL_NEED_FIXES.hunger.some((fix) => offered.objectActions.has(fix));
+    if (!exhausted && !starvingNoFood) {
+      return;
+    }
+    if (this.recentlyFailedActions(runtime).has('go_home')) {
+      return;
+    }
+    const why = exhausted ? `energy ${needs.energy}` : `hunger ${needs.hunger} with no food here`;
+    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+      log.info(`[Cognition][suggest] sim ${simId} is wrecked away from home (${why}); would go_home`);
+      this.toCooldown(simId);
+      return;
+    }
+    try {
+      const requestId = this.ctx.actionDispatcher.dispatch({
+        sim_id: simId,
+        action: 'go_home',
+        motivation: 'Completely worn out; calling it a night and heading home.',
+        source: 'cognition',
+      });
+      runtime.phase = 'PENDING_OUTCOME';
+      runtime.pendingRequestId = requestId;
+      runtime.pendingAction = 'go_home';
+      this.stats.dispatches += 1;
+      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
+      log.info(`[Cognition] sim ${simId} is wrecked away from home (${why}) -> go_home (rule, ${requestId})`);
+    } catch (error) {
+      log.warn(`[Cognition] go_home dispatch refused for sim ${simId}`, error);
+      this.toCooldown(simId);
     }
   }
 

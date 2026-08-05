@@ -568,6 +568,21 @@ describe('CognitionService', () => {
     expect(dispatched[0].action).toBe('go_home');
   });
 
+  it('sends a critically exhausted sim home from a venue as a rule', async () => {
+    // Observed live: Energy -79 at the bar, no bed or food there, model kept trying
+    // the broken TV while she drifted toward passout
+    const { cache, dispatched, oneShotCalls } = buildCtx({ intentJson: ACTION_INTENT });
+    const report = idleSimReport(1);
+    report.lot!.is_home = false;
+    report.sims![0].self!.needs = { energy: -90, social: -100, hunger: 20 };
+    cache.ingest(report);
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('go_home');
+    expect(oneShotCalls).toHaveLength(0);
+  });
+
   it('walks an idle off-lot sim into a venue instead of sending them home', async () => {
     // Travel spawns sims on the street outside the venue lot; observed live: she stood
     // outside the bar thinking wistful thoughts while three sims drank inside

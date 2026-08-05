@@ -190,15 +190,12 @@ export class CognitionService {
     // its fixing action dispatched directly — the model was watched fumbling this
     entries.forEach((entry) => this.maybeFixCriticalNeed(entry, now));
 
-    // Rule-based, no LLM: a household sim standing idle OFF the home lot (chatted their
-    // way to the sidewalk) can't usefully deliberate — perception is street noise — so
-    // send them home and deliberate once they're back (observed live: the sim vanished
-    // from reports entirely before the mod started reporting off-lot sims)
-    if (report.lot?.is_home) {
-      entries
-        .filter((entry) => entry.self?.on_active_lot === false)
-        .forEach((entry) => this.maybeSendHome(entry, now));
-    }
+    // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
+    // at home send them home (go_home), at a venue walk them in (enter_lot); provenance
+    // for both cases lives on maybeRejoinLot
+    entries
+      .filter((entry) => entry.self?.on_active_lot === false)
+      .forEach((entry) => this.maybeRejoinLot(entry, now, report.lot?.is_home === true));
 
     const candidates = entries
       .filter((entry) => this.isEligible(entry, report, now))
@@ -346,8 +343,15 @@ export class CognitionService {
     }
   }
 
-  private maybeSendHome(entry: SimStateEntry, now: number) {
+  // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
+  // perception is street noise, no same-room sims to talk to. At home the fix is
+  // go_home; at a venue it is enter_lot (observed live: she traveled to a bar, spawned
+  // on the street, and stood outside thinking wistful thoughts while three sims drank
+  // inside — nothing ever walked her in).
+  private maybeRejoinLot(entry: SimStateEntry, now: number, isHome: boolean) {
     const simId = entry.sim_id;
+    const action = isHome ? 'go_home' : 'enter_lot';
+    const where = isHome ? 'off the home lot' : 'outside the venue lot';
     if (!simId) {
       return;
     }
@@ -359,7 +363,7 @@ export class CognitionService {
       return;
     }
     // Busy or mid-scene off-lot sims are living their life (walking somewhere, chatting);
-    // only a standing-idle sim gets pulled home. Idle/stand animations count as idle —
+    // only a standing-idle sim gets pulled in. Idle/stand animations count as idle —
     // observed live: a sim "running" idle_Energy in the street at 1am was never sent home
     if (entry.activity?.in_social || entry.self?.in_ww_scene) {
       return;
@@ -371,30 +375,32 @@ export class CognitionService {
     if ((entry.activity?.queue ?? []).some((queued) => !isIdleAnimation(queued))) {
       return;
     }
-    // A go_home that just failed (e.g. "already at home" edge) must not retry every tick
-    if (this.recentlyFailedActions(runtime).has('go_home')) {
+    // A rejoin that just failed (e.g. "already at home" edge) must not retry every tick
+    if (this.recentlyFailedActions(runtime).has(action)) {
       return;
     }
     if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
-      log.info(`[Cognition][suggest] sim ${simId} is idle off the home lot; would send home`);
+      log.info(`[Cognition][suggest] sim ${simId} is idle ${where}; would dispatch ${action}`);
       this.toCooldown(simId);
       return;
     }
     try {
       const requestId = this.ctx.actionDispatcher.dispatch({
         sim_id: simId,
-        action: 'go_home',
-        motivation: 'Wandering the street with nothing to do; heading home.',
+        action,
+        motivation: isHome
+          ? 'Wandering the street with nothing to do; heading home.'
+          : 'Standing around outside; heading in to where the people are.',
         source: 'cognition',
       });
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;
-      runtime.pendingAction = 'go_home';
+      runtime.pendingAction = action;
       this.stats.dispatches += 1;
-      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
-      log.info(`[Cognition] sim ${simId} is idle off the home lot -> go_home (${requestId})`);
+      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
+      log.info(`[Cognition] sim ${simId} is idle ${where} -> ${action} (${requestId})`);
     } catch (error) {
-      log.warn(`[Cognition] go_home dispatch refused for sim ${simId}`, error);
+      log.warn(`[Cognition] ${action} dispatch refused for sim ${simId}`, error);
       this.toCooldown(simId);
     }
   }

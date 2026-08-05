@@ -554,7 +554,9 @@ describe('CognitionService', () => {
     expect(dispatched[0].action).toBe('go_home');
   });
 
-  it('never sends sims home from a lot that is not their home', async () => {
+  it('walks an idle off-lot sim into a venue instead of sending them home', async () => {
+    // Travel spawns sims on the street outside the venue lot; observed live: she stood
+    // outside the bar thinking wistful thoughts while three sims drank inside
     const { cache, dispatched, oneShotCalls } = buildCtx({ intentJson: ACTION_INTENT });
     const report = idleSimReport(1);
     report.lot!.is_home = false;
@@ -562,8 +564,9 @@ describe('CognitionService', () => {
     cache.ingest(report);
     await settle();
 
-    // Not sent home, and off-lot sims never deliberate either
-    expect(dispatched).toHaveLength(0);
+    // Rule-based enter_lot, never go_home — and off-lot sims never deliberate either
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('enter_lot');
     expect(oneShotCalls).toHaveLength(0);
   });
 

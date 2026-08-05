@@ -10,6 +10,10 @@ export enum ModWebsocketMessageType {
   ADD_BUFF = 'add_buff',
   SCENE_LINE = 'scene_line',
   ENQUEUE_INTERACTION = 'enqueue_interaction',
+  // Cancels a previously pushed interaction the app has given up on (cognition's
+  // pending timeout) — otherwise a push queued behind a long-running activity outlives
+  // the app's interest and runs anyway (three stacked showers observed live)
+  CANCEL_INTERACTION = 'cancel_interaction',
   REQUEST_PERCEPTION = 'request_perception',
 }
 
@@ -81,6 +85,12 @@ export type ModRequestPerception = ModWebsocketMessage & {
   sim_id: string;
 };
 
+// Cancels the pushed interaction registered under request_id (firewalled mod-side to
+// the mod's own push registry — never touches player-queued interactions)
+export type ModCancelInteraction = ModWebsocketMessage & {
+  request_id: string;
+};
+
 export type WebsocketNotification =
   | ModWebsocketMessage
   | ModWebsocketNotification
@@ -90,4 +100,5 @@ export type WebsocketNotification =
   | ModAddBuff
   | ModSceneLine
   | ModEnqueueInteraction
-  | ModRequestPerception;
+  | ModRequestPerception
+  | ModCancelInteraction;

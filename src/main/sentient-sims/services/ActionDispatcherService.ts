@@ -1,7 +1,12 @@
 import log from 'electron-log';
 import { randomUUID } from 'crypto';
 import { ActionIntent } from '../models/ActionIntent';
-import { ModEnqueueInteraction, ModWebsocketMessageType, WebsocketNotification } from '../models/ModWebsocketMessage';
+import {
+  ModCancelInteraction,
+  ModEnqueueInteraction,
+  ModWebsocketMessageType,
+  WebsocketNotification,
+} from '../models/ModWebsocketMessage';
 import { isWebSocketConnected, sendModNotification } from '../websocketServer';
 
 export type PendingDispatch = {
@@ -74,7 +79,9 @@ export class ActionDispatcherService {
 
   // Abandons an in-flight dispatch whose outcome the caller has given up on (cognition's
   // pending timeout). Keeps the dispatcher's view aligned with the state machine instead
-  // of blocking the sim until the 10-minute TTL.
+  // of blocking the sim until the 10-minute TTL, and tells the mod to cancel the game-side
+  // interaction: a push queued behind a long-running activity otherwise outlives the app's
+  // interest and runs anyway (three stacked showers observed live).
   release(requestId: string | undefined): void {
     if (!requestId) {
       return;
@@ -82,6 +89,13 @@ export class ActionDispatcherService {
     const entry = this.pending.get(requestId);
     if (entry) {
       log.debug(`[ActionDispatcher] releasing abandoned dispatch ${requestId} (${entry.intent.action})`);
+      if (this.isModConnected()) {
+        const cancel: ModCancelInteraction = {
+          type: ModWebsocketMessageType.CANCEL_INTERACTION,
+          request_id: requestId,
+        };
+        this.sendToMod(cancel);
+      }
     }
     this.resolve(requestId);
   }

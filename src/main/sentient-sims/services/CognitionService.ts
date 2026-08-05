@@ -60,7 +60,10 @@ const REDISPATCH_WHILE_BUSY_MS = 2 * 60_000;
 // "running" Emotion_Idle is standing around. Treating them as busy blocked legitimate
 // dispatches and starved the go-home rule (both observed live).
 function isIdleAnimation(name: string): boolean {
-  return /^(idle|stand|sim-stand|emotion_idle)/i.test(name);
+  // sit/seating: a PASSIVELY sitting sim is parked, not busy — observed live: she sat
+  // in a chair for minutes while every tick logged "busy; not urgent enough to
+  // interrupt" (active seated verbs like watch_tv report their own name, not 'sit')
+  return /^(idle|stand|sim-stand|emotion_idle|sit|seating)/i.test(name);
 }
 
 // Which need each whitelist action addresses (values match the report's needs keys).

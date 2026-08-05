@@ -8,6 +8,13 @@ export type PerceivedSim = {
   // Present only for same_room: identity is never learned through a wall
   name?: string;
   doing?: string;
+  // Observer -> perceived relationship: the has_met gate plus the lore layer
+  social?: {
+    has_met?: boolean;
+    friendship?: number;
+    romance?: number;
+    bits?: string[];
+  };
 };
 
 export type PerceivedObject = {

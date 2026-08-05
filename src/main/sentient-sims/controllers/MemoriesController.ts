@@ -79,6 +79,9 @@ export class MemoriesController {
       const createMemoryRequest = req.body as CreateMemoryRequest;
 
       const memory = this.ctx.memoryRepository.createMemory(createMemoryRequest);
+      if (!memory) {
+        return res.json({ error: 'Memory rejected by hygiene gate (empty, refusal, or scaffolding)' });
+      }
       return res.json(memory);
     } catch (err) {
       log.error('Error creating memory', err);

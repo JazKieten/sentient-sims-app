@@ -19,10 +19,14 @@ function loadedContext(sessionId: string): ApiContext {
 }
 
 function createMemory(ctx: ApiContext, memory: Partial<MemoryEntity>): MemoryEntity {
-  return ctx.memoryRepository.createMemory({
+  const created = ctx.memoryRepository.createMemory({
     memory: { location_id: 1, content: 'a memory', ...memory },
     participants: [{ id: '100' }],
   });
+  if (!created) {
+    throw new Error('test memory rejected by hygiene gate');
+  }
+  return created;
 }
 
 function fakeEmbedder(vector: number[]): EmbeddingService {

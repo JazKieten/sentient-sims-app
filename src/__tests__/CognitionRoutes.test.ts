@@ -202,6 +202,34 @@ describe('cognition routes', () => {
     expect(await post('/cognition/sleep-boundary', {})).toMatchObject({ error: 'sim_id is required' });
   });
 
+  it('ingests state reports into the SimStateCache', async () => {
+    const result = await post('/cognition/state', {
+      type: 'state_report',
+      seq: 1,
+      whitelist_version: 'abc123',
+      lot: { zone_id: 9, clock: { hour: 14, paused: false }, funds: 500, owned: { computer: 0, fridge: 1 } },
+      sims: [
+        {
+          sim_id: '123',
+          sims: [],
+          objects: [],
+          self: { mood: 'Happy', needs: { bladder: 20 }, wants: ['want_Motives_Energy'] },
+          activity: { queue: [], running: null, in_social: false },
+        },
+      ],
+      went_idle: ['123'],
+    });
+
+    expect(result).toMatchObject({ ok: true, seq: 1 });
+    expect(ctx.simStateCache.getReport()?.seq).toBe(1);
+    expect(ctx.simStateCache.getSim('123')?.self?.mood).toBe('Happy');
+    expect(ctx.simStateCache.isStale()).toBe(false);
+    // getPerception reads through the cache once state reports flow
+    expect(ctx.controller.cognition.getPerception('123')?.self?.mood).toBe('Happy');
+
+    expect(await post('/cognition/state', { seq: 2 })).toMatchObject({ error: 'not a state_report' });
+  });
+
   it('rejects invalid requests', async () => {
     expect(await post('/cognition/debug/enqueue', { sim_id: '123' })).toMatchObject({
       error: 'sim_id and action are required',

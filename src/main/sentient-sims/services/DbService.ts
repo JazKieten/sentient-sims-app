@@ -236,6 +236,10 @@ export class DbService {
     });
   }
 
+  isLoaded(): boolean {
+    return Boolean(this.db);
+  }
+
   getDb(saveGame?: SaveGame) {
     if (saveGame) {
       return this.getDatabaseTemp(saveGame);

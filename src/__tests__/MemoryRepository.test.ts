@@ -25,7 +25,7 @@ describe('MemoryRepository', () => {
     const result = ctx.memoryRepository.createMemory({
       memory,
       participants,
-    });
+    })!;
     expect(result.id).toBeGreaterThanOrEqual(0);
     expect(result.content).toEqual(memory.content);
     expect(result.pre_action).toEqual(memory.pre_action);
@@ -133,14 +133,16 @@ describe('MemoryRepository', () => {
       },
       participants: [],
     });
-    // Nothing renderable at all
-    ctx.memoryRepository.createMemory({
+    // Nothing renderable at all — the hygiene gate refuses to persist it (the playtest
+    // DB carried 76 text-less failed generations that polluted retrieval)
+    const rejected = ctx.memoryRepository.createMemory({
       memory: { location_id: 1, event_type: 'interaction' },
       participants: [],
     });
+    expect(rejected).toBeUndefined();
 
     const memories = ctx.memoryRepository.getMemories();
-    expect(memories).toHaveLength(3);
+    expect(memories).toHaveLength(2);
     memories.forEach((memory) => {
       expect(typeof memory.content).toEqual('string');
       expect(memory.content).not.toMatch(/[<>]/);
@@ -151,7 +153,6 @@ describe('MemoryRepository', () => {
     // observation is neutralized identically so consumers comparing the fields see equal strings
     expect(memories[0].observation).toEqual(memories[0].content);
     expect(memories[1].content).toEqual('Marisol Vega is asking Julio Brewer about their career.');
-    expect(memories[2].content).toEqual('');
 
     // The stored rows keep their own shape
     expect(ctx.memoryRepository.getMemory({ id: Number(memories[1].id) }).content).toBeNull();
@@ -176,7 +177,7 @@ describe('MemoryRepository', () => {
     const result = ctx.memoryRepository.createMemory({
       memory,
       participants: [{ id: '100' }],
-    });
+    })!;
 
     expect(result.interaction_name).toEqual('mixer_social_GossipAbout');
 
@@ -203,7 +204,7 @@ describe('MemoryRepository', () => {
     const result = ctx.memoryRepository.createMemory({
       memory,
       participants: [{ id: '200' }, { id: '201' }],
-    });
+    })!;
 
     expect(result.interaction_name).toEqual('some_animation_name');
 
@@ -232,7 +233,7 @@ describe('MemoryRepository', () => {
     const b1 = ctx.memoryRepository.createMemory({
       memory: { location_id: 20, content: 'b1' },
       participants: [{ id: '501' }],
-    });
+    })!;
     // A reflection at location 10 — must be excluded from getSceneMemories
     ctx.memoryRepository.createMemory({
       memory: { location_id: 10, content: 'reflection of A', event_type: 'reflection' },
@@ -242,7 +243,7 @@ describe('MemoryRepository', () => {
     const old = ctx.memoryRepository.createMemory({
       memory: { location_id: 10, content: 'previous visit' },
       participants: [{ id: '999' }],
-    });
+    })!;
     ctx.memoryRepository.updateMemory({ ...old, timestamp: '1999-01-01 00:00:00' });
 
     const sceneA = ctx.memoryRepository.getSceneMemories(10, sceneStart);
@@ -312,7 +313,7 @@ describe('MemoryRepository', () => {
     const created = ctx.memoryRepository.createMemory({
       memory: { location_id: 1, content: 'clean row' },
       participants: [{ id: '900' }],
-    });
+    })!;
     expect('scene_id' in created).toBe(false);
   });
 
@@ -335,7 +336,7 @@ describe('MemoryRepository', () => {
     const result = ctx.memoryRepository.createMemory({
       memory,
       participants: [{ id: '300' }],
-    });
+    })!;
 
     memory.id = result.id;
     memory.interaction_name = 'updated_name';

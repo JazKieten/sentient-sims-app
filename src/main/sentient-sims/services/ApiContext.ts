@@ -29,6 +29,8 @@ import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { ActionDispatcherService } from './ActionDispatcherService';
+import { SimStateCache } from './SimStateCache';
+import { CognitionService } from './CognitionService';
 import { AIService } from './AIService';
 import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
@@ -216,6 +218,8 @@ export class ApiContext {
   private readonly _mappingService: MappingService;
   private readonly _sceneService: SceneService;
   private readonly _actionDispatcherService: ActionDispatcherService;
+  private readonly _simStateCache: SimStateCache;
+  private readonly _cognitionService: CognitionService;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
@@ -285,6 +289,7 @@ export class ApiContext {
 
     this._sceneService = new SceneService();
     this._actionDispatcherService = new ActionDispatcherService();
+    this._simStateCache = new SimStateCache();
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._noopEmbeddingService = new NoopEmbeddingService();
 
@@ -301,6 +306,9 @@ export class ApiContext {
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
     });
+
+    // Last: subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
+    this._cognitionService = new CognitionService(this);
 
     this._controller = new ControllerContext(this);
   }
@@ -379,6 +387,14 @@ export class ApiContext {
 
   get actionDispatcher(): ActionDispatcherService {
     return this._actionDispatcherService;
+  }
+
+  get cognitionService(): CognitionService {
+    return this._cognitionService;
+  }
+
+  get simStateCache(): SimStateCache {
+    return this._simStateCache;
   }
 
   // Evaluated per access so setting an OpenAI key at runtime upgrades from Noop

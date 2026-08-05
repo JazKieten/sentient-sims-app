@@ -65,7 +65,8 @@ export class MemoryIndexRepository extends Repository {
         `
           SELECT memory.* FROM memory
           LEFT JOIN memory_index ON memory_index.memory_id = memory.id
-          WHERE memory_index.memory_id IS NULL OR memory_index.embedding IS NULL
+          WHERE (memory_index.memory_id IS NULL OR memory_index.embedding IS NULL)
+            AND (memory.event_type IS NULL OR memory.event_type != 'outcome')
           ORDER BY memory.timestamp ASC, memory.id ASC
           LIMIT ?;
         `,

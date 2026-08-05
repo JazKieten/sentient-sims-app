@@ -1,0 +1,115 @@
+// Mirror of the mod's Block 8 state report (ss_state_reporter.py). One shared lot block
+// plus a perception snapshot + self status + activity per on-lot household sim, POSTed to
+// /cognition/state every ~5s. Silence means the zone is loading (suspend cognition);
+// paused_heartbeat means the pipeline is alive but the world is frozen.
+
+import { PerceptionSnapshot } from './PerceptionSnapshot';
+
+export type LotClock = {
+  hour?: number;
+  minute?: number;
+  day?: number;
+  speed?: string;
+  paused?: boolean;
+};
+
+export type LotBills = {
+  due?: boolean;
+  amount?: number;
+  // Utilities ALREADY cut off (power/water) — the recurring silent killer
+  shut_off?: string[];
+};
+
+export type LotCondition = {
+  object_id: string;
+  name?: string;
+  conditions: string[]; // broken | dirty | clogged | burnt
+};
+
+export type LotBlock = {
+  zone_id?: number | string;
+  clock?: LotClock;
+  venue?: string;
+  funds?: number;
+  // True when the active lot is the reporting household's home zone — gates the
+  // send-idle-off-lot-sims-home rule
+  is_home?: boolean;
+  bills?: LotBills;
+  // ownership class -> count; ABSENCE drives plans (no computer, no instrument)
+  owned?: Record<string, number>;
+  conditions?: LotCondition[];
+  situations?: string[];
+  // Context-gated lot verbs (pay_bills when due, hire_repair_service when broken, ...);
+  // the mod resolves their targets, the app only offers/validates
+  action_keys?: string[];
+};
+
+export type SimCareer = {
+  career?: string;
+  level?: number;
+  performance?: number;
+  at_work?: boolean;
+  next_shift?: string;
+};
+
+export type SimSkill = {
+  skill: string;
+  level: number;
+  raw?: number;
+};
+
+export type NextObjective = {
+  track?: string;
+  aspiration?: string;
+  objective?: string;
+  test?: string;
+  threshold?: number | string;
+};
+
+export type SimSelfStatus = {
+  needs?: Record<string, number>;
+  buffs?: string[];
+  // Live wants — reroll constantly, valid only for the report they arrived in
+  wants?: string[];
+  traits?: string[];
+  skills?: SimSkill[];
+  careers?: SimCareer[];
+  inventory?: Record<string, number>;
+  in_ww_scene?: boolean;
+  next_objective?: NextObjective;
+  age?: string;
+  mood?: string;
+  on_active_lot?: boolean;
+};
+
+export type SimActivity = {
+  queue?: string[];
+  running?: string | null;
+  in_social?: boolean;
+  hands_full?: boolean;
+};
+
+// A sim's entry in the report: the perception snapshot plus internal state
+export type SimStateEntry = PerceptionSnapshot & {
+  self?: SimSelfStatus;
+  activity?: SimActivity;
+};
+
+export type KnownSim = {
+  sim_id: string;
+  name?: string;
+  friendship?: number;
+};
+
+export type SimStateReport = {
+  type: 'state_report';
+  seq: number;
+  reason?: string;
+  whitelist_version?: string;
+  paused?: boolean;
+  lot?: LotBlock;
+  sims?: SimStateEntry[];
+  known_sims?: KnownSim[];
+  // sim_ids that transitioned busy -> idle since the previous report
+  went_idle?: string[];
+};

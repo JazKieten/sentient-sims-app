@@ -2,7 +2,7 @@ import log from 'electron-log';
 import { randomUUID } from 'crypto';
 import { ActionIntent } from '../models/ActionIntent';
 import { ModEnqueueInteraction, ModWebsocketMessageType, WebsocketNotification } from '../models/ModWebsocketMessage';
-import { sendModNotification } from '../websocketServer';
+import { isWebSocketConnected, sendModNotification } from '../websocketServer';
 
 export type PendingDispatch = {
   requestId: string;
@@ -17,8 +17,30 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 export class ActionDispatcherService {
   private readonly pending = new Map<string, PendingDispatch>();
 
+  // One in-flight action per sim: re-pushing while a sim routes cancels the walk and
+  // resets it from zero (the Adrian/DJ-booth hour). The state machine checks this before
+  // deliberating, but the dispatcher enforces it as the last line of defense.
+  private readonly inFlightBySim = new Map<string, string>();
+
+  getInFlight(simId: string): PendingDispatch | undefined {
+    const requestId = this.inFlightBySim.get(simId);
+    return requestId ? this.pending.get(requestId) : undefined;
+  }
+
   dispatch(intent: ActionIntent): string {
     this.prune();
+    // sendModNotification silently drops when no client is attached (observed live: a
+    // dispatch sent while the mod was reconnecting became a phantom in-flight entry that
+    // blocked the sim for the full TTL). Fail fast so the caller cools down and retries.
+    if (!this.isModConnected()) {
+      throw new Error(`mod websocket not connected; dropping dispatch for sim ${intent.sim_id}`);
+    }
+    const existing = this.getInFlight(intent.sim_id);
+    if (existing && intent.source === 'cognition') {
+      throw new Error(
+        `sim ${intent.sim_id} already has '${existing.intent.action}' in flight (${existing.requestId})`,
+      );
+    }
     const requestId = randomUUID();
     const message: ModEnqueueInteraction = {
       type: ModWebsocketMessageType.ENQUEUE_INTERACTION,
@@ -33,6 +55,7 @@ export class ActionDispatcherService {
       source: intent.source ?? 'cognition',
     };
     this.pending.set(requestId, { requestId, intent, dispatchedAt: Date.now() });
+    this.inFlightBySim.set(intent.sim_id, requestId);
     this.sendToMod(message);
     log.debug(`[ActionDispatcher] dispatched ${requestId}: sim ${intent.sim_id} -> ${intent.action}`);
     return requestId;
@@ -44,6 +67,25 @@ export class ActionDispatcherService {
     sendModNotification(message);
   }
 
+  // Seam for tests (production asks the websocket server)
+  isModConnected(): boolean {
+    return isWebSocketConnected('mod');
+  }
+
+  // Abandons an in-flight dispatch whose outcome the caller has given up on (cognition's
+  // pending timeout). Keeps the dispatcher's view aligned with the state machine instead
+  // of blocking the sim until the 10-minute TTL.
+  release(requestId: string | undefined): void {
+    if (!requestId) {
+      return;
+    }
+    const entry = this.pending.get(requestId);
+    if (entry) {
+      log.debug(`[ActionDispatcher] releasing abandoned dispatch ${requestId} (${entry.intent.action})`);
+    }
+    this.resolve(requestId);
+  }
+
   // Claims the pending dispatch for an arriving outcome. Removes it, so a duplicate outcome
   // report for the same request_id comes back undefined.
   resolve(requestId: string | undefined): PendingDispatch | undefined {
@@ -53,6 +95,9 @@ export class ActionDispatcherService {
     const entry = this.pending.get(requestId);
     if (entry) {
       this.pending.delete(requestId);
+      if (this.inFlightBySim.get(entry.intent.sim_id) === requestId) {
+        this.inFlightBySim.delete(entry.intent.sim_id);
+      }
     }
     return entry;
   }
@@ -68,6 +113,9 @@ export class ActionDispatcherService {
       if (entry.dispatchedAt < cutoff) {
         log.debug(`[ActionDispatcher] expiring dispatch ${id} (${entry.intent.action}) with no outcome`);
         this.pending.delete(id);
+        if (this.inFlightBySim.get(entry.intent.sim_id) === id) {
+          this.inFlightBySim.delete(entry.intent.sim_id);
+        }
       }
     });
   }

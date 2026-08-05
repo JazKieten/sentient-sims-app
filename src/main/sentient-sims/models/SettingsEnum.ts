@@ -49,6 +49,13 @@ export enum SettingsEnum {
   AI_PROVIDER_CONFIGS = 'aiProviderConfigs',
   DEFAULT_AI_PROVIDER_CONFIG_ID = 'defaultAiProviderConfigId',
   AI_ACTION_PROVIDER_OVERRIDES = 'aiActionProviderOverrides',
+  // Cognition (Block 9): the autonomous per-sim tick loop
+  COGNITION_ENABLED = 'cognitionEnabled',
+  COGNITION_AUTONOMY_LEVEL = 'cognitionAutonomyLevel', // off | suggest | full
+  COGNITION_TICK_INTERVAL_SECONDS = 'cognitionTickIntervalSeconds',
+  COGNITION_MAX_CONCURRENT = 'cognitionMaxConcurrent',
+  COGNITION_PER_SIM_HOURLY_BUDGET = 'cognitionPerSimHourlyBudget',
+  COGNITION_PIPELINE = 'cognitionPipeline', // off | review (directed+review reserved for scenes)
 }
 
 export enum DeprecatedSettingsEnum {

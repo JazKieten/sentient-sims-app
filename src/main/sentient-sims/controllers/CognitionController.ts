@@ -5,6 +5,7 @@ import { ApiContext } from '../services/ApiContext';
 import { ActionIntent, InteractionOutcomeEvent } from '../models/ActionIntent';
 import { ModRequestPerception, ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PerceptionSnapshot } from '../models/PerceptionSnapshot';
+import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
 
@@ -56,9 +57,27 @@ export class CognitionController {
     this.ctx = ctx;
   }
 
-  getPerception(simId: string): PerceptionSnapshot | undefined {
-    return this.latestPerception.get(simId);
+  getPerception(simId: string): SimStateEntry | undefined {
+    // The state cache supersedes the request/reply Map; fall back for snapshots that
+    // arrived before any state report
+    return this.ctx.simStateCache.getSim(simId) ?? this.latestPerception.get(simId);
   }
+
+  // Block 8: the mod's periodic state report — the event stream CognitionService ticks
+  // against. Ingestion must stay cheap; deliberation happens in the cache's listeners.
+  postState = (req: Request, res: Response) => {
+    try {
+      const report = req.body as Partial<SimStateReport>;
+      if (report.type !== 'state_report' || typeof report.seq !== 'number') {
+        return res.status(400).json({ error: 'not a state_report' });
+      }
+      this.ctx.simStateCache.ingest(report as SimStateReport);
+      return res.json({ ok: true, seq: report.seq });
+    } catch (err) {
+      log.error('Error handling state report', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
 
   private lookupParticipantName(simId?: string): string | undefined {
     if (!simId) {
@@ -120,8 +139,17 @@ export class CognitionController {
         { notifyMod: false },
       );
 
+      // Close the sim's PENDING_OUTCOME state — success is only ever declared here,
+      // never at dispatch time
+      this.ctx.cognitionService.onOutcome({
+        ...event,
+        sim_id: event.sim_id,
+        outcome: event.outcome,
+        action,
+      });
+
       log.info(`[Cognition] outcome ${event.request_id ?? '(uncorrelated)'}: ${observation}`);
-      return res.json({ ok: true, correlated: pending !== undefined, memory_id: memory.id });
+      return res.json({ ok: true, correlated: pending !== undefined, memory_id: memory?.id });
     } catch (err) {
       log.error('Error handling cognition outcome', err);
       return res.status(500).json({ error: errorMessage(err) });
@@ -171,6 +199,7 @@ export class CognitionController {
       }
       const full: PerceptionSnapshot = { sims: [], objects: [], ...snapshot, sim_id: snapshot.sim_id };
       this.latestPerception.set(full.sim_id, full);
+      this.ctx.simStateCache.ingestPerception(full);
       const formatted = formatPerception(full);
       log.info(`[Cognition] perception ${full.request_id ?? ''} for sim ${full.sim_id}:\n${formatted}`);
       return res.json({ ok: true, formatted });

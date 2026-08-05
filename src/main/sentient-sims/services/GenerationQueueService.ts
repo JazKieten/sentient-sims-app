@@ -67,11 +67,15 @@ export class GenerationQueueService {
 
   private readonly jobs: Array<() => Promise<void>> = [];
 
+  private readonly cognitionJobs: Array<() => Promise<void>> = [];
+
   private readonly backgroundJobs: Array<() => Promise<void>> = [];
 
   private idleTimer?: ReturnType<typeof setTimeout>;
 
   private activeCount = 0;
+
+  private cognitionActive = 0;
 
   constructor(ctx: ApiContext) {
     this.ctx = ctx;
@@ -195,6 +199,27 @@ export class GenerationQueueService {
   // top of a prefetched one.
   runExclusive<T>(task: () => Promise<T>): Promise<T> {
     return this.enqueue(task);
+  }
+
+  // Cognition lane (Block 9 deliberations): below foreground speech/interaction work,
+  // above the idle lane — cognition never waits out the background quiet period, but a
+  // player-facing generation arriving mid-queue always goes first. One deliberation at a
+  // time within the lane; foreground jobs still fill any remaining concurrency.
+  runCognition<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.cognitionJobs.push(async () => {
+        try {
+          resolve(await task());
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+      this.drain();
+    });
+  }
+
+  get cognitionQueueDepth(): number {
+    return this.cognitionJobs.length + this.cognitionActive;
   }
 
   // Idle lane for low-priority work (memory annotation, embedding backfill): tasks start
@@ -353,6 +378,20 @@ export class GenerationQueueService {
         this.activeCount -= 1;
         this.drain();
       });
+    }
+    // Foreground queue is empty: spend leftover capacity on at most one cognition
+    // deliberation. New foreground work re-enters drain() and naturally goes first.
+    if (this.jobs.length === 0 && this.cognitionActive === 0 && this.cognitionJobs.length > 0 && this.activeCount < concurrency) {
+      const job = this.cognitionJobs.shift();
+      if (job) {
+        this.activeCount += 1;
+        this.cognitionActive += 1;
+        void job().finally(() => {
+          this.activeCount -= 1;
+          this.cognitionActive -= 1;
+          this.drain();
+        });
+      }
     }
     this.scheduleBackground();
   }

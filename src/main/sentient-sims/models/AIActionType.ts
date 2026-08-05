@@ -18,6 +18,8 @@ export enum AIActionType {
   DIRECTED_SCENE_ACTOR = 'directed_scene_actor',
   DIRECTED_SCENE_REVIEWER = 'directed_scene_reviewer',
   REFLECTION = 'reflection',
+  // Block 9 tick deliberations — route to a cheap/fast provider config
+  COGNITION = 'cognition',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -35,6 +37,7 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.DIRECTED_SCENE_ACTOR,
   AIActionType.DIRECTED_SCENE_REVIEWER,
   AIActionType.REFLECTION,
+  AIActionType.COGNITION,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -70,6 +73,8 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Directed Scene: Reviewer';
     case AIActionType.REFLECTION:
       return 'Scene Reflection';
+    case AIActionType.COGNITION:
+      return 'Cognition Tick';
     default:
       return actionType;
   }
@@ -105,6 +110,8 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Directed scene final review and cleanup pass';
     case AIActionType.REFLECTION:
       return 'End-of-scene reflection memories';
+    case AIActionType.COGNITION:
+      return 'Autonomous per-sim tick deliberations (cheap model recommended)';
     default:
       return '';
   }

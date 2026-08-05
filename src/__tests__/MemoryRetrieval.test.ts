@@ -28,10 +28,14 @@ function createMemory(
   memory: Partial<MemoryEntity>,
   participantIds: string[] = ['100'],
 ): MemoryEntity {
-  return ctx.memoryRepository.createMemory({
+  const created = ctx.memoryRepository.createMemory({
     memory: { location_id: 1, content: 'a memory', ...memory },
     participants: participantIds.map((id) => ({ id })),
   });
+  if (!created) {
+    throw new Error('test memory rejected by hygiene gate');
+  }
+  return created;
 }
 
 function fakeEmbedder(vector: number[]): EmbeddingService {
@@ -160,14 +164,16 @@ describe('backfill', () => {
     const embed = vi.fn((texts: string[]) => Promise.resolve(texts.map(() => Float32Array.from([1, 2]))));
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue({ model: 'fake-model', isAvailable: () => true, embed });
 
+    // Outcome rows are structured bookkeeping and never enter the vector index — the
+    // backfill queue must skip them (or it would re-select them forever)
     createMemory(ctx, { content: 'first', event_type: 'outcome' });
     createMemory(ctx, { content: 'second' });
     const rated = createMemory(ctx, { content: 'third, already rated by the live path' });
     // Simulates a row annotated while no embedder was configured: importance but no embedding
     indexMemory(ctx, rated, 9);
 
-    expect(await ctx.memoryAnnotation.backfill(2)).toEqual(3);
-    expect(embed).toHaveBeenCalledTimes(2); // batches of 2 + 1
+    expect(await ctx.memoryAnnotation.backfill(2)).toEqual(2);
+    expect(embed).toHaveBeenCalledTimes(1); // outcome excluded, one batch of 2
 
     expect(ctx.memoryIndexRepository.getUnindexedMemories(10)).toEqual([]);
     const ratedRow = ctx.memoryIndexRepository.getIndex(Number(rated.id));
@@ -176,7 +182,7 @@ describe('backfill', () => {
 
     // Idempotent: a second run finds nothing to do and makes no embedding calls
     expect(await ctx.memoryAnnotation.backfill(2)).toEqual(0);
-    expect(embed).toHaveBeenCalledTimes(2);
+    expect(embed).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing without an available embedder', async () => {

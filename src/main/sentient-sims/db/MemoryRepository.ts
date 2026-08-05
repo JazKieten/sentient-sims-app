@@ -11,6 +11,7 @@ import { MemoryEntity, withDisplayContent } from './entities/MemoryEntity';
 import { MemoryParticipantEntity } from './entities/MemoryParticipantEntity';
 import { notifyMemoryDeleted, notifyMemoryEdited, notifyNewMemoryAdded } from '../util/notifyRenderer';
 import { MemoryParticipantDTO } from './dto/MemoryParticipantDTO';
+import { stripArtifacts, validateMemoryContent } from '../util/memoryHygiene';
 
 export class MemoryRepository extends Repository {
   // The db layer can't depend on services, so annotation (importance/embedding into
@@ -211,7 +212,35 @@ export class MemoryRepository extends Repository {
       .run([memoryParticipant.id, BigInt(memoryParticipant.participant_id), memoryParticipant.memory_id]);
   }
 
-  createMemory(createMemoryRequest: CreateMemoryRequest, options?: { notifyMod?: boolean }) {
+  createMemory(createMemoryRequest: CreateMemoryRequest, options?: { notifyMod?: boolean }): MemoryEntity | undefined {
+    // Refuse-to-persist gate: refusals, leaked prompt scaffolding, and no-text rows are
+    // permanent retrieval poison once written (~8% of the playtest DB). Outcome rows
+    // legitimately carry their text in observation, so content-less rows pass as long
+    // as an observation exists.
+    const incoming = createMemoryRequest.memory;
+    if (incoming.content) {
+      incoming.content = stripArtifacts(incoming.content);
+    }
+    if (incoming.content) {
+      const validation = validateMemoryContent(incoming.content);
+      if (!validation.ok) {
+        log.warn(
+          `Memory rejected (${validation.reason}) event_type=${incoming.event_type ?? 'unknown'} ` +
+            `interaction=${incoming.interaction_name ?? ''}`,
+        );
+        return undefined;
+      }
+    } else if (!incoming.observation && !incoming.pre_action) {
+      // Outcome rows carry their text in observation; pre-action fallback rows keep the
+      // pre_action so the memories window can still render the beat. A row with no text
+      // anywhere is pure junk.
+      log.warn(
+        `Memory rejected (no content, observation, or pre_action) event_type=${incoming.event_type ?? 'unknown'} ` +
+          `interaction=${incoming.interaction_name ?? ''}`,
+      );
+      return undefined;
+    }
+
     // A scene transcript can be POSTed back once per completing interaction (live, a hug
     // SI and the chat SI it rode on both completed and stored the same dialogue twice —
     // both then get embedded, retrieved, and fed to "Previously in this scene"). Exact

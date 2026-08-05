@@ -226,6 +226,30 @@ export function defaultStore(cwd?: string) {
         type: 'boolean',
         default: true,
       },
+      [SettingsEnum.COGNITION_ENABLED.toString()]: {
+        type: 'boolean',
+        default: false,
+      },
+      [SettingsEnum.COGNITION_AUTONOMY_LEVEL.toString()]: {
+        type: 'string',
+        default: 'suggest',
+      },
+      [SettingsEnum.COGNITION_TICK_INTERVAL_SECONDS.toString()]: {
+        type: 'number',
+        default: 30,
+      },
+      [SettingsEnum.COGNITION_MAX_CONCURRENT.toString()]: {
+        type: 'number',
+        default: 1,
+      },
+      [SettingsEnum.COGNITION_PER_SIM_HOURLY_BUDGET.toString()]: {
+        type: 'number',
+        default: 20,
+      },
+      [SettingsEnum.COGNITION_PIPELINE.toString()]: {
+        type: 'string',
+        default: 'review',
+      },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
       [SettingsEnum.AI_PROVIDER_CONFIGS.toString()]: {
@@ -795,6 +819,31 @@ export class SettingsService {
 
   set memoryRetrievalEnabled(value: boolean) {
     this.set(SettingsEnum.MEMORY_RETRIEVAL_ENABLED, value);
+  }
+
+  get cognitionEnabled(): boolean {
+    return this.get(SettingsEnum.COGNITION_ENABLED) as boolean;
+  }
+
+  get cognitionAutonomyLevel(): 'off' | 'suggest' | 'full' {
+    const level = this.get(SettingsEnum.COGNITION_AUTONOMY_LEVEL) as string;
+    return level === 'full' || level === 'off' ? level : 'suggest';
+  }
+
+  get cognitionTickIntervalSeconds(): number {
+    return Math.max(5, this.get(SettingsEnum.COGNITION_TICK_INTERVAL_SECONDS) as number);
+  }
+
+  get cognitionMaxConcurrent(): number {
+    return Math.max(1, this.get(SettingsEnum.COGNITION_MAX_CONCURRENT) as number);
+  }
+
+  get cognitionPerSimHourlyBudget(): number {
+    return Math.max(1, this.get(SettingsEnum.COGNITION_PER_SIM_HOURLY_BUDGET) as number);
+  }
+
+  get cognitionPipeline(): 'off' | 'review' {
+    return (this.get(SettingsEnum.COGNITION_PIPELINE) as string) === 'off' ? 'off' : 'review';
   }
 
   get prefetchMaxQueueDepth(): number {

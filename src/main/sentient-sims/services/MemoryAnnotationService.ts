@@ -64,7 +64,10 @@ export class MemoryAnnotationService {
 
     let embedding: Buffer | undefined;
     let embeddingModel: string | undefined;
-    if (text) {
+    // Outcome rows are structured bookkeeping, not narrative — embedding them polluted the
+    // vector index with 111 near-identical "X tried Y" rows. They keep an importance rating
+    // (recency+importance retrieval still sees them) but never enter similarity search.
+    if (text && memory.event_type !== 'outcome') {
       const [vector] = await this.ctx.embedding.embed([text]);
       if (vector) {
         embedding = embeddingToBuffer(vector);
@@ -131,7 +134,7 @@ export class MemoryAnnotationService {
   }
 
   private async backfillBatch(batch: MemoryEntity[], session: string | undefined): Promise<number> {
-    const textable = batch.filter((memory) => memory.observation || memory.content);
+    const textable = batch.filter((memory) => (memory.observation || memory.content) && memory.event_type !== 'outcome');
     if (textable.length === 0) {
       return 0;
     }

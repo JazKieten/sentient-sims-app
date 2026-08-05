@@ -445,9 +445,8 @@ export class CognitionService {
       intent = await this.reviewIntent(intent, entryView, userPrompt, lotActionKeys);
     }
 
-    this.storeThought(entry, intent);
-
     if (intent.kind === 'continue' || intent.kind === 'wait') {
+      this.storeThought(entry, intent);
       this.stats.continues += 1;
       this.toCooldown(simId, intent.kind === 'wait' ? 2 : 1);
       return;
@@ -515,6 +514,11 @@ export class CognitionService {
         return;
       }
     }
+
+    // Thoughts are stored only for intents that survived the guards: a blocked action's
+    // justification is a falsehood ("I smell bad" at hygiene 78, observed live) that
+    // would poison retrieval as if it were her real inner state
+    this.storeThought(entry, intent);
 
     if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
       this.stats.suggestions += 1;

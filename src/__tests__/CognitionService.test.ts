@@ -407,8 +407,8 @@ describe('CognitionService', () => {
 
   it('does not interrupt a busy sim for a non-urgent need', async () => {
     // Observed live: a take_shower at hygiene 31 canceled the only TV time of the day
-    const shower = JSON.stringify({ kind: 'action', action: 'take_shower', thought: 'freshen up' });
-    const { cache, cognition, dispatched } = buildCtx({ intentJson: shower });
+    const shower = JSON.stringify({ kind: 'action', action: 'take_shower', thought: 'I smell bad.' });
+    const { cache, cognition, dispatched, storedMemories } = buildCtx({ intentJson: shower });
     const report = idleSimReport(1);
     report.sims![0].objects![0].action_keys = ['take_shower'];
     report.sims![0].activity!.running = 'TV_Watch';
@@ -418,6 +418,9 @@ describe('CognitionService', () => {
 
     expect(dispatched).toHaveLength(0);
     expect(cognition.getStats().continues).toBe(1);
+    // A blocked action's justification must NOT become a memory — "I smell bad" at
+    // fine hygiene poisoned retrieval as her supposed inner state (observed live)
+    expect(storedMemories).toHaveLength(0);
   });
 
   it('interrupts a busy sim for an urgent need', async () => {

@@ -390,6 +390,21 @@ describe('CognitionService', () => {
     expect(cognition.getStats().continues).toBe(1);
   });
 
+  it('rule-dispatches the fix for a critical need without consulting the model', async () => {
+    // Observed live: bladder -99 while the model kept picking grab_snack at hunger 94
+    const { cache, dispatched, oneShotCalls } = buildCtx({ intentJson: ACTION_INTENT });
+    const report = idleSimReport(1);
+    report.sims![0].objects![0].action_keys = ['use_toilet', 'grab_snack'];
+    report.sims![0].self!.needs = { bladder: -99, hunger: 94 };
+    report.sims![0].activity!.running = 'seating_Sit';
+    cache.ingest(report);
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('use_toilet');
+    expect(oneShotCalls).toHaveLength(0);
+  });
+
   it('does not interrupt a busy sim for a non-urgent need', async () => {
     // Observed live: a take_shower at hygiene 31 canceled the only TV time of the day
     const shower = JSON.stringify({ kind: 'action', action: 'take_shower', thought: 'freshen up' });

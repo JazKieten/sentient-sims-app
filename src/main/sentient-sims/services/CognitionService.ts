@@ -1,7 +1,13 @@
 import log from 'electron-log';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
-import { CognitionIntent, normalizeActionKey, parseIntentJson, validateIntent } from '../models/CognitionIntent';
+import {
+  CognitionIntent,
+  normalizeActionKey,
+  offeredActions,
+  parseIntentJson,
+  validateIntent,
+} from '../models/CognitionIntent';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
 import { AIActionType } from '../models/AIActionType';
 import {
@@ -80,6 +86,19 @@ const ACTION_NEED_CATEGORY: Record<string, string> = {
 // A busy sim is only interrupted for a need at least this low (or an emergency intent)
 const NEED_URGENT_INTERRUPT = -25;
 
+// Below this a physical need is a mechanical failure in progress (accident, starvation)
+// and fixing it is a RULE, not a model decision — observed live: bladder -99 while the
+// model kept picking grab_snack at hunger 94 and sitting down
+const NEED_CRITICAL = -85;
+
+// need -> the action that fixes it, tried in snapshot-offered order. Energy is absent
+// on purpose: passing out is the game's own self-resolving (and dramatically honest)
+// failure mode.
+const CRITICAL_NEED_FIXES: Record<string, string[]> = {
+  bladder: ['use_toilet'],
+  hunger: ['grab_snack', 'cook_meal'],
+};
+
 const RELEVANT_MEMORY_COUNT = 4;
 
 export type CognitionStats = {
@@ -141,6 +160,10 @@ export class CognitionService {
     let deliberating = [...this.runtimes.values()].filter((runtime) => runtime.phase === 'DELIBERATING').length;
 
     const now = Date.now();
+
+    // Rule-based, no LLM: a critical physical need (accident/starvation imminent) gets
+    // its fixing action dispatched directly — the model was watched fumbling this
+    entries.forEach((entry) => this.maybeFixCriticalNeed(entry, now));
 
     // Rule-based, no LLM: a household sim standing idle OFF the home lot (chatted their
     // way to the sidewalk) can't usefully deliberate — perception is street noise — so
@@ -245,6 +268,57 @@ export class CognitionService {
     const hasLowMotive = this.lowMotives(entry).length > 0;
     const wentIdle = (report.went_idle ?? []).includes(entry.sim_id);
     return isIdle || hasLowMotive || wentIdle;
+  }
+
+  private maybeFixCriticalNeed(entry: SimStateEntry, now: number) {
+    const simId = entry.sim_id;
+    if (!simId || entry.self?.in_ww_scene) {
+      return;
+    }
+    const runtime = this.runtime(simId);
+    // Never-re-push still rules; only true in-flight states block. Cooldown does NOT —
+    // this IS the emergency lane.
+    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+      return;
+    }
+    const needs = entry.self?.needs ?? {};
+    const failed = this.recentlyFailedActions(runtime);
+    const offered = offeredActions(entry);
+    for (const [need, fixes] of Object.entries(CRITICAL_NEED_FIXES)) {
+      const value = needs[need];
+      if (typeof value !== 'number' || value >= NEED_CRITICAL) {
+        continue;
+      }
+      const action = fixes.find((fix) => offered.objectActions.has(fix) && !failed.has(fix));
+      if (!action) {
+        continue;
+      }
+      if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+        log.info(`[Cognition][suggest] sim ${simId} ${need} at ${value}; would rule-dispatch ${action}`);
+        this.toCooldown(simId);
+        return;
+      }
+      try {
+        const requestId = this.ctx.actionDispatcher.dispatch({
+          sim_id: simId,
+          action,
+          target_object_id: offered.objectActions.get(action),
+          motivation: `${need} is critically low; handling it before anything else.`,
+          source: 'cognition',
+        });
+        runtime.phase = 'PENDING_OUTCOME';
+        runtime.pendingRequestId = requestId;
+        runtime.pendingAction = action;
+        runtime.lastDispatch = { action, at: Date.now() };
+        this.stats.dispatches += 1;
+        this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
+        log.info(`[Cognition] sim ${simId} ${need} at ${value} -> ${action} (rule, ${requestId})`);
+      } catch (error) {
+        log.warn(`[Cognition] critical-need dispatch refused for sim ${simId}`, error);
+        this.toCooldown(simId);
+      }
+      return;
+    }
   }
 
   private maybeSendHome(entry: SimStateEntry, now: number) {

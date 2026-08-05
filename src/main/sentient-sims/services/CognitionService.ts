@@ -106,8 +106,35 @@ const RELEVANT_MEMORY_COUNT = 4;
 // A hung provider request (no response, no error) left a runtime in DELIBERATING
 // forever and — with maxConcurrent 1 — deadlocked every future tick (observed live:
 // total cognition silence after 21:41 while reports kept flowing). No model call may
-// outlive this.
-const LLM_CALL_TIMEOUT_MS = 45_000;
+// outlive this. 15s + one retry: the model answers in 1-3s when healthy, so a hang is
+// connection-level and a fresh request usually lands — the original 45s single shot
+// froze the whole loop per stall (observed live 4x in one evening).
+const LLM_CALL_TIMEOUT_MS = 15_000;
+const LLM_RETRIES = 1;
+
+// Verbs that are DONE on success (service hired, bills paid, outing started) — the lot
+// keeps offering them until the world catches up (broken sink stays 'broken' until the
+// repairman arrives), so success must suppress re-picking just like failure does
+// (observed live: hire_repair_service succeeded, re-picked 15s later, 'already hired')
+const ONE_SHOT_ACTIONS = new Set(['hire_repair_service', 'pay_bills', 'call_firefighter', 'go_out']);
+
+// Retry wrapper: each attempt gets a fresh request and its own timeout. Only the LAST
+// failure propagates; earlier ones are logged and retried.
+async function withRetry<T>(makeAttempt: () => Promise<T>, label: string): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= LLM_RETRIES; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await withTimeout(makeAttempt(), label);
+    } catch (error) {
+      lastError = error;
+      if (attempt < LLM_RETRIES) {
+        log.warn(`[Cognition] ${label} attempt ${attempt + 1} failed (${String(error)}); retrying`);
+      }
+    }
+  }
+  throw lastError;
+}
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -230,6 +257,12 @@ export class CognitionService {
       return;
     }
     if (event.outcome !== 'success' && event.action) {
+      runtime.failedActionsAt.set(event.action, Date.now());
+    }
+    // One-shot verbs are DONE on success too — the lot re-offers them until the world
+    // catches up (broken sink stays flagged until the repairman arrives), so a success
+    // suppresses re-picking exactly like a failure would
+    if (event.outcome === 'success' && event.action && ONE_SHOT_ACTIONS.has(event.action)) {
       runtime.failedActionsAt.set(event.action, Date.now());
     }
     this.clearPending(runtime);
@@ -509,10 +542,11 @@ export class CognitionService {
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
     const userPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
 
-    const oneShot = await withTimeout(
-      this.ctx.generationQueue.runCognition(() =>
-        this.ctx.ai.runOneShot('Cognition', COGNITION_SYSTEM_PROMPT, userPrompt, 400, undefined, AIActionType.COGNITION),
-      ),
+    const oneShot = await withRetry(
+      () =>
+        this.ctx.generationQueue.runCognition(() =>
+          this.ctx.ai.runOneShot('Cognition', COGNITION_SYSTEM_PROMPT, userPrompt, 400, undefined, AIActionType.COGNITION),
+        ),
       'cognition deliberation',
     );
 
@@ -653,17 +687,18 @@ export class CognitionService {
     lotActionKeys?: string[],
   ): Promise<CognitionIntent> {
     try {
-      const review = await withTimeout(
-        this.ctx.generationQueue.runCognition(() =>
-          this.ctx.ai.runOneShot(
-            'Cognition Review',
-            COGNITION_REVIEW_SYSTEM_PROMPT,
-            `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
-            300,
-            undefined,
-            AIActionType.COGNITION,
+      const review = await withRetry(
+        () =>
+          this.ctx.generationQueue.runCognition(() =>
+            this.ctx.ai.runOneShot(
+              'Cognition Review',
+              COGNITION_REVIEW_SYSTEM_PROMPT,
+              `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
+              300,
+              undefined,
+              AIActionType.COGNITION,
+            ),
           ),
-        ),
         'cognition review',
       );
       const reviewed = validateIntent(parseIntentJson(review.text), entry, lotActionKeys);

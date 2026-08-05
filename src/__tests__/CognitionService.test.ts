@@ -336,6 +336,26 @@ describe('CognitionService', () => {
     expect(cognition.getStats().continues).toBe(1);
   });
 
+  it('suppresses a one-shot verb after success too (done is done)', async () => {
+    // Observed live: hire_repair_service succeeded, the sink stayed flagged broken
+    // until the repairman arrived, and the model re-picked it 15s later ('already hired')
+    const intent = JSON.stringify({ kind: 'action', action: 'hire_repair_service', thought: 'fix it' });
+    const { cache, cognition, dispatched } = buildCtx({ intentJson: intent });
+    const report = idleSimReport(1);
+    report.lot!.action_keys = ['hire_repair_service'];
+    cache.ingest(report);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'hire_repair_service' });
+
+    const second = idleSimReport(2);
+    second.lot!.action_keys = ['hire_repair_service'];
+    cache.ingest(second);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+  });
+
   it('accepts squashed action keys when the action is offered', async () => {
     // Observed live: the model emitted "paybills" with no separator
     const intent = JSON.stringify({ kind: 'action', action: 'grabsnack', thought: 'hungry' });

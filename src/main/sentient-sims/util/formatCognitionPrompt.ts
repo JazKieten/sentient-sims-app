@@ -45,10 +45,14 @@ export function buildCognitionUserPrompt(
       selfLines.push(`Mood: ${pretty(self.mood)}`);
     }
     if (self.needs && Object.keys(self.needs).length > 0) {
+      // Worst-first with the negatives flagged: fed in arbitrary order the model kept
+      // topping up healthy needs (brush_teeth at hygiene 70) while fun sat at -47 and
+      // social at -100 (observed live)
       const needs = Object.entries(self.needs)
-        .map(([need, value]) => `${pretty(need)} ${value}`)
+        .sort(([, a], [, b]) => a - b)
+        .map(([need, value]) => `${pretty(need)} ${value}${value <= -75 ? ' (DESPERATE)' : value < 0 ? ' (low)' : ''}`)
         .join(', ');
-      selfLines.push(`Needs (-100 to 100): ${needs}`);
+      selfLines.push(`Needs, WORST FIRST (-100 to 100): ${needs}`);
     }
     if (self.wants?.length) {
       selfLines.push(`Current wants: ${self.wants.map(pretty).join(', ')}`);

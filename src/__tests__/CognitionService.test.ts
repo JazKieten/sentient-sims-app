@@ -245,6 +245,20 @@ describe('CognitionService', () => {
     expect(dispatched[0].action).toBe('chat');
   });
 
+  it('coerces an unknown verb aimed at a present sim to chat', async () => {
+    // Observed live: 'talk' at Social -100 in a full bar degraded to continue
+    const intent = JSON.stringify({ kind: 'action', action: 'talk', target_sim_id: '200', thought: 'company!' });
+    const { cache, dispatched } = buildCtx({ intentJson: intent });
+    const report = idleSimReport(1);
+    report.sims![0].sims = [{ sim_id: '200', tier: 'same_room', name: 'Andy', distance: 2, social: { has_met: true } }];
+    cache.ingest(report);
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('chat');
+    expect(dispatched[0].target_sim_id).toBe('200');
+  });
+
   it('normalizes prose action keys to the whitelist vocabulary', async () => {
     // Observed live on the first playtest tick: the model emitted "Grab Snack"
     const intent = JSON.stringify({ kind: 'action', action: 'Grab Snack', thought: 'hungry' });

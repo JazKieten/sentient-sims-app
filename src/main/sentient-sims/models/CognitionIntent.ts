@@ -195,6 +195,15 @@ export function validateIntent(
         intent: { ...candidate, action, target_object_id: undefined, target_sim_id: undefined, thought },
       };
     }
+    // A social by any other name: an unknown verb aimed at a PRESENT sim is a social —
+    // coerce to chat instead of losing the tick (observed live: 'talk' at Social -100
+    // in a full bar degraded to continue while she brushed her teeth again)
+    if (candidate.target_sim_id && offered.simTargets.has(candidate.target_sim_id)) {
+      return {
+        ok: true,
+        intent: { ...candidate, action: 'chat', target_object_id: undefined, thought },
+      };
+    }
     return {
       ok: false,
       reason: `action '${action}' has no provider in the snapshot`,

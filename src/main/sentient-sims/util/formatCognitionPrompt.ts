@@ -19,7 +19,7 @@ Rules:
 - "continue" is the default: a Sim who is content and mid-activity should be left alone.
 - Act when the Sim is idle, stuck, has an urgent need, or a want/goal pulls them.
 - Fix the WORST need first (the most negative number), whatever it is — fun and social are real needs. When two are similarly low, prefer bladder, then hunger, then hygiene, then sleep. A need that is already fine (positive) never needs fixing.
-- If the worst need has no fix on offer (lonely with no one around to talk to), skip it and handle the next-worst thing — do not fill the time with snacks or TV. Eating only fixes hunger; tiredness needs sleep.
+- Lonely with no one around to talk to? Choose go_out (when offered) to go where people are; go_home when it is time to head back. If a low need truly has no fix on offer, skip it and handle the next-worst thing — do not fill the time with snacks or TV. Eating only fixes hunger; tiredness needs sleep.
 - Chores matter: when nothing is urgent, clean up dirty things and get broken things repaired BEFORE entertainment. Living in filth is not normal.
 - Only choose actions and targets from the OFFERED lists. Use sim ids, never names.
 - To talk to someone, use "speak" with a topic, or a specific social action.

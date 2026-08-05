@@ -81,6 +81,8 @@ const ACTION_NEED_CATEGORY: Record<string, string> = {
   browse_web: 'fun',
   play_piano: 'fun',
   dance: 'fun',
+  chat: 'social',
+  go_out: 'social',
 };
 
 // A busy sim is only interrupted for a need at least this low (or an emergency intent)

@@ -26,6 +26,8 @@ describe('cognition routes', () => {
     vi.spyOn(ctx.actionDispatcher, 'sendToMod').mockImplementation((message) => {
       sentToMod.push(message);
     });
+    // dispatch() fails fast without a connected mod websocket — pretend one is attached
+    vi.spyOn(ctx.actionDispatcher, 'isModConnected').mockReturnValue(true);
     vi.spyOn(ctx.memoryRepository, 'createMemory').mockImplementation((request) => {
       createdMemories.push(request);
       return { ...request.memory, id: 7 };

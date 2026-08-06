@@ -416,7 +416,8 @@ describe('CognitionService', () => {
         tier: 'same_room',
         name: 'Adrian',
         distance: 3,
-        social: { has_met: true, friendship: 62, romance: 18 },
+        // The SocialContext bit is transient conversation tone — it must not render
+        social: { has_met: true, friendship: 62, romance: 18, bits: ['relbit_SocialContext_Awkwardness_Casual'] },
       },
       { sim_id: '300', tier: 'same_room', name: 'Kira', distance: 4, social: { has_met: false } },
     ];

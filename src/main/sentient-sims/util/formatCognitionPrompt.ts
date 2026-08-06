@@ -20,6 +20,11 @@ const MEAN_SOCIALS = new Set(['insult']);
 // enemies...) read badly raw — keep only the recognizable word
 function prettyBit(bit: string): string | undefined {
   const lowered = bit.toLowerCase();
+  // SocialContext_* bits are transient conversation-tone states (every casual
+  // acquaintance carries Awkwardness_Casual), not relationship lore — never render them
+  if (lowered.includes('socialcontext')) {
+    return undefined;
+  }
   for (const word of ['married', 'engaged', 'enem', 'unfaithful', 'awkward']) {
     if (lowered.includes(word)) {
       return word === 'enem' ? 'enemies' : word;

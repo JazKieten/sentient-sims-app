@@ -30,9 +30,9 @@ type SimRuntime = {
   pendingRequestId?: string;
   pendingTimer?: ReturnType<typeof setTimeout>;
   pendingAction?: string;
-  // action key -> when it last closed unsuccessfully; suppressed from the offered
-  // vocabulary until the window passes (see recentlyFailedActions)
-  failedActionsAt: Map<string, number>;
+  // action key -> suppressed-until timestamp; kept out of the offered vocabulary
+  // until the moment passes (see recentlyFailedActions)
+  suppressedUntil: Map<string, number>;
   // The last action this service dispatched for the sim — guards against re-dispatching
   // it while the sim is still busy executing it (see the redispatch guard in deliberate)
   lastDispatch?: { action: string; at: number };
@@ -48,6 +48,13 @@ const MS_PER_METER = 1_000;
 // re-offering it immediately produces an identical failure in a loop (observed live: a
 // mailbox with no payable bill lured 'pay_bills' retries every tick until fixed).
 const FAILED_ACTION_SUPPRESS_MS = 10 * 60_000;
+
+// Benign closes — 'canceled' (engine churn bumped the push off the queue) and pending
+// timeouts (the world never answered) — never proved the action is impossible, so they
+// sit out only briefly. Observed live: a guest-occupied toilet canceled one use_toilet,
+// and the flat 10-minute window locked the ONLY bladder fix out of the vocabulary while
+// the model re-picked it every tick.
+const BENIGN_CLOSE_SUPPRESS_MS = 90_000;
 
 // A busy sim proposing the SAME action we just dispatched is re-picking, not planning:
 // proxy pushes (cook_meal) close as success instantly while the real chain runs, so the
@@ -265,13 +272,15 @@ export class CognitionService {
       return;
     }
     if (event.outcome !== 'success' && event.action) {
-      runtime.failedActionsAt.set(event.action, Date.now());
+      // A cancel is churn, not proof — short window; real failures sit out the full one
+      const window = event.outcome === 'canceled' ? BENIGN_CLOSE_SUPPRESS_MS : FAILED_ACTION_SUPPRESS_MS;
+      runtime.suppressedUntil.set(event.action, Date.now() + window);
     }
     // One-shot verbs are DONE on success too — the lot re-offers them until the world
     // catches up (broken sink stays flagged until the repairman arrives), so a success
     // suppresses re-picking exactly like a failure would
     if (event.outcome === 'success' && event.action && ONE_SHOT_ACTIONS.has(event.action)) {
-      runtime.failedActionsAt.set(event.action, Date.now());
+      runtime.suppressedUntil.set(event.action, Date.now() + FAILED_ACTION_SUPPRESS_MS);
     }
     this.clearPending(runtime);
     this.toCooldown(event.sim_id);
@@ -281,7 +290,7 @@ export class CognitionService {
   private runtime(simId: string): SimRuntime {
     let runtime = this.runtimes.get(simId);
     if (!runtime) {
-      runtime = { phase: 'IDLE', cooldownUntil: 0, deliberatedAt: [], failedActionsAt: new Map() };
+      runtime = { phase: 'IDLE', cooldownUntil: 0, deliberatedAt: [], suppressedUntil: new Map() };
       this.runtimes.set(simId, runtime);
     }
     return runtime;
@@ -351,14 +360,16 @@ export class CognitionService {
       return;
     }
     const needs = entry.self?.needs ?? {};
-    const failed = this.recentlyFailedActions(runtime);
     const offered = offeredActions(entry);
     for (const [need, fixes] of Object.entries(CRITICAL_NEED_FIXES)) {
       const value = needs[need];
       if (typeof value !== 'number' || value >= NEED_CRITICAL) {
         continue;
       }
-      const action = fixes.find((fix) => offered.objectActions.has(fix) && !failed.has(fix));
+      // Deliberately ignores the suppression map: an accident-in-progress warrants
+      // retrying even a just-canceled fix (a suppressed use_toilet at bladder -85 must
+      // never mean peeing on the floor while the toilet works fine)
+      const action = fixes.find((fix) => offered.objectActions.has(fix));
       if (!action) {
         continue;
       }
@@ -572,9 +583,16 @@ export class CognitionService {
       this.stats.invalidIntents += 1;
       // The rejected action joins the suppression map so the NEXT prompt names it as
       // impossible — without this the model gets no signal and re-picks it every tick
-      // (observed live: 3 straight pay_bills rejections after the bills were paid)
+      // (observed live: 3 straight pay_bills rejections after the bills were paid).
+      // NEVER refreshes an existing window: the model re-picking a suppressed need fix
+      // every tick rolled the 10 minutes forward forever (observed live: use_toilet
+      // livelocked after one benign cancel while bladder kept falling)
       if (candidate?.action) {
-        runtime.failedActionsAt.set(normalizeActionKey(candidate.action), Date.now());
+        const key = normalizeActionKey(candidate.action);
+        const until = runtime.suppressedUntil.get(key);
+        if (!until || until < Date.now()) {
+          runtime.suppressedUntil.set(key, Date.now() + FAILED_ACTION_SUPPRESS_MS);
+        }
       }
       log.warn(`[Cognition] sim ${simId} invalid intent (${validated.reason}); degrading to continue`);
     }
@@ -732,13 +750,13 @@ export class CognitionService {
 
   // Prunes expired entries and returns the still-suppressed action keys for this sim
   private recentlyFailedActions(runtime: SimRuntime): Set<string> {
-    const cutoff = Date.now() - FAILED_ACTION_SUPPRESS_MS;
-    [...runtime.failedActionsAt.entries()].forEach(([action, at]) => {
-      if (at < cutoff) {
-        runtime.failedActionsAt.delete(action);
+    const now = Date.now();
+    [...runtime.suppressedUntil.entries()].forEach(([action, until]) => {
+      if (until < now) {
+        runtime.suppressedUntil.delete(action);
       }
     });
-    return new Set(runtime.failedActionsAt.keys());
+    return new Set(runtime.suppressedUntil.keys());
   }
 
   private withoutSuppressedActions(entry: SimStateEntry, suppressed: Set<string>): SimStateEntry {
@@ -817,11 +835,13 @@ export class CognitionService {
       log.warn(
         `[Cognition] sim ${simId} '${runtime.pendingAction}' produced no outcome in ${Math.round(timeoutMs / 1000)}s; releasing`,
       );
-      // A timed-out action failed in every way that matters — suppress it like a failed
-      // outcome, or the model re-picks it immediately (observed live: sit -> timeout ->
-      // sit again 20s later)
+      // A timed-out action gets the BENIGN window: the world never answered, which is
+      // churn, not proof it can't work — but it still sits out long enough that the
+      // model can't re-pick it immediately (observed live: sit -> timeout -> sit again
+      // 20s later; also observed: a guest-occupied toilet timing out once must not
+      // lock the only bladder fix away for 10 minutes)
       if (runtime.pendingAction) {
-        runtime.failedActionsAt.set(runtime.pendingAction, Date.now());
+        runtime.suppressedUntil.set(runtime.pendingAction, Date.now() + BENIGN_CLOSE_SUPPRESS_MS);
       }
       // Release the dispatcher's in-flight entry too — otherwise a lost dispatch (mod
       // websocket down) blocks every future dispatch for this sim until the 10-min TTL

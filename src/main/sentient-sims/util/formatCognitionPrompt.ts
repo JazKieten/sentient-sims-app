@@ -5,10 +5,56 @@
 
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
-import { offeredActions } from '../models/CognitionIntent';
+import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
+}
+
+// Socials the model should only aim where the relationship supports them; annotated in
+// the offered list, enforced by the game's own relationship tests at push time
+const ROMANTIC_SOCIALS = new Set(['flirt', 'kiss']);
+const MEAN_SOCIALS = new Set(['insult']);
+
+// Relationship bits the game names in ways worth repeating verbatim (married, engaged,
+// enemies...) read badly raw — keep only the recognizable word
+function prettyBit(bit: string): string | undefined {
+  const lowered = bit.toLowerCase();
+  for (const word of ['married', 'engaged', 'enem', 'unfaithful', 'awkward']) {
+    if (lowered.includes(word)) {
+      return word === 'enem' ? 'enemies' : word;
+    }
+  }
+  return undefined;
+}
+
+// "Nancy Landgraab (sim_id 123, friend, a romantic spark)" — the lore layer that lets a
+// social pick match the relationship (get_to_know a stranger, flirt at a spark, not both)
+function describeTarget(simId: string, target: SimTargetInfo): string {
+  const parts: string[] = [`sim_id ${simId}`];
+  if (!target.hasMet) {
+    parts.push('a stranger — chat to break the ice');
+  } else {
+    const friendship = target.friendship ?? 0;
+    if (friendship >= 50) {
+      parts.push('a good friend');
+    } else if (friendship >= 15) {
+      parts.push('a friend');
+    } else if (friendship <= -15) {
+      parts.push('on bad terms with you');
+    } else {
+      parts.push('an acquaintance');
+    }
+    const romance = target.romance ?? 0;
+    if (romance >= 40) {
+      parts.push('romantic');
+    } else if (romance >= 10) {
+      parts.push('a romantic spark');
+    }
+    const bits = (target.bits ?? []).map(prettyBit).filter((bit): bit is string => Boolean(bit));
+    parts.push(...new Set(bits));
+  }
+  return `${target.name ?? 'someone'} (${parts.join(', ')})`;
 }
 
 export const COGNITION_SYSTEM_PROMPT = `You are the inner voice of one Sim in The Sims 4, deciding what they do next.
@@ -22,7 +68,7 @@ Rules:
 - Lonely with no one around to talk to? Choose go_out (when offered) to go where people are; go_home when it is time to head back. If a low need truly has no fix on offer, skip it and handle the next-worst thing — do not fill the time with snacks or TV. Eating only fixes hunger; tiredness needs sleep.
 - Chores matter: when nothing is urgent, clean up dirty things and get broken things repaired BEFORE entertainment. Living in filth is not normal.
 - Only choose actions and targets from the OFFERED lists. Use sim ids, never names.
-- To talk to someone, use "speak" with a topic, or a specific social action.
+- To talk to someone, pick a social action from the OFFERED list (or "speak" with a topic) plus a target_sim_id. Match the social to the relationship: get_to_know new people, save flirt/kiss for a real romantic spark, vary the socials in a long conversation instead of repeating chat.
 - Late night is for sleep, not skill practice. Respect work schedules.
 - "thought" is always present: one line of what the Sim is thinking right now.`;
 
@@ -121,14 +167,32 @@ export function buildCognitionUserPrompt(
   const offered = offeredActions(entry, report?.lot?.action_keys);
   const objectList = [...offered.objectActions.keys()].map(pretty).join(', ') || '(none)';
   const simList =
-    [...offered.simTargets.entries()]
-      .map(([simId, target]) => `${target.name ?? 'someone'} (sim_id ${simId}${target.hasMet ? '' : ', a stranger'})`)
-      .join('; ') || '(no one)';
+    [...offered.simTargets.entries()].map(([simId, target]) => describeTarget(simId, target)).join('; ') ||
+    '(no one)';
   sections.push(`OFFERED object actions: ${objectList}`);
   if (offered.lotActions.size > 0) {
     sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
   }
   sections.push(`OFFERED people to talk to: ${simList}`);
+  if (offered.simTargets.size > 0) {
+    // The model can't name a social it was never shown — before this line existed every
+    // conversation degraded to plain 'chat' (the vocabulary was validation-only)
+    const plain: string[] = [];
+    const romantic: string[] = [];
+    const mean: string[] = [];
+    SOCIAL_ACTIONS.forEach((action) => {
+      if (ROMANTIC_SOCIALS.has(action)) {
+        romantic.push(pretty(action));
+      } else if (MEAN_SOCIALS.has(action)) {
+        mean.push(pretty(action));
+      } else {
+        plain.push(pretty(action));
+      }
+    });
+    sections.push(
+      `OFFERED social actions (need a target_sim_id; match them to the relationship): ${plain.join(', ')}; romantic only: ${romantic.join(', ')}; mean: ${mean.join(', ')}.`,
+    );
+  }
   if (unavailableActions?.length) {
     // Negative feedback the model otherwise never gets: without this, a sim whose
     // memories fixate on an impossible action (bills already paid) re-picks it every

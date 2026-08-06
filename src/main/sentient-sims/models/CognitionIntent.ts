@@ -44,6 +44,16 @@ export const SOCIAL_ACTIONS = new Set([
   'insult',
 ]);
 
+// What the observer knows about a present, talkable sim — the has_met gate plus the
+// relationship lore the prompt renders so social picks can match the relationship
+export type SimTargetInfo = {
+  name?: string;
+  hasMet: boolean;
+  friendship?: number;
+  romance?: number;
+  bits?: string[];
+};
+
 export type ValidatedIntent =
   | { ok: true; intent: CognitionIntent }
   | { ok: false; reason: string; fallback: CognitionIntent };
@@ -94,7 +104,7 @@ export function offeredActions(
   lotActionKeys?: string[],
 ): {
   objectActions: Map<string, string>; // action key -> object_id of nearest provider
-  simTargets: Map<string, { name?: string; hasMet: boolean }>; // sim_id -> info
+  simTargets: Map<string, SimTargetInfo>; // sim_id -> relationship-aware target info
   lotActions: Set<string>; // context-gated lot verbs (pay_bills, ...); mod resolves targets
 } {
   const objectActions = new Map<string, string>();
@@ -105,12 +115,18 @@ export function offeredActions(
       }
     });
   });
-  const simTargets = new Map<string, { name?: string; hasMet: boolean }>();
+  const simTargets = new Map<string, SimTargetInfo>();
   (entry.sims ?? []).forEach((perceived) => {
     if (perceived.tier !== 'same_room' || !perceived.sim_id) {
       return;
     }
-    simTargets.set(perceived.sim_id, { name: perceived.name, hasMet: perceived.social?.has_met !== false });
+    simTargets.set(perceived.sim_id, {
+      name: perceived.name,
+      hasMet: perceived.social?.has_met !== false,
+      friendship: perceived.social?.friendship,
+      romance: perceived.social?.romance,
+      bits: perceived.social?.bits,
+    });
   });
   return { objectActions, simTargets, lotActions: new Set(lotActionKeys ?? []) };
 }

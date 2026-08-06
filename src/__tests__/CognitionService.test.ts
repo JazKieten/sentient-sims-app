@@ -336,6 +336,104 @@ describe('CognitionService', () => {
     expect(cognition.getStats().continues).toBe(1);
   });
 
+  it('re-offers a benignly-canceled action after the short window', async () => {
+    // A cancel is churn (guest on the toilet, autonomy bump), not proof — observed live:
+    // one canceled use_toilet locked the ONLY bladder fix out for the full 10 minutes
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ intentJson: ACTION_INTENT });
+    cache.ingest(idleSimReport(1));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(dispatched).toHaveLength(1);
+    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-1', action: 'grab_snack' });
+
+    // Inside the benign window: still suppressed
+    cache.ingest(idleSimReport(2));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toHaveLength(1);
+
+    // Past the benign window (90s), far inside the failure window (10 min): offered again
+    await vi.advanceTimersByTimeAsync(95_000);
+    cache.ingest(idleSimReport(3));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toHaveLength(2);
+  });
+
+  it('does not let rejected re-picks refresh an active suppression window', async () => {
+    // Observed live: bladder was the worst need, so the model re-picked the suppressed
+    // use_toilet every tick — and each rejection reset the 10-minute clock, a livelock
+    // that would only have broken at the -85 emergency rule
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ intentJson: ACTION_INTENT });
+    cache.ingest(idleSimReport(1));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(dispatched).toHaveLength(1);
+    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-1', action: 'grab_snack' });
+
+    // The model keeps insisting during the window; each rejection must NOT extend it
+    await vi.advanceTimersByTimeAsync(40_000);
+    cache.ingest(idleSimReport(2));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toHaveLength(1);
+
+    // 40s + 55s > 90s: had the rejection above refreshed the clock, this would still be
+    // suppressed — it must dispatch
+    await vi.advanceTimersByTimeAsync(55_000);
+    cache.ingest(idleSimReport(3));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(dispatched).toHaveLength(2);
+  });
+
+  it('lets the critical-need rule bypass suppression', async () => {
+    // An accident-in-progress warrants retrying even a just-failed fix: a suppressed
+    // use_toilet at bladder -90 must never mean peeing on the floor
+    const { cache, cognition, dispatched } = buildCtx({ intentJson: ACTION_INTENT });
+    const first = idleSimReport(1);
+    first.sims![0].objects = [
+      { object_id: '901', action_keys: ['use_toilet'], name: 'object_toilet', tier: 'same_room', distance: 2 },
+    ];
+    first.sims![0].self!.needs = { bladder: -40 };
+    cache.ingest(first);
+    await settle();
+    // Model picked grab_snack (not offered) -> continue; now fail use_toilet outright
+    cognition.onOutcome({ sim_id: '100', outcome: 'failure', request_id: 'req-none', action: 'use_toilet' });
+
+    const critical = idleSimReport(2);
+    critical.sims![0].objects = first.sims![0].objects;
+    critical.sims![0].self!.needs = { bladder: -90 };
+    cache.ingest(critical);
+    await settle();
+
+    const toiletDispatches = dispatched.filter((intent) => intent.action === 'use_toilet');
+    expect(toiletDispatches).toHaveLength(1);
+  });
+
+  it('renders relationship context and the social vocabulary in the prompt', async () => {
+    const { cache, prompts } = buildCtx({ intentJson: '{"kind":"continue","thought":"hm"}' });
+    const report = idleSimReport(1);
+    report.sims![0].sims = [
+      {
+        sim_id: '200',
+        tier: 'same_room',
+        name: 'Adrian',
+        distance: 3,
+        social: { has_met: true, friendship: 62, romance: 18 },
+      },
+      { sim_id: '300', tier: 'same_room', name: 'Kira', distance: 4, social: { has_met: false } },
+    ];
+    cache.ingest(report);
+    await settle();
+
+    expect(prompts).toHaveLength(1);
+    const prompt = prompts[0];
+    // The lore layer: labels, not raw track values
+    expect(prompt).toContain('Adrian (sim_id 200, a good friend, a romantic spark)');
+    expect(prompt).toContain('Kira (sim_id 300, a stranger — chat to break the ice)');
+    // The social vocabulary is offered, annotated by register
+    expect(prompt).toContain('OFFERED social actions');
+    expect(prompt).toContain('romantic only: flirt, kiss');
+    expect(prompt).toContain('mean: insult');
+  });
+
   it('cuts go_out from the vocabulary when the sim is too tired', async () => {
     // Observed live: the wrecked-rule walked her home and the social drive sent her
     // straight back out — home for 17 seconds between bar trips, sleep/fun/fridge

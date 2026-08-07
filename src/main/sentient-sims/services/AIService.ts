@@ -65,6 +65,7 @@ import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
 import { SceneState } from './SceneService';
+import { MemoryTrace } from '../models/MemoryTrace';
 
 // Actors are asked for a bare subtitle, but models still sneak in speaker labels,
 // quotation marks, and parenthetical notes — strip everything but the spoken words
@@ -219,11 +220,13 @@ export class AIService {
 
   async generate(promptRequest: OpenAICompatibleRequest) {
     const providerConfig = this.ctx.providerConfigs.getConfigForAction(AIActionType.GENERATE);
-    return this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate({
-      ...promptRequest,
-      model: promptRequest.model ?? providerConfig.model,
-      apiType: promptRequest.apiType ?? providerConfig.apiType,
-    });
+    return this.ctx.aiExchangeLog.runLabeled('Chat Tab Generation', AIActionType.GENERATE, () =>
+      this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate({
+        ...promptRequest,
+        model: promptRequest.model ?? providerConfig.model,
+        apiType: promptRequest.apiType ?? providerConfig.apiType,
+      }),
+    );
   }
 
   // Logs one LLM stage of a pipeline (prompt + output) to the console/log so the whole
@@ -233,6 +236,17 @@ export class AIService {
     log.info(
       `[Pipeline] === ${exchange.label} ===\n--- PROMPT ---\n${prompt}\n--- OUTPUT ---\n${exchange.responseText}\n=== end ${exchange.label} ===`,
     );
+  }
+
+  // Keeps the pipeline that produced a memory (prompts, director's direction, reviewer
+  // before/after) available to the dev-mode Memories UI. Best-effort — a failure here must
+  // never break generation.
+  private recordTrace(contents: (string | undefined)[], trace: MemoryTrace) {
+    try {
+      this.ctx.memoryTrace.recordPending(contents, trace);
+    } catch (err) {
+      log.error('Failed to record memory trace', err);
+    }
   }
 
   // Detects a location change and, if the player travelled, reflects on the scene that just
@@ -293,6 +307,10 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
         AIActionType.REFLECTION,
       );
       this.logExchange(reflection.exchange);
+      this.recordTrace([cleanupAIOutput(reflection.text)], {
+        pipeline: 'scene_reflection',
+        exchanges: [reflection.exchange],
+      });
 
       const text = cleanupAIOutput(reflection.text);
       if (text.length <= 1) {
@@ -643,7 +661,10 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
     openAIRequest.model = providerConfig.model;
     openAIRequest.apiType = providerConfig.apiType;
 
-    const response = await this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest);
+    const generationAction = actionTypeForEvent(event.event_type);
+    const response = await this.ctx.aiExchangeLog.runLabeled('Scene Generation', generationAction, () =>
+      this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
+    );
 
     this.logExchange({ label: 'Scene Generation', request: openAIRequest, responseText: response.text });
 
@@ -692,9 +713,11 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
     // memory and displayed to the player verbatim. Retry once, then discard.
     if (output.length > 1 && isDegenerateOutput(output)) {
       log.error(`[Generation] Degenerate output detected, retrying once: ${output.slice(0, 200)}`);
-      const retryResponse = await this.ctx
-        .getGenerationService(providerConfig.apiType)
-        .sentientSimsGenerate(openAIRequest);
+      const retryResponse = await this.ctx.aiExchangeLog.runLabeled(
+        'Scene Generation (degenerate retry)',
+        generationAction,
+        () => this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
+      );
       this.logExchange({
         label: 'Scene Generation (degenerate retry)',
         request: openAIRequest,
@@ -743,6 +766,16 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
         { label: 'Director Review', request: directorReview.request, responseText: directorReview.text },
       ];
 
+      this.recordTrace([newMemory.content], {
+        pipeline: 'scene_generation',
+        exchanges,
+        review: {
+          before: rawSceneText,
+          after: directorReview.text,
+          usedReviewerCut: directorReview.usedReview,
+        },
+      });
+
       return {
         status: InteractionEventStatus.GENERATED,
         text: formatSceneForChatWindow(output),
@@ -762,7 +795,7 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
   async runDirectorReview(
     text: string,
     actionType: AIActionType = AIActionType.DIRECTED_SCENE_REVIEWER,
-  ): Promise<{ text: string; request: OpenAICompatibleRequest }> {
+  ): Promise<{ text: string; request: OpenAICompatibleRequest; usedReview: boolean }> {
     const systemPrompt = `You are a director reviewing a short generated scene from The Sims. Fix any issues and return only the corrected text — no commentary, no labels, no extra formatting.
 
 Fix these issues if present:
@@ -779,7 +812,8 @@ If the scene is already good, return it unchanged.`;
     const oneShot = await this.runOneShot('Director Review', systemPrompt, text, 300, undefined, actionType);
     this.logExchange(oneShot.exchange);
     const reviewed = cleanupAIOutput(oneShot.text);
-    return { text: reviewed.length > 1 ? reviewed : text, request: oneShot.exchange.request };
+    const usedReview = reviewed.length > 1;
+    return { text: usedReview ? reviewed : text, request: oneShot.exchange.request, usedReview };
   }
 
   async runOneShot(
@@ -807,7 +841,9 @@ If the scene is already good, return it unchanged.`;
     // An explicit model (scenario tester's per-stage picks) wins over the action's provider config
     openAIRequest.model = model ?? providerConfig.model;
     openAIRequest.apiType = providerConfig.apiType;
-    const response = await this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest);
+    const response = await this.ctx.aiExchangeLog.runLabeled(label, actionType, () =>
+      this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
+    );
     return { exchange: { label, request: openAIRequest, responseText: response.text }, text: response.text };
   }
 
@@ -1060,6 +1096,19 @@ ${
     const preActionLine = continuingScene || playerLine ? undefined : sceneAction;
     const finalText = preActionLine ? `${preActionLine}\n${dialogueText}` : dialogueText;
 
+    // The memory may be persisted here, or later by the mod posting back either the raw
+    // scene text or the chat-window-formatted one — key the trace on every shape it can take
+    this.recordTrace([finalText, dialogueText, formatSceneForChatWindow(finalText)], {
+      pipeline: 'directed_scene',
+      exchanges,
+      directorDirection: briefing.text,
+      review: {
+        before: toTranscript(performedLines),
+        after: toTranscript(reviewedLines),
+        usedReviewerCut: useReviewerCut,
+      },
+    });
+
     const newMemory: MemoryEntity = {
       content: finalText,
       location_id: event.environment.location_id,
@@ -1144,7 +1193,11 @@ ${
     openAIRequest.model = providerConfig.model;
     openAIRequest.apiType = apiType;
 
-    const response = await this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest);
+    const response = await this.ctx.aiExchangeLog.runLabeled(
+      `Classification: ${classificationRequest.name}`,
+      actionType,
+      () => this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest),
+    );
 
     const output = cleanAIClassificationOutput(response.text);
 
@@ -1231,7 +1284,11 @@ Write me a buff description based on the conversation so that ${buffRequest.name
     openAIRequest.model = providerConfig.model;
     openAIRequest.apiType = apiType;
 
-    const response = await this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest);
+    const response = await this.ctx.aiExchangeLog.runLabeled(
+      `Buff Description: ${buffRequest.name}`,
+      AIActionType.BUFF,
+      () => this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest),
+    );
 
     const output = `${buffRequest.name} is feeling ${buffRequest.mood} because ${cleanupAIOutput(response.text)}`;
 

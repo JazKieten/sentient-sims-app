@@ -128,6 +128,16 @@ function MenuBar({ hideSideBar, setHideSideBar }: MenuBarProperties) {
                 >
                   Mapping Browser
                 </Button>
+                <Button
+                  color="secondary"
+                  onClick={() => {
+                    void navigate('/ai-log');
+                  }}
+                  sx={{ marginLeft: '5px' }}
+                  id="ai-log"
+                >
+                  AI Log
+                </Button>
               </>
             ) : null}
             <Button

@@ -136,6 +136,25 @@ export class AIController {
     res.json(result);
   };
 
+  // Dev-mode AI log: every provider call this app session made, newest first.
+  @CatchErrors()
+  getExchanges = (req: Request, res: Response) => {
+    const { limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : undefined;
+    res.json(this.ctx.aiExchangeLog.list(parsedLimit && parsedLimit > 0 ? parsedLimit : undefined));
+  };
+
+  @CatchErrors()
+  getExchange = (req: Request, res: Response) => {
+    const exchangeId = Number(req.params.exchangeId);
+    const exchange = this.ctx.aiExchangeLog.get(exchangeId);
+    if (!exchange) {
+      res.status(404).json({ error: `No AI exchange ${exchangeId}` });
+      return;
+    }
+    res.json(exchange);
+  };
+
   @CatchErrors()
   tts = (req: Request, res: Response) => {
     const { text } = req.query;

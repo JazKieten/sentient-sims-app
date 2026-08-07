@@ -59,7 +59,7 @@ export class MemoryAnnotationService {
     const session = this.ctx.db.sessionKey;
     const text = memory.observation || memory.content || '';
     const importance = text
-      ? await this.rateImportance(text, memory.event_type)
+      ? await this.rateImportance(text, memory.event_type, memory.id)
       : heuristicImportance(memory.event_type);
 
     let embedding: Buffer | undefined;
@@ -166,9 +166,18 @@ export class MemoryAnnotationService {
     return embedded;
   }
 
-  private async rateImportance(text: string, eventType?: string): Promise<number> {
+  private async rateImportance(text: string, eventType?: string, memoryId?: number): Promise<number> {
     try {
       const result = await this.ctx.ai.runOneShot('Memory Importance', IMPORTANCE_SYSTEM_PROMPT, text, 5);
+      // The row already exists by the time this runs, so the stage attaches by id. Kept in
+      // its own try/catch: debug bookkeeping must not send a real rating to the heuristic.
+      if (memoryId !== undefined) {
+        try {
+          this.ctx.memoryTrace.appendExchange(memoryId, result.exchange);
+        } catch (error) {
+          log.debug(`[Annotation] could not attach importance trace to memory ${memoryId}: ${String(error)}`);
+        }
+      }
       const rating = parseImportance(result.text);
       if (rating !== undefined) {
         return rating;

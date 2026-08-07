@@ -31,6 +31,7 @@ import 'aws-amplify/auth/enable-oauth-listener';
 import { AuthProvider } from './providers/AuthProvider';
 import { AmplifyConfig } from './AmplifyConfig';
 import OnlineMappingBrowser from './components/OnlineMappingBrowser';
+import AILogPage from './AILogPage';
 
 Amplify.configure(AmplifyConfig);
 
@@ -82,6 +83,10 @@ const router = createMemoryRouter([
       {
         path: '/logs',
         element: <LogViewerPage />,
+      },
+      {
+        path: '/ai-log',
+        element: <AILogPage />,
       },
     ],
   },

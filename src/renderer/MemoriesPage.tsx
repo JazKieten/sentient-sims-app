@@ -1,11 +1,14 @@
 import { Box, Button, Card, CardActions, CardContent, Chip, Snackbar, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { MemoryEntity } from 'main/sentient-sims/db/entities/MemoryEntity';
 import log from 'electron-log';
 import { DeleteMemoryRequest } from 'main/sentient-sims/models/GetMemoryRequest';
 import AppCard from './AppCard';
 import { MemoryEditInput } from './components/MemoryEditInput';
+import { MemoryTraceDialog } from './components/MemoryTraceDialog';
+import { useDebugMode } from './providers/DebugModeProvider';
 import { useWebsocket } from './providers/WebsocketProvider';
 import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
 
@@ -26,7 +29,9 @@ export default function MemoriesPage() {
   }, [memoriesFocused]);
   const [editedMemory, setEditedMemory] = useState<SelectedMemory | null | undefined>();
   const { status } = useWebsocket();
+  const debugMode = useDebugMode();
   const [copiedSnackbar, setCopiedSnackbar] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
 
   const copyInteractionName = (name: string) => {
     void navigator.clipboard.writeText(name);
@@ -109,6 +114,7 @@ export default function MemoriesPage() {
 
   const handleSetSelectedMemory = useCallback(
     (index: number) => {
+      setTraceOpen(false);
       if (index < 0) {
         setEditedMemory(null);
       } else {
@@ -281,6 +287,18 @@ export default function MemoriesPage() {
                 >
                   Cancel
                 </Button>
+                {debugMode.isEnabled && editedMemory.memory.id !== undefined && (
+                  <Button
+                    sx={{ marginLeft: 1 }}
+                    variant="outlined"
+                    startIcon={<VisibilityIcon />}
+                    onClick={() => {
+                      setTraceOpen(true);
+                    }}
+                  >
+                    View Prompt
+                  </Button>
+                )}
               </div>
               <div>
                 <Button
@@ -369,6 +387,13 @@ export default function MemoriesPage() {
           </CardContent>
         </Card>
         {editMemoryBox}
+        <MemoryTraceDialog
+          open={traceOpen}
+          memoryId={editedMemory?.memory.id}
+          onClose={() => {
+            setTraceOpen(false);
+          }}
+        />
         <Snackbar
           open={copiedSnackbar}
           autoHideDuration={1500}

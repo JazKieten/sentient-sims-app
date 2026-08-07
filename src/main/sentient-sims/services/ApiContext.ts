@@ -24,6 +24,7 @@ import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
 import { MemoryRepository } from '../db/MemoryRepository';
 import { ParticipantRepository } from '../db/ParticipantRepository';
 import { ApiType } from '../models/ApiType';
+import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { LLaMaTokenCounter } from '../tokens/LLaMaTokenCounter';
 import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
@@ -48,6 +49,8 @@ import { LogsService } from './LogsService';
 import { MappingService } from './MappingService';
 import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
+import { MemoryTraceService } from './MemoryTraceService';
+import { AIExchangeLogService } from './AIExchangeLogService';
 import { ModelSettingsService } from './ModelSettingsService';
 import { NovelAIService } from './NovelAIService';
 import { OpenAIService } from './OpenAIService';
@@ -224,6 +227,11 @@ export class ApiContext {
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
   private readonly _memoryRetrievalService: MemoryRetrievalService;
+  private readonly _memoryTraceService: MemoryTraceService;
+  private readonly _aiExchangeLogService: AIExchangeLogService;
+  // One logging wrapper per provider service, so repeated getGenerationService calls
+  // hand back the same object instead of allocating a new proxy each time
+  private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
   private readonly _elevenLabsVoicesService: ElevenLabsVoicesService;
 
   // --- Repositories ---
@@ -303,8 +311,11 @@ export class ApiContext {
     this._memoryAnnotationService = new MemoryAnnotationService(this);
     this._memoryRetrievalService = new MemoryRetrievalService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
+    this._aiExchangeLogService = new AIExchangeLogService();
+    this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService);
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
+      this._memoryTraceService.attach(memory);
     });
 
     // Last: subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
@@ -410,6 +421,14 @@ export class ApiContext {
     return this._memoryRetrievalService;
   }
 
+  get memoryTrace(): MemoryTraceService {
+    return this._memoryTraceService;
+  }
+
+  get aiExchangeLog(): AIExchangeLogService {
+    return this._aiExchangeLogService;
+  }
+
   get elevenLabsVoices(): ElevenLabsVoicesService {
     return this._elevenLabsVoicesService;
   }
@@ -470,7 +489,55 @@ export class ApiContext {
     return this._providerConfigService;
   }
 
+  // Every AI call in the app goes through here, which makes it the one place that can log
+  // them all — see AIExchangeLogService.
   getGenerationService(aiType: ApiType): GenerationService {
+    return this.withExchangeLogging(this.resolveGenerationService(aiType));
+  }
+
+  // A Proxy rather than a hand-rolled object: callers (and tests) still see the real
+  // service — `instanceof SentientSimsAIService` holds, and spying on the returned object
+  // defines the spy on the underlying service, so the logging still runs around it.
+  private withExchangeLogging(service: GenerationService): GenerationService {
+    const existing = this._loggedGenerationServices.get(service);
+    if (existing) {
+      return existing;
+    }
+
+    const exchangeLog = this._aiExchangeLogService;
+    const loggedGenerate = async (request: OpenAICompatibleRequest) => {
+      const startedAt = Date.now();
+      try {
+        const response = await service.sentientSimsGenerate(request);
+        exchangeLog.record({ request, responseText: response.text, durationMs: Date.now() - startedAt });
+        return response;
+      } catch (err) {
+        exchangeLog.record({
+          request,
+          responseText: '',
+          durationMs: Date.now() - startedAt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    };
+
+    const wrapped = new Proxy(service, {
+      get(target, property, receiver) {
+        if (property === 'sentientSimsGenerate') {
+          return loggedGenerate;
+        }
+        const value = Reflect.get(target, property, receiver);
+        // Bound to the real service so delegated methods keep their own `this`
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+
+    this._loggedGenerationServices.set(service, wrapped);
+    return wrapped;
+  }
+
+  private resolveGenerationService(aiType: ApiType): GenerationService {
     if (aiType === ApiType.SentientSimsAI || aiType === ApiType.CustomAI) {
       return this.sentientSimsAIService;
     }

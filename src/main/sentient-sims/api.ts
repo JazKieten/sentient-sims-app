@@ -27,6 +27,8 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/ai/v3/event/buff', ctx.controller.ai.buffEvent);
   expressApp.get('/ai/v2/models', ctx.controller.ai.getModels);
   expressApp.get('/ai/v2/tts', ctx.controller.ai.tts);
+  expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.ai.getExchange);
+  expressApp.get('/ai/exchanges', ctx.controller.ai.getExchanges);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);
@@ -54,6 +56,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/locations', ctx.controller.locations.updateLocation);
   expressApp.delete('/locations/:locationId', ctx.controller.locations.deleteLocation);
 
+  expressApp.get('/memories/:memoryId/trace', ctx.controller.memories.getMemoryTrace);
   expressApp.get('/memories/:memoryId', ctx.controller.memories.getMemory);
   expressApp.get('/memories', ctx.controller.memories.getMemories);
   expressApp.post('/memories/:memoryId', ctx.controller.memories.updateMemory);

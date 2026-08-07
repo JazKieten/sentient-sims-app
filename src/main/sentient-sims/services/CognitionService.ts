@@ -10,6 +10,7 @@ import {
 } from '../models/CognitionIntent';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
 import { AIActionType } from '../models/AIActionType';
+import { LLMExchange } from '../models/InteractionEventResult';
 import {
   COGNITION_REVIEW_SYSTEM_PROMPT,
   COGNITION_SYSTEM_PROMPT,
@@ -569,13 +570,23 @@ export class CognitionService {
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
     const userPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
 
+    const simLabel = entry.sim_name ?? simId;
     const oneShot = await withRetry(
       () =>
         this.ctx.generationQueue.runCognition(() =>
-          this.ctx.ai.runOneShot('Cognition', COGNITION_SYSTEM_PROMPT, userPrompt, 400, undefined, AIActionType.COGNITION),
+          this.ctx.ai.runOneShot(
+            `Cognition: ${simLabel}`,
+            COGNITION_SYSTEM_PROMPT,
+            userPrompt,
+            400,
+            undefined,
+            AIActionType.COGNITION,
+          ),
         ),
       'cognition deliberation',
     );
+    // Every stage that shaped this tick, so the thought memory can show what led to it
+    const tickExchanges: LLMExchange[] = [oneShot.exchange];
 
     const candidate = parseIntentJson(oneShot.text);
     let validated = validateIntent(candidate, entryView, lotActionKeys);
@@ -602,11 +613,15 @@ export class CognitionService {
     // Review dial (user directive: everything through some version of the reviewed
     // pipeline). Review-only at tick cadence — the full director stage belongs to scenes.
     if (validated.ok && intent.kind === 'action' && this.ctx.settings.cognitionPipeline === 'review') {
-      intent = await this.reviewIntent(intent, entryView, userPrompt, lotActionKeys);
+      const reviewed = await this.reviewIntent(intent, entryView, userPrompt, lotActionKeys, simLabel);
+      intent = reviewed.intent;
+      if (reviewed.exchange) {
+        tickExchanges.push(reviewed.exchange);
+      }
     }
 
     if (intent.kind === 'continue' || intent.kind === 'wait') {
-      this.storeThought(entry, intent);
+      this.storeThought(entry, intent, tickExchanges);
       this.stats.continues += 1;
       this.toCooldown(simId, intent.kind === 'wait' ? 2 : 1);
       return;
@@ -678,7 +693,7 @@ export class CognitionService {
     // Thoughts are stored only for intents that survived the guards: a blocked action's
     // justification is a falsehood ("I smell bad" at hygiene 78, observed live) that
     // would poison retrieval as if it were her real inner state
-    this.storeThought(entry, intent);
+    this.storeThought(entry, intent, tickExchanges);
 
     if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
       this.stats.suggestions += 1;
@@ -718,14 +733,15 @@ export class CognitionService {
     intent: CognitionIntent,
     entry: SimStateEntry,
     situationPrompt: string,
-    lotActionKeys?: string[],
-  ): Promise<CognitionIntent> {
+    lotActionKeys: string[] | undefined,
+    simLabel: string,
+  ): Promise<{ intent: CognitionIntent; exchange?: LLMExchange }> {
     try {
       const review = await withRetry(
         () =>
           this.ctx.generationQueue.runCognition(() =>
             this.ctx.ai.runOneShot(
-              'Cognition Review',
+              `Cognition Review: ${simLabel}`,
               COGNITION_REVIEW_SYSTEM_PROMPT,
               `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
               300,
@@ -740,12 +756,16 @@ export class CognitionService {
         if (JSON.stringify(reviewed.intent) !== JSON.stringify(intent)) {
           log.info(`[Cognition] review adjusted intent: ${intent.action} -> ${reviewed.intent.kind === 'action' ? reviewed.intent.action : reviewed.intent.kind}`);
         }
-        return { ...reviewed.intent, thought: reviewed.intent.thought ?? intent.thought };
+        return {
+          intent: { ...reviewed.intent, thought: reviewed.intent.thought ?? intent.thought },
+          exchange: review.exchange,
+        };
       }
+      return { intent, exchange: review.exchange };
     } catch (error) {
       log.warn('[Cognition] review pass failed; keeping original intent', error);
     }
-    return intent;
+    return { intent };
   }
 
   // Prunes expired entries and returns the still-suppressed action keys for this sim
@@ -772,10 +792,19 @@ export class CognitionService {
     };
   }
 
-  private storeThought(entry: SimStateEntry, intent: CognitionIntent) {
+  private storeThought(entry: SimStateEntry, intent: CognitionIntent, exchanges: LLMExchange[] = []) {
     if (!intent.thought) {
       return;
     }
+    // Dev mode reads this back on the thought memory: the deliberation (and review) that
+    // decided what the sim does next, prompt and all. Isolated from the write below —
+    // this is debug bookkeeping and must never cost the sim its thought.
+    try {
+      this.ctx.memoryTrace.recordPending([intent.thought], { pipeline: 'cognition', exchanges });
+    } catch (error) {
+      log.debug(`[Cognition] could not record thought trace for sim ${entry.sim_id}: ${String(error)}`);
+    }
+
     try {
       // Thoughts constrain later retrieval (what a sim thinks shapes what it says), but
       // never subtitle or pause the game at tick cadence

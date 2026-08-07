@@ -41,7 +41,8 @@ function buildCtx(options: CtxOptions = {}) {
       runOneShot: (label: string, _system: string, userPrompt: string) => {
         oneShotCalls.push(label);
         prompts.push(userPrompt);
-        const isReview = label === 'Cognition Review';
+        // Labels carry the sim name so the dev-mode AI log can be read at a glance
+        const isReview = label.startsWith('Cognition Review');
         const intentJson = typeof options.intentJson === 'function' ? options.intentJson() : options.intentJson;
         const text = isReview ? (options.reviewJson ?? intentJson ?? '{}') : (intentJson ?? '{}');
         return Promise.resolve({ text, exchange: {} });
@@ -669,7 +670,7 @@ describe('CognitionService', () => {
     cache.ingest(idleSimReport(1));
     await settle();
 
-    expect(oneShotCalls).toEqual(['Cognition', 'Cognition Review']);
+    expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual(['Cognition', 'Cognition Review']);
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].action).toBe('grab_snack');
   });

@@ -58,6 +58,22 @@ export class MemoriesController {
     }
   };
 
+  // Dev-mode only: the LLM pipeline (prompts, director's direction, reviewer before/after)
+  // that produced this memory, when it was generated since the app last started.
+  getMemoryTrace = (req: Request<{ memoryId: string }>, res: Response) => {
+    try {
+      const { memoryId } = req.params;
+      const trace = this.ctx.memoryTrace.getTrace(memoryId);
+      if (!trace) {
+        return res.status(404).json({ error: `No pipeline trace for memory ${memoryId}` });
+      }
+      return res.json(trace);
+    } catch (err) {
+      log.error('Error getting memory trace', err);
+      return res.json({ error: errorMessage(err) });
+    }
+  };
+
   updateMemory = (req: Request, res: Response) => {
     try {
       const { memoryId } = req.params;

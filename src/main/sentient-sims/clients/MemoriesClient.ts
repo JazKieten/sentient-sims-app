@@ -1,5 +1,6 @@
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { CreateMemoryRequest } from '../models/GetMemoryRequest';
+import { MemoryTrace } from '../models/MemoryTrace';
 import { ApiClient } from './ApiClient';
 import { axiosClient } from './AxiosClient';
 
@@ -20,6 +21,20 @@ export class MemoriesClient extends ApiClient {
   async getMemory(memoryId: number): Promise<MemoryEntity> {
     const response = await axiosClient.get<MemoryEntity>(`${this.apiUrl}/memories/${memoryId}`);
     return response.data;
+  }
+
+  /**
+   * GET /memories/:memoryId/trace
+   * The LLM pipeline that produced this memory (dev mode). Returns undefined when the
+   * memory predates this app session or wasn't produced by a traced pipeline.
+   */
+  async getMemoryTrace(memoryId: number): Promise<MemoryTrace | undefined> {
+    try {
+      const response = await axiosClient.get<MemoryTrace>(`${this.apiUrl}/memories/${memoryId}/trace`);
+      return response.data;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

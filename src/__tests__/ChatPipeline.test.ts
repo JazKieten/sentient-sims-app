@@ -79,6 +79,8 @@ describe('Chat pipeline', () => {
         text = briefing;
       } else if (systemPrompt.includes('You are the director of a show')) {
         text = reviewerOutput;
+      } else if (systemPrompt.includes('You are scoring the scene')) {
+        text = '{"Nancy Landgraab": {"memory": 3, "action": 2, "action_reason": "Happy chatting."}}';
       }
       return Promise.resolve({ text, request });
     });
@@ -100,7 +102,7 @@ describe('Chat pipeline', () => {
 
     expect(result.status).toEqual(InteractionEventStatus.GENERATED);
     const labels = result.exchanges?.map((exchange) => exchange.label);
-    expect(labels).toEqual(['Director Briefing', 'Actor: Nancy Landgraab', 'Director Review']);
+    expect(labels).toEqual(['Director Briefing', 'Actor: Nancy Landgraab', 'Director Review', 'Scene Scores']);
     // The player already spoke, so their sim takes no actor turn
     expect(labels).not.toContain('Actor: Marisol Vega');
   });

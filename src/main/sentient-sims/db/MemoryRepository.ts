@@ -95,13 +95,18 @@ export class MemoryRepository extends Repository {
   // its location and start time (no schema support needed): this is the "conversational cache"
   // that resets each time the player travels to a new location. Timestamps are SQLite
   // CURRENT_TIMESTAMP strings (UTC, second precision), so `since` must be in the same format.
+  // Inner life (thought/monologue rows) is excluded: this transcript replays into SHARED
+  // prompts (every actor's "Previously in this scene"), and one sim's private head must
+  // never reach another sim's performance. Private rows travel only through owner-scoped
+  // retrieval (memory_index.owner_participant_id).
   getSceneMemories(locationId: number, since: string): MemoryEntity[] {
     return this.dbService
       .getDb()
       .prepare(
         `
           SELECT * FROM memory
-          WHERE location_id = ? AND timestamp >= ? AND (event_type IS NULL OR event_type != 'reflection')
+          WHERE location_id = ? AND timestamp >= ?
+            AND (event_type IS NULL OR event_type NOT IN ('reflection', 'thought', 'monologue'))
           ORDER BY timestamp ASC, id ASC;
         `,
       )
@@ -283,6 +288,22 @@ export class MemoryRepository extends Repository {
           participant_id: participant.id,
         });
       });
+
+      if (createMemoryRequest.index) {
+        // Inside the transaction so a private row is never observable without its owner.
+        // COALESCE keeps whatever the deferred annotator may already have written.
+        const { owner, importance } = createMemoryRequest.index;
+        this.dbService
+          .getDb()
+          .prepare(
+            `INSERT INTO memory_index(memory_id, importance, owner_participant_id)
+             VALUES(?, ?, ?)
+             ON CONFLICT(memory_id) DO UPDATE SET
+               importance = COALESCE(excluded.importance, importance),
+               owner_participant_id = COALESCE(excluded.owner_participant_id, owner_participant_id)`,
+          )
+          .run([updateMemoryResult.lastInsertRowid, importance ?? null, owner ? BigInt(owner) : null]);
+      }
 
       return updateMemoryResult.lastInsertRowid;
     });

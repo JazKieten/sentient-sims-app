@@ -76,6 +76,8 @@ describe('Memory trace end to end', () => {
         text = briefing;
       } else if (systemPrompt.includes('You are the director of a show')) {
         text = `Nancy Landgraab: ${actorLine}`;
+      } else if (systemPrompt.includes('You are scoring the scene')) {
+        text = '{"Nancy Landgraab": {"memory": 3, "action": 2, "action_reason": "Happy chatting."}}';
       }
       return Promise.resolve({ text, request });
     });
@@ -111,6 +113,7 @@ describe('Memory trace end to end', () => {
       'Director Briefing',
       'Actor: Nancy Landgraab',
       'Director Review',
+      'Scene Scores',
     ]);
     expect(trace?.directorDirection).toContain('PROMPT FOR Nancy Landgraab');
     expect(trace?.review?.before).toContain(actorLine);

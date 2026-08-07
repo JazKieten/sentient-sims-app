@@ -28,7 +28,7 @@ import { markScenePaced } from '../util/pacedScenes';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
 import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
-import { defaultClassificationPrompt, defaultWantsPrefixes, defaultWantsPrompt } from '../constants';
+import { defaultClassificationPrompt } from '../constants';
 import {
   BuffEventRequest,
   BuffDescriptionRequest,
@@ -58,7 +58,6 @@ import { NovelAIFormatter } from '../formatter/NovelAIFormatter';
 import { AIModel } from '../models/AIModel';
 import { DefaultFormatter } from '../formatter/DefaultFormatter';
 import { InteractionDescription } from '../descriptions/interactionDescriptions';
-import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import { sendModNotification } from '../websocketServer';
 import { ModAddBuff, ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
@@ -85,6 +84,102 @@ function extractSubtitle(rawText: string, speakerNames: string[]): string {
     subtitle = quoted[1];
   }
   return subtitle.trim();
+}
+
+// Actors answer in a two-line SAY/THINK format. Models drift — labels missing, reordered,
+// text on the line after the label — so parsing is tolerant: tagged lines win, and with no
+// tags at all the first non-empty line is taken as the spoken one (the pre-monologue shape).
+export function parseActorPerformance(rawText: string, speakerNames: string[]): { say: string; think: string } {
+  const lines = cleanupAIOutput(rawText)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  let say = '';
+  let think = '';
+  let pendingTag: 'SAY' | 'THINK' | undefined;
+  const untagged: string[] = [];
+  const assign = (tag: 'SAY' | 'THINK', text: string) => {
+    if (tag === 'SAY' && !say) {
+      say = text;
+    } else if (tag === 'THINK' && !think) {
+      think = text;
+    }
+  };
+  lines.forEach((line) => {
+    const tagMatch = /^(SAY|THINK)\s*[:-]\s*(.*)$/i.exec(line);
+    if (tagMatch) {
+      const tag = tagMatch[1].toUpperCase() as 'SAY' | 'THINK';
+      const text = extractSubtitle(tagMatch[2], speakerNames);
+      if (text) {
+        assign(tag, text);
+        pendingTag = undefined;
+      } else {
+        // Bare label — the text is on the next line
+        pendingTag = tag;
+      }
+      return;
+    }
+    if (pendingTag) {
+      assign(pendingTag, extractSubtitle(line, speakerNames));
+      pendingTag = undefined;
+      return;
+    }
+    untagged.push(line);
+  });
+  if (!say && untagged.length > 0) {
+    say = extractSubtitle(untagged.join('\n'), speakerNames);
+  }
+  return { say, think };
+}
+
+// Per-character verdicts from the scores stage: how memorable the scene was for them and
+// how strongly it leaves them wanting to change course (the Action Score that, over
+// threshold, will promote them into an Action Scene).
+export type SceneScore = { memory: number; action: number; action_reason?: string };
+
+// The scores stage answers with one JSON object mapping character names to their scores.
+// Tolerant of prose around the JSON, string numbers, and out-of-range values (clamped 1-10);
+// unknown names are dropped rather than guessed.
+export function parseSceneScores(rawText: string, names: string[]): Map<string, SceneScore> {
+  const scores = new Map<string, SceneScore>();
+  const jsonMatch = /\{[\s\S]*\}/.exec(rawText);
+  if (!jsonMatch) {
+    return scores;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return scores;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return scores;
+  }
+  const clamp = (value: unknown): number | undefined => {
+    const num = typeof value === 'string' ? Number(value) : value;
+    if (typeof num !== 'number' || Number.isNaN(num)) {
+      return undefined;
+    }
+    return Math.min(10, Math.max(1, Math.round(num)));
+  };
+  Object.entries(parsed as Record<string, unknown>).forEach(([key, value]) => {
+    const name = names.find((candidate) => candidate.toLowerCase() === key.trim().toLowerCase());
+    if (!name || !value || typeof value !== 'object') {
+      return;
+    }
+    const verdict = value as { memory?: unknown; action?: unknown; action_reason?: unknown };
+    const memory = clamp(verdict.memory);
+    const action = clamp(verdict.action);
+    if (memory === undefined && action === undefined) {
+      return;
+    }
+    scores.set(name, {
+      memory: memory ?? 3,
+      action: action ?? 1,
+      action_reason: typeof verdict.action_reason === 'string' ? verdict.action_reason : undefined,
+    });
+  });
+  return scores;
 }
 
 // The reviewer returns one `Name: line` per row; rows that don't start with a known
@@ -425,13 +520,9 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
     if (resolved.result) {
       return resolved.result;
     }
-    if (primaryEvent.sentient_sims.length >= 2) {
-      return this.runDirectedGeneration(primaryEvent, { action: resolved.preAction });
-    }
-    return this.runGeneration(primaryEvent, {
-      preAction: resolved.preAction,
-      prePreAction: 'At {location} ({location_type}), {postures},',
-    });
+    // Everything goes through the directed pipeline: pairs play dialogue + monologue,
+    // a lone sim gets a monologue-only beat. There is no single-pass narrator anymore.
+    return this.runDirectedGeneration(primaryEvent, { action: resolved.preAction });
   }
 
   async interactionEventDeferred(
@@ -450,17 +541,7 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
         play = ready;
       },
     };
-    const result =
-      primaryEvent.sentient_sims.length >= 2
-        ? await this.runDirectedGeneration(primaryEvent, { action: options.preAction }, playbackOptions)
-        : await this.runGeneration(
-            primaryEvent,
-            {
-              preAction: options.preAction,
-              prePreAction: 'At {location} ({location_type}), {postures},',
-            },
-            playbackOptions,
-          );
+    const result = await this.runDirectedGeneration(primaryEvent, { action: options.preAction }, playbackOptions);
     return {
       result,
       play: once(() => {
@@ -473,7 +554,7 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
     // Group continues narrow to a pair like fresh interactions do (a 7-sim continue would
     // otherwise run 7 actor turns); the random partner keeps the group convo rotating
     const primaryEvent = toPrimaryInteractionEvent(event);
-    if (primaryEvent.sentient_sims.length >= 2) {
+    if (primaryEvent.sentient_sims.length >= 1) {
       // Directed continue needs prior memories to pick up from; fall through when there are none
       const directed = await this.runDirectedGeneration(primaryEvent, { continueScene: true });
       if (directed.status === InteractionEventStatus.GENERATED) {
@@ -492,21 +573,11 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
   }
 
   async handleWants(event: WantsInteractionEvent) {
-    const randomAction = defaultWantsPrefixes[Math.floor(Math.random() * defaultWantsPrefixes.length)];
-    return this.runGeneration(
-      event,
-      {
-        preAction: defaultWantsPrompt,
-        preAssistantPreResponse: `{actor.0}:`,
-        assistantPreResponse: randomAction,
-        promptHistoryMode: PromptHistoryMode.NO_USER_HISTORY,
-      },
-      {
-        // Wants are the actor's own first-person voice — speak them as the actor so the
-        // sim's cast/pinned ElevenLabs voice is used instead of the global default
-        ttsSpeaker: event.sentient_sims[0]?.name,
-      },
-    );
+    // A want IS inner monologue: a quiet solo beat where the sim takes stock of what
+    // they want right now, played through the same directed pipeline as everything else
+    return this.runDirectedGeneration(event, {
+      action: '{actor.0} pauses for a moment and takes stock of what they want right now.',
+    });
   }
 
   async handleWickedWhims(event: WWInteractionEvent) {
@@ -557,21 +628,9 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
   }
 
   async handleDoSomething(doSomethingEvent: DoSomethingInteractionEvent) {
-    if (doSomethingEvent.sentient_sims.length >= 2) {
-      return this.runDirectedGeneration(doSomethingEvent, { action: doSomethingEvent.action });
-    }
-    return this.runGeneration(
-      doSomethingEvent,
-      {
-        action: doSomethingEvent.action,
-        prePreAction: 'At {location} ({location_type}), {postures},',
-      },
-      {
-        // The player asked for this on their own sim and is watching for the result —
-        // stream it as paced subtitles rather than a suppressed memory block
-        pacedSubtitles: true,
-      },
-    );
+    // Solo Do Something plays as a monologue-only directed beat: the player sees the
+    // sim's thought via the memory display instead of narrator prose
+    return this.runDirectedGeneration(doSomethingEvent, { action: doSomethingEvent.action });
   }
 
   async handleChat(chatEvent: ChatInteractionEvent) {
@@ -850,8 +909,8 @@ If the scene is already good, return it unchanged.`;
   async runDirectedScene(request: DirectedSceneRequest): Promise<InteractionEventResult> {
     const { event } = request;
     await this.handleSceneBoundary(event);
-    if ((!event.testing_action && !request.continueScene) || event.sentient_sims.length < 2) {
-      log.error('Directed scene requires a testing_action and at least two sims');
+    if ((!event.testing_action && !request.continueScene) || event.sentient_sims.length < 1) {
+      log.error('Directed scene requires a testing_action and at least one sim');
       return { status: InteractionEventStatus.NOOP };
     }
     return this.runDirectedGeneration(event, {
@@ -918,10 +977,17 @@ If the scene is already good, return it unchanged.`;
       return { status: InteractionEventStatus.NOOP };
     }
 
+    // A lone sim runs the same pipeline with the dialogue stage NULLed: director, then
+    // inner monologue only, then scores. There is no narrator — a solo beat is a thought.
+    const monologueOnly = performers.length === 1 && !playerLine;
+
     const exchanges: LLMExchange[] = [];
 
     // 1. Director splits the full context into one complete, self-contained prompt per actor
-    const briefingSystemPrompt = `You are directing a scene of a show starring sentient Sims — this episode features ${simNames.join(' and ')}. The audience tunes in because these characters feel truly alive: vivid, compelling, full of personality. You have the FULL scene context below; the user message tells you what is happening right now. First decide what kind of scene this wants to be, then write one shared SCENE briefing plus one private briefing per actor. Each actor will see ONLY the shared briefing and their own private briefing — nothing else — so together they must contain everything that actor needs to play the scene.
+    const soloNote = monologueOnly
+      ? `\n\nThis is a SOLO beat: ${performerNames[0]} is alone with what they are doing — there is no conversation, and the actor will deliver only private inner monologue. The Inner life direction carries the whole scene.`
+      : '';
+    const briefingSystemPrompt = `You are directing a scene of a show starring sentient Sims — this episode features ${simNames.join(' and ')}. The audience tunes in because these characters feel truly alive: vivid, compelling, full of personality. You have the FULL scene context below; the user message tells you what is happening right now. First decide what kind of scene this wants to be, then write one shared SCENE briefing plus one private briefing per actor. Each actor will see ONLY the shared briefing and their own private briefing — nothing else — so together they must contain everything that actor needs to play the scene.${soloNote}
 
 ${sceneContext}
 
@@ -932,10 +998,11 @@ The shared SCENE briefing must cover, in under 60 words:
 - Setting: where and when the scene takes place
 - Situation: what is happening right now
 
-Each actor's private briefing must cover, in under 80 words:
+Each actor's private briefing must cover, in under 100 words:
 - Role: "You are playing <name>." — their personality, current mood, and how it colors this moment
 - Want: what their character wants out of this scene
 - Angle: the specific attitude or feeling to play, and how they carry themselves in this conversation
+- Inner life: one line of direction for the private thought running underneath the performance — what this character actually feels or wants beneath what they say, which may cut against their spoken lines
 - Relevant context: only the private details and past events that matter for this scene — never the character's whole life story
 
 Rules:
@@ -946,7 +1013,7 @@ Rules:
 - Smooth over wrinkles: if the context is awkward, contradictory, or overloaded, resolve it into a clean, playable scene.
 - If the user message contains "Previously in this scene", the conversation is already underway: tell each actor to pick up mid-flow and build on what has already been said — no greetings, no introductions, no re-describing the setting.
 - Direct them to be BRIEF: real conversation is quick short lines, not speeches. An actor who needs more than one short sentence is overacting.
-- Do not write any dialogue and do not tell the actors specific lines to say.
+- Do not write any dialogue or inner-monologue lines, and do not tell the actors specific lines to say or think.
 
 Respond in exactly this format, nothing else:
 === SCENE ===
@@ -987,23 +1054,45 @@ ${performerNames.map((name) => `=== PROMPT FOR ${name} ===\n<the private briefin
         `actor briefings: ${performerNames.map((name) => `${name}:${actorPrompts.get(name) ? 'ok' : 'fallback'}`).join(', ')}`,
     );
 
-    // 2. Actors perform one turn each. Each actor returns a bare subtitle — only the words
-    //    they speak, no preamble — and the speaker label is added programmatically after.
+    // 2. Actors perform one turn each: a spoken line (bare subtitle, speaker label added
+    //    programmatically after) plus one line of private inner monologue that no other
+    //    actor ever sees — it feeds only the scores stage and the sim's own private memory.
     //    A chat beat seeds the transcript with the player's line so the reply answers it.
     const sceneLines: DialogueLine[] = playerLine ? [playerLine] : [];
     const performedLines: DialogueLine[] = [];
+    const monologueBySim = new Map<string, string>();
     for (let i = 0; i < performers.length; i += 1) {
       const sim = performers[i];
-      const actorSystemPrompt = `${actorPrompts.get(sim.name)}
+      const actorSystemPrompt = monologueOnly
+        ? `${actorPrompts.get(sim.name)}
 
-How to respond:
+How to respond — exactly one line, in this format:
+THINK: <one or two short sentences of ${sim.name}'s private inner monologue in this moment>
+
+Rules for THINK:
 - Stay in character as ${sim.name} at all times.
-- Reply with ONLY the words ${sim.name} says out loud — a bare subtitle. No name tag, no quotation marks, no stage directions, no delivery notes, no commentary.
+- First person, present tense — what is actually running through ${sim.name}'s head right now, in the middle of what they are doing.
+- Private: nobody hears it. No spoken dialogue, no name tag, no quotation marks.
+- Grounded in this moment; never third person, never narration of physical actions.`
+        : `${actorPrompts.get(sim.name)}
+
+How to respond — exactly two lines, in this format:
+SAY: <the words ${sim.name} says out loud>
+THINK: <one short line of ${sim.name}'s private inner monologue in this moment>
+
+Rules for SAY:
+- Stay in character as ${sim.name} at all times.
+- Only the words spoken out loud — a bare subtitle. No name tag, no quotation marks, no stage directions, no delivery notes, no commentary.
 - ONE short line, ten words or so, the way people actually talk. Never a speech.
 - Talk like a real person in this conversation: your line must be a direct, natural reply to what was just said, in ${sim.name}'s voice and in the tone your director set. Not every line needs to be clever — a plain reply that keeps the conversation flowing beats a quip that does not connect.
 - Move the conversation forward — answer questions that were asked, follow up on what the other person said, never repeat or rephrase anything already said.
 - If the conversation is already underway (anything under "Previously in this scene"), jump straight in mid-flow — no greetings and no re-introductions.
-- Do not mention physical actions, props, furniture, or locations.`;
+- Do not mention physical actions, props, furniture, or locations.
+
+Rules for THINK:
+- First person, present tense — what is actually running through ${sim.name}'s head right now.
+- Private: nobody hears it, and it may cut against what ${sim.name} says out loud.
+- One short line. No physical actions, and never addressed to anyone.`;
 
       const conversationSoFar = toTranscript(sceneLines);
       const actorUserText = `${previouslyBlock}${sceneAction}${
@@ -1013,7 +1102,7 @@ How to respond:
         `Actor: ${sim.name}`,
         actorSystemPrompt,
         actorUserText,
-        60,
+        120,
         // actorModels is parallel to the full sim list, not the performers subset
         options.actorModels?.[event.sentient_sims.indexOf(sim)],
         AIActionType.DIRECTED_SCENE_ACTOR,
@@ -1021,13 +1110,31 @@ How to respond:
       exchanges.push(performance.exchange);
       this.logExchange(performance.exchange);
 
-      const subtitle = extractSubtitle(performance.text, simNames);
-      log.info(`[Pipeline] Actor ${sim.name} subtitle: ${subtitle || '(none)'}`);
-      if (subtitle.length > 1) {
-        const line = { speaker: sim.name, text: subtitle };
+      const parsed = parseActorPerformance(performance.text, simNames);
+      // In a solo beat everything the actor produced is thought — an untagged reply
+      // (parsed as say) is still the monologue
+      const say = monologueOnly ? '' : parsed.say;
+      const think = parsed.think || (monologueOnly ? parsed.say : '');
+      log.info(`[Pipeline] Actor ${sim.name} — say: ${say || '(none)'} | think: ${think || '(none)'}`);
+      if (say.length > 1) {
+        const line = { speaker: sim.name, text: say };
         sceneLines.push(line);
         performedLines.push(line);
       }
+      if (think.length > 1) {
+        monologueBySim.set(sim.name, think);
+      }
+    }
+
+    if (monologueOnly) {
+      return this.finishMonologueScene(event, options, playbackOptions, {
+        performer: performers[0],
+        think: monologueBySim.get(performers[0].name),
+        sharedScene,
+        sceneAction,
+        directorDirection: briefing.text,
+        exchanges,
+      });
     }
 
     if (performedLines.length === 0) {
@@ -1087,6 +1194,29 @@ ${
     log.info(`[Pipeline] Final cut: ${useReviewerCut ? "reviewer's cut" : "actors' original lines"}`);
     const dialogueText = toTranscript(finalLines);
 
+    // 4. Scores: per-character memory and action ratings for the scene that just played.
+    //    Memory scores become each sim's importance on their private monologue row; action
+    //    scores are the Full Autonomy trigger — over threshold, the sim graduates to an
+    //    Action Scene (wired in the next phase).
+    const sceneScores = await this.runSceneScores(
+      sharedScene || sceneAction,
+      dialogueText,
+      performers.map((sim) => ({ name: sim.name, think: monologueBySim.get(sim.name) })),
+      options.directorModel,
+    );
+    if (sceneScores.exchange) {
+      exchanges.push(sceneScores.exchange);
+    }
+    if (sceneScores.scores.size > 0) {
+      const summary = [...sceneScores.scores.entries()]
+        .map(
+          ([name, score]) =>
+            `${name}: memory ${score.memory}, action ${score.action}${score.action_reason ? ` (${score.action_reason})` : ''}`,
+        )
+        .join('; ');
+      log.info(`[Pipeline] Scene scores — ${summary}`);
+    }
+
     // The scene's driving action is shown above the dialogue in the in-game memories window,
     // but it is never spoken: TTS streams finalLines, which stay pure dialogue, and the paced
     // subtitle block is suppressed. Continuations reuse the synthetic "scene continues"
@@ -1134,6 +1264,10 @@ ${
     // suppressed (paced flag on memory_created) and the renderer streams each line to
     // the mod as it starts playing, with the preaction heading each line's section.
     const play = once(() => {
+      // Inner monologue becomes each sim's own PRIVATE memory the moment the scene
+      // actually airs — a canceled prefetch leaves no trace. The shared transcript row
+      // still arrives via the mod's POST /memories when the interaction completes.
+      this.storeMonologues(event, performers, monologueBySim, sceneScores.scores);
       markScenePaced(finalText);
       // The paced memory block is suppressed in-game, so the player's line — which lives on
       // the memory as `action`, not in the streamed reply — would never reach the in-game
@@ -1162,6 +1296,182 @@ ${
       exchanges,
       memory: newMemory,
     };
+  }
+
+  // Completion path for a monologue-only (solo) directed scene: no dialogue, no reviewer.
+  // The thought IS the scene — scored by the reflection stage, displayed by the mod's
+  // normal memory path when the interaction completes, never spoken by TTS. The returned
+  // memory row is typed 'monologue' so it stays out of shared scene history, and the
+  // memories POST stamps single-participant monologue rows with their owner.
+  private async finishMonologueScene(
+    event: SSEvent,
+    options: DirectedGenerationOptions,
+    playbackOptions: PlaybackOptions,
+    scene: {
+      performer: SentientSim;
+      think?: string;
+      sharedScene: string;
+      sceneAction: string;
+      directorDirection: string;
+      exchanges: LLMExchange[];
+    },
+  ): Promise<InteractionEventResult> {
+    const { performer, think, sharedScene, sceneAction, directorDirection, exchanges } = scene;
+    if (!think || think.length <= 1) {
+      log.error(`No inner monologue produced for ${performer.name}`);
+      return { status: InteractionEventStatus.NOOP, exchanges };
+    }
+
+    const sceneScores = await this.runSceneScores(
+      sharedScene || sceneAction,
+      '',
+      [{ name: performer.name, think }],
+      options.directorModel,
+    );
+    if (sceneScores.exchange) {
+      exchanges.push(sceneScores.exchange);
+    }
+    const score = sceneScores.scores.get(performer.name);
+    if (score) {
+      log.info(
+        `[Pipeline] Scene scores — ${performer.name}: memory ${score.memory}, action ${score.action}${
+          score.action_reason ? ` (${score.action_reason})` : ''
+        }`,
+      );
+    }
+
+    const finalText = `${performer.name} (thinking): ${think}`;
+    const newMemory: MemoryEntity = {
+      content: finalText,
+      location_id: event.environment.location_id,
+      event_type: 'monologue',
+      // The beat that drove the thought heads the row in the memories window
+      action: sceneAction,
+    };
+    const interactionName = (event as Partial<InteractionEvent>).interaction_name;
+    if (interactionName) {
+      newMemory.interaction_name = interactionName;
+    }
+
+    this.recordTrace([finalText, formatSceneForChatWindow(finalText)], {
+      pipeline: 'directed_scene',
+      exchanges,
+      directorDirection,
+    });
+
+    if (options.saveMemory) {
+      const participants = this.ctx.participantRepository.getParticipants([
+        { id: performer.sim_id, fullName: performer.name },
+      ]);
+      this.ctx.memoryRepository.createMemory(
+        {
+          memory: newMemory,
+          participants,
+          index: { owner: performer.sim_id, importance: score?.memory },
+        },
+        { notifyMod: false },
+      );
+    }
+
+    // Thoughts are silent: no TTS, no paced subtitle stream
+    const play = once(() => {});
+    if (playbackOptions.deferPlayback) {
+      playbackOptions.onPlaybackReady?.(play);
+    } else {
+      play();
+    }
+
+    return {
+      status: InteractionEventStatus.GENERATED,
+      text: formatSceneForChatWindow(finalText),
+      exchanges,
+      memory: newMemory,
+    };
+  }
+
+  // The D/M/R "Reflection" stage: one cheap call that scores the scene per character —
+  // memory (1-10 importance, the same scale the annotator uses) and action (1-10 desire
+  // to change course, judged mostly from the private thoughts). Best-effort: a failed or
+  // unparseable call returns empty scores and the pipeline continues without them.
+  private async runSceneScores(
+    sceneBriefing: string,
+    dialogueText: string,
+    performances: { name: string; think?: string }[],
+    model?: string,
+  ): Promise<{ scores: Map<string, SceneScore>; exchange?: LLMExchange }> {
+    const names = performances.map((performance) => performance.name);
+    if (names.length === 0) {
+      return { scores: new Map() };
+    }
+    const systemPrompt = `You are scoring the scene that just played, for each of these characters: ${names.join(', ')}.
+Give every character two integer ratings from 1 to 10:
+- "memory": how memorable this scene is for that character. 1 means mundane and forgettable (routine chores, small talk), 10 means life-changing (a breakup, a birth, a betrayal).
+- "action": how strongly this scene leaves that character wanting to CHANGE what they are doing right now — do something more, something less, or something different from their current course. 1-3 means content to carry on as they are, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now.
+- "action_reason": one short line, in that character's voice, naming what they want to do or change (or why they are content).
+Judge each character from their own point of view; their private thoughts are the strongest signal.
+Respond with ONLY a JSON object in exactly this shape, covering every character, nothing else:
+{${names.map((name) => `"${name}": {"memory": <1-10>, "action": <1-10>, "action_reason": "..."}`).join(', ')}}`;
+
+    const thoughts = performances
+      .filter((performance) => performance.think)
+      .map((performance) => `${performance.name} (thinking, privately): ${performance.think}`)
+      .join('\n');
+    const userText = `The scene:\n${sceneBriefing}${dialogueText ? `\n\nThe dialogue:\n${dialogueText}` : ''}${
+      thoughts ? `\n\nPrivate thoughts:\n${thoughts}` : ''
+    }`;
+    try {
+      const oneShot = await this.runOneShot(
+        'Scene Scores',
+        systemPrompt,
+        userText,
+        300,
+        model,
+        AIActionType.DIRECTED_SCENE_SCORES,
+      );
+      this.logExchange(oneShot.exchange);
+      const scores = parseSceneScores(oneShot.text, names);
+      if (scores.size === 0) {
+        log.warn(`[Pipeline] Scene scores unparseable: ${oneShot.text.slice(0, 200)}`);
+      }
+      return { scores, exchange: oneShot.exchange };
+    } catch (error) {
+      log.warn('[Pipeline] Scene scores stage failed; continuing without scores', error);
+      return { scores: new Map() };
+    }
+  }
+
+  // Each performer's inner monologue is stored as their own private memory row: owned in
+  // memory_index (no other sim's retrieval can surface it), importance from the scene's
+  // memory score when the scores stage delivered one. Never notifies the mod — thoughts
+  // are not subtitles. Must never break playback.
+  private storeMonologues(
+    event: SSEvent,
+    performers: SentientSim[],
+    monologueBySim: Map<string, string>,
+    scores: Map<string, SceneScore>,
+  ) {
+    performers.forEach((sim) => {
+      const think = monologueBySim.get(sim.name);
+      if (!think) {
+        return;
+      }
+      try {
+        this.ctx.memoryRepository.createMemory(
+          {
+            memory: {
+              content: think,
+              location_id: event.environment.location_id,
+              event_type: 'monologue',
+            },
+            participants: [{ id: sim.sim_id }],
+            index: { owner: sim.sim_id, importance: scores.get(sim.name)?.memory },
+          },
+          { notifyMod: false },
+        );
+      } catch (error) {
+        log.warn(`[Pipeline] Failed to store monologue for ${sim.name}`, error);
+      }
+    });
   }
 
   async runClassification(

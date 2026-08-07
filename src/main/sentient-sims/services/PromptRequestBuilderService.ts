@@ -258,6 +258,9 @@ export class PromptRequestBuilderService {
         queryText,
         k: relevantMemoryCount,
         excludeMemoryIds,
+        // The director stages the scene for everyone present, so any present sim's
+        // private monologue rows may inform it — actors still only see their briefings
+        ownerScope: event.sentient_sims.map((sentientSim) => sentientSim.sim_id),
       });
       return retrieved.map((result) => result.memory);
     } catch (error) {

@@ -94,6 +94,17 @@ export class MemoriesController {
     try {
       const createMemoryRequest = req.body as CreateMemoryRequest;
 
+      // A solo scene's inner monologue rides the mod's normal memory round-trip (the mod
+      // can't send index metadata), so ownership is stamped here: a monologue with exactly
+      // one participant is that sim's private thought — no other sim may retrieve it.
+      if (
+        !createMemoryRequest.index &&
+        createMemoryRequest.memory.event_type === 'monologue' &&
+        createMemoryRequest.participants.length === 1
+      ) {
+        createMemoryRequest.index = { owner: createMemoryRequest.participants[0].id };
+      }
+
       const memory = this.ctx.memoryRepository.createMemory(createMemoryRequest);
       if (!memory) {
         return res.json({ error: 'Memory rejected by hygiene gate (empty, refusal, or scaffolding)' });

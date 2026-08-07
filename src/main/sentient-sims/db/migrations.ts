@@ -142,6 +142,14 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         voice_name           TEXT
       );
     `,
+    // Private memories (a sim's inner monologue) are owned by one participant: retrieval
+    // for any other sim must never surface them. Lives in the memory_index sidecar because
+    // the mod parses memory rows into a Python class with fixed fields (see migration 011).
+    // NULL owner = shared memory, visible to everyone as before.
+    '014-add-memory-index-owner': `
+      ALTER TABLE memory_index
+      ADD COLUMN owner_participant_id INTEGER;
+    `,
   }),
 );
 

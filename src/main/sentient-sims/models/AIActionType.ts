@@ -17,6 +17,7 @@ export enum AIActionType {
   DIRECTED_SCENE_DIRECTOR = 'directed_scene_director',
   DIRECTED_SCENE_ACTOR = 'directed_scene_actor',
   DIRECTED_SCENE_REVIEWER = 'directed_scene_reviewer',
+  DIRECTED_SCENE_SCORES = 'directed_scene_scores',
   REFLECTION = 'reflection',
   // Block 9 tick deliberations — route to a cheap/fast provider config
   COGNITION = 'cognition',
@@ -36,6 +37,7 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.DIRECTED_SCENE_DIRECTOR,
   AIActionType.DIRECTED_SCENE_ACTOR,
   AIActionType.DIRECTED_SCENE_REVIEWER,
+  AIActionType.DIRECTED_SCENE_SCORES,
   AIActionType.REFLECTION,
   AIActionType.COGNITION,
 ];
@@ -71,6 +73,8 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Directed Scene: Actor';
     case AIActionType.DIRECTED_SCENE_REVIEWER:
       return 'Directed Scene: Reviewer';
+    case AIActionType.DIRECTED_SCENE_SCORES:
+      return 'Directed Scene: Scores';
     case AIActionType.REFLECTION:
       return 'Scene Reflection';
     case AIActionType.COGNITION:
@@ -108,6 +112,8 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Directed scene dialogue lines performed by each actor';
     case AIActionType.DIRECTED_SCENE_REVIEWER:
       return 'Directed scene final review and cleanup pass';
+    case AIActionType.DIRECTED_SCENE_SCORES:
+      return 'Per-character memory and action scores after each scene (cheap model recommended)';
     case AIActionType.REFLECTION:
       return 'End-of-scene reflection memories';
     case AIActionType.COGNITION:

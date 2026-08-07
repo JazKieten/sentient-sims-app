@@ -11,7 +11,6 @@ import { SSEventType } from 'main/sentient-sims/models/InteractionEvents';
 import { DbClient } from 'main/sentient-sims/clients/DbClient';
 import { DatabaseSession } from 'main/sentient-sims/models/DatabaseSession';
 import { SimAge } from 'main/sentient-sims/models/SimAge';
-import { defaultWantsPrefixes } from 'main/sentient-sims/constants';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { SettingsClient } from 'main/sentient-sims/clients/SettingsClient';
 import { mockApiContext } from './util';
@@ -113,9 +112,8 @@ describe('Api', () => {
       },
     });
 
-    const containsWantPrefix = defaultWantsPrefixes.some((want) => result.text?.includes(want));
-
-    expect(containsWantPrefix).toBeTruthy();
+    // Wants play as a monologue-only directed beat now: the sim's thought, no narrator
+    expect(result.text).toContain('(thinking):');
   }, 30000);
 
   it('test settings api', async () => {

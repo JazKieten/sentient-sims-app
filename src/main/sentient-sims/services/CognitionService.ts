@@ -816,6 +816,8 @@ export class CognitionService {
             event_type: 'thought',
           },
           participants: [{ id: entry.sim_id }],
+          // A thought is private: no other sim's retrieval may ever surface it
+          index: { owner: entry.sim_id },
         },
         { notifyMod: false },
       );
@@ -839,6 +841,8 @@ export class CognitionService {
         queryText,
         k: RELEVANT_MEMORY_COUNT,
         excludeMemoryIds: [],
+        // Deliberation is this sim's own head: only their private rows may surface
+        ownerScope: [entry.sim_id],
       });
       if (retrieved.length === 0) {
         return undefined;

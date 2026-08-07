@@ -10,6 +10,9 @@ const IMPORTANCE_BY_EVENT_TYPE: Record<string, number> = {
   reflection: 8,
   outcome: 5,
   thought: 2,
+  // A scene-attached inner monologue normally arrives pre-scored by the scene's
+  // reflection stage; this prior only catches rows whose scoring call failed
+  monologue: 3,
 };
 const DEFAULT_IMPORTANCE = 3;
 
@@ -58,9 +61,17 @@ export class MemoryAnnotationService {
 
     const session = this.ctx.db.sessionKey;
     const text = memory.observation || memory.content || '';
-    const importance = text
-      ? await this.rateImportance(text, memory.event_type, memory.id)
-      : heuristicImportance(memory.event_type);
+    // A rating the pipeline already computed (scene reflection scores, stamped at
+    // creation) wins over a fresh rating call — one score per memory, no double-spend
+    const existing = this.ctx.memoryIndexRepository.getIndex(memory.id);
+    let importance: number;
+    if (typeof existing?.importance === 'number') {
+      importance = existing.importance;
+    } else if (text) {
+      importance = await this.rateImportance(text, memory.event_type, memory.id);
+    } else {
+      importance = heuristicImportance(memory.event_type);
+    }
 
     let embedding: Buffer | undefined;
     let embeddingModel: string | undefined;

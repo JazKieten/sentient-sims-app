@@ -25,6 +25,11 @@ export type RetrieveRequest = {
   queryText: string;
   k: number;
   excludeMemoryIds?: number[];
+  // Participant ids whose PRIVATE memories (inner monologue rows) may surface — the sim
+  // retrieving for itself, or every sim present in the scene being staged (the director
+  // is omniscient; actors only ever see what it puts in their briefings). Omitted =
+  // shared memories only.
+  ownerScope?: string[];
 };
 
 // Timestamps are SQLite CURRENT_TIMESTAMP strings (UTC, second precision, 'YYYY-MM-DD HH:MM:SS').
@@ -77,7 +82,11 @@ export class MemoryRetrievalService {
       return [];
     }
 
-    const candidates = this.ctx.memoryIndexRepository.getRetrievalCandidates(request.participantIds, CANDIDATE_LIMIT);
+    const candidates = this.ctx.memoryIndexRepository.getRetrievalCandidates(
+      request.participantIds,
+      CANDIDATE_LIMIT,
+      request.ownerScope ?? [],
+    );
     const excluded = new Set(request.excludeMemoryIds ?? []);
     const scoreable = candidates.filter((candidate) => candidate.id !== undefined && !excluded.has(candidate.id));
     if (scoreable.length === 0) {

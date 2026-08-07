@@ -19,8 +19,10 @@ export enum AIActionType {
   DIRECTED_SCENE_REVIEWER = 'directed_scene_reviewer',
   DIRECTED_SCENE_SCORES = 'directed_scene_scores',
   REFLECTION = 'reflection',
-  // Block 9 tick deliberations — route to a cheap/fast provider config
+  // Block 9 tick monologue + scores — route to a cheap/fast provider config
   COGNITION = 'cognition',
+  // Full Autonomy Action Scenes (options/choice/review) — fired only over threshold
+  ACTION_SCENE = 'action_scene',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -40,6 +42,7 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.DIRECTED_SCENE_SCORES,
   AIActionType.REFLECTION,
   AIActionType.COGNITION,
+  AIActionType.ACTION_SCENE,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -79,6 +82,8 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Scene Reflection';
     case AIActionType.COGNITION:
       return 'Cognition Tick';
+    case AIActionType.ACTION_SCENE:
+      return 'Action Scene';
     default:
       return actionType;
   }
@@ -117,7 +122,9 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
     case AIActionType.REFLECTION:
       return 'End-of-scene reflection memories';
     case AIActionType.COGNITION:
-      return 'Autonomous per-sim tick deliberations (cheap model recommended)';
+      return 'Autonomous per-sim tick monologue and scoring (cheap model recommended)';
+    case AIActionType.ACTION_SCENE:
+      return 'Choose-your-own-adventure action beats when a sim wants a change of course';
     default:
       return '';
   }

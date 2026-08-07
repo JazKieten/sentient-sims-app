@@ -62,20 +62,123 @@ function describeTarget(simId: string, target: SimTargetInfo): string {
   return `${target.name ?? 'someone'} (${parts.join(', ')})`;
 }
 
-export const COGNITION_SYSTEM_PROMPT = `You are the inner voice of one Sim in The Sims 4, deciding what they do next.
-Reply with ONLY a JSON object, no prose, matching:
-{"kind":"action|speak|continue|wait","action":"<action key>","target_sim_id":"<id>","target_object_id":"<id>","speak":{"target_sim_id":"<id>","topic":"one line"},"thought":"one-line inner monologue","motivation":"why, in-world","urgency":"low|normal|emergency"}
+// ---------------------------------------------------------------------------
+// Full Autonomy prompts. The game engine is the fast brain: sims keep doing what
+// they are doing. The tick pipeline is Monologue -> Scores; only an action score
+// over the threshold stages an Action Scene (a choose-your-own-adventure beat with
+// options bound to the OFFERED vocabulary). The old one-shot "decide what to do"
+// deliberation prompt is retired.
+// ---------------------------------------------------------------------------
 
+export const TICK_MONOLOGUE_SYSTEM_PROMPT = `You are the private inner voice of one Sim in The Sims 4.
+Given their situation, reply with ONLY one or two short sentences of the Sim's inner monologue right now — first person, present tense, in their own voice, grounded in what they are doing, feeling, and wanting.
+Nobody hears this. No narration, no third person, no JSON, no quotation marks.`;
+
+export const TICK_SCORES_SYSTEM_PROMPT = `You are scoring one Sim's present moment, judged from their own point of view. Their inner monologue is the strongest signal.
+Reply with ONLY a JSON object: {"memory": <1-10>, "action": <1-10>, "action_reason": "one short line"}
+- "memory": how memorable this moment is for them. 1 means routine and forgettable, 10 means life-changing.
+- "action": how strongly they want to CHANGE what they are doing right now — something more, something less, or something different. 1-3 means content to carry on, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now. A content Sim mid-activity scores low; boredom, loneliness, low needs, and restless thoughts push it up.
+- "action_reason": what they would want to do or change, in their voice.`;
+
+export const ACTION_OPTIONS_SYSTEM_PROMPT = `You are directing a choose-your-own-adventure beat for one Sim in The Sims 4 who wants a change of course.
+Given their situation, their inner monologue, and what is pulling at them, reply with ONLY a JSON object:
+{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "label": "the choice as the Sim would think it, one short line"}]}
 Rules:
-- "continue" is the default: a Sim who is content and mid-activity should be left alone.
-- Act when the Sim is idle, stuck, has an urgent need, or a want/goal pulls them.
-- Fix the WORST need first (the most negative number), whatever it is — fun and social are real needs. When two are similarly low, prefer bladder, then hunger, then hygiene, then sleep. A need that is already fine (positive) never needs fixing.
-- Lonely with no one around to talk to? Choose go_out (when offered) to go where people are; go_home when it is time to head back. If a low need truly has no fix on offer, skip it and handle the next-worst thing — do not fill the time with snacks or TV. Eating only fixes hunger; tiredness needs sleep.
-- Chores matter: when nothing is urgent, clean up dirty things and get broken things repaired BEFORE entertainment. Living in filth is not normal.
-- Only choose actions and targets from the OFFERED lists. Use sim ids, never names.
-- To talk to someone, pick a social action from the OFFERED list (or "speak" with a topic) plus a target_sim_id. Match the social to the relationship: get_to_know new people, save flirt/kiss for a real romantic spark, vary the socials in a long conversation instead of repeating chat.
-- Late night is for sleep, not skill practice. Respect work schedules.
-- "thought" is always present: one line of what the Sim is thinking right now.`;
+- 3 to 5 options, each a genuinely different answer to the pull — more of something, less of something, or something new. No filler.
+- Every "action" MUST be an action key from the OFFERED lists in the situation; social actions need a target_sim_id from the OFFERED people. Never invent actions, targets, or ids.
+- At least one option should directly answer what is pulling at them.`;
+
+export const ACTION_CHOICE_SYSTEM_PROMPT = `You are one Sim in The Sims 4 choosing what to do next, like picking a path in a choose-your-own-adventure book.
+Given the moment and your numbered options, reply with ONLY a JSON object: {"choice": <option number>, "motivation": "why, in your own voice, one short line"}
+Choose as the character: mood, needs, wants, and your inner monologue decide — not what would look sensible to someone else.`;
+
+export const ACTION_REVIEW_SYSTEM_PROMPT = `You review a Sim's chosen next action for obvious mistakes before it executes.
+Given the situation, the numbered options, and the Sim's choice, reply with ONLY a JSON object: {"choice": <option number to execute>}
+DEFAULT TO THE SIM'S OWN CHOICE. Override to a different option only on a clear mistake: the choice ignores a DESPERATE need, repeats something that just failed, or is wildly wrong for the relationship or the hour. Reply {"choice": 0} only when every option is clearly wrong and the Sim should simply carry on as they are.`;
+
+function clampScore(value: unknown): number | undefined {
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (typeof num !== 'number' || Number.isNaN(num)) {
+    return undefined;
+  }
+  return Math.min(10, Math.max(1, Math.round(num)));
+}
+
+function firstJsonBlock(raw: string): unknown {
+  const match = /\{[\s\S]*\}/.exec(raw);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(match[0]) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+export type TickScores = { memory: number; action: number; reason?: string };
+
+export function parseTickScores(raw: string): TickScores | undefined {
+  const parsed = firstJsonBlock(raw);
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const verdict = parsed as { memory?: unknown; action?: unknown; action_reason?: unknown };
+  const memory = clampScore(verdict.memory);
+  const action = clampScore(verdict.action);
+  if (memory === undefined && action === undefined) {
+    return undefined;
+  }
+  return {
+    memory: memory ?? 3,
+    action: action ?? 1,
+    reason: typeof verdict.action_reason === 'string' ? verdict.action_reason : undefined,
+  };
+}
+
+export type ActionOption = {
+  action: string;
+  target_sim_id?: string;
+  target_object_id?: string;
+  label?: string;
+};
+
+export function parseActionOptions(raw: string): { scene?: string; options: ActionOption[] } | undefined {
+  const parsed = firstJsonBlock(raw);
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const body = parsed as { scene?: unknown; options?: unknown };
+  if (!Array.isArray(body.options)) {
+    return undefined;
+  }
+  const options = body.options
+    .filter((option): option is Record<string, unknown> => Boolean(option) && typeof option === 'object')
+    .map((option) => ({
+      action: typeof option.action === 'string' ? option.action : '',
+      target_sim_id: typeof option.target_sim_id === 'string' ? option.target_sim_id : undefined,
+      target_object_id: typeof option.target_object_id === 'string' ? option.target_object_id : undefined,
+      label: typeof option.label === 'string' ? option.label : undefined,
+    }))
+    .filter((option) => option.action.length > 0);
+  return { scene: typeof body.scene === 'string' ? body.scene : undefined, options };
+}
+
+export function parseActionChoice(raw: string): { choice: number; motivation?: string } | undefined {
+  const parsed = firstJsonBlock(raw);
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const body = parsed as { choice?: unknown; motivation?: unknown };
+  const choice = typeof body.choice === 'string' ? Number(body.choice) : body.choice;
+  if (typeof choice !== 'number' || Number.isNaN(choice) || choice < 0) {
+    return undefined;
+  }
+  return {
+    choice: Math.round(choice),
+    motivation: typeof body.motivation === 'string' ? body.motivation : undefined,
+  };
+}
 
 export function buildCognitionUserPrompt(
   entry: SimStateEntry,
@@ -204,16 +307,5 @@ export function buildCognitionUserPrompt(
     // tick and burns the deliberation budget on rejections
     sections.push(`NOT possible right now, do not choose: ${unavailableActions.map(pretty).join(', ')}.`);
   }
-  sections.push('What do you do? JSON only.');
-
   return sections.join('\n\n');
 }
-
-export const COGNITION_REVIEW_SYSTEM_PROMPT = `You review a Sim's chosen next action for obvious mistakes before it executes.
-Given the situation and the chosen intent JSON, reply with ONLY the corrected intent JSON.
-Keep the choice unless it clearly violates one of these:
-- LOW needs (negative numbers) go before fun or socializing; a need that is already fine (positive) never justifies changing the plan
-- don't interrupt a content, busy Sim ("continue" instead)
-- wash up before bed only if hygiene is actually low
-- targets must come from the offered lists
-DEFAULT TO RETURNING THE CHOICE UNCHANGED. Adjust only on a clear violation.`;

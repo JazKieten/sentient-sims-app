@@ -55,7 +55,9 @@ export enum SettingsEnum {
   COGNITION_TICK_INTERVAL_SECONDS = 'cognitionTickIntervalSeconds',
   COGNITION_MAX_CONCURRENT = 'cognitionMaxConcurrent',
   COGNITION_PER_SIM_HOURLY_BUDGET = 'cognitionPerSimHourlyBudget',
-  COGNITION_PIPELINE = 'cognitionPipeline', // off | review (directed+review reserved for scenes)
+  COGNITION_PIPELINE = 'cognitionPipeline', // legacy review dial; unused since the Action Scene pipeline
+  // Full Autonomy: a tick/scene action score at or above this stages an Action Scene
+  COGNITION_ACTION_SCORE_THRESHOLD = 'cognitionActionScoreThreshold',
 }
 
 export enum DeprecatedSettingsEnum {

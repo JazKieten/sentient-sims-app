@@ -250,6 +250,10 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: 'review',
       },
+      [SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD.toString()]: {
+        type: 'number',
+        default: 7,
+      },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
       [SettingsEnum.AI_PROVIDER_CONFIGS.toString()]: {
@@ -844,6 +848,10 @@ export class SettingsService {
 
   get cognitionPipeline(): 'off' | 'review' {
     return (this.get(SettingsEnum.COGNITION_PIPELINE) as string) === 'off' ? 'off' : 'review';
+  }
+
+  get cognitionActionScoreThreshold(): number {
+    return Math.min(10, Math.max(1, this.get(SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD) as number));
   }
 
   get prefetchMaxQueueDepth(): number {

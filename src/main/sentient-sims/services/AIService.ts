@@ -1216,6 +1216,7 @@ ${
         .join('; ');
       log.info(`[Pipeline] Scene scores — ${summary}`);
     }
+    this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
 
     // The scene's driving action is shown above the dialogue in the in-game memories window,
     // but it is never spoken: TTS streams finalLines, which stay pure dialogue, and the paced
@@ -1339,6 +1340,7 @@ ${
         }`,
       );
     }
+    this.armCognitionDesires(event, sceneScores.scores, new Map([[performer.name, think]]));
 
     const finalText = `${performer.name} (thinking): ${think}`;
     const newMemory: MemoryEntity = {
@@ -1438,6 +1440,28 @@ Respond with ONLY a JSON object in exactly this shape, covering every character,
       log.warn('[Pipeline] Scene scores stage failed; continuing without scores', error);
       return { scores: new Map() };
     }
+  }
+
+  // A scene's action scores feed Full Autonomy: every participant whose score crossed
+  // the threshold gets an armed desire in CognitionService — the next eligible tick
+  // stages their Action Scene from a fresh snapshot. NPCs included: whoever was in the
+  // scene can act on it. Best-effort; a missing cognition service must never break a scene.
+  private armCognitionDesires(event: SSEvent, scores: Map<string, SceneScore>, monologueBySim: Map<string, string>) {
+    scores.forEach((score, name) => {
+      const sim = event.sentient_sims.find((candidate) => candidate.name === name);
+      if (!sim) {
+        return;
+      }
+      try {
+        this.ctx.cognitionService.armDesireFromScene(sim.sim_id, {
+          score: score.action,
+          reason: score.action_reason,
+          thought: monologueBySim.get(name),
+        });
+      } catch (error) {
+        log.debug(`[Pipeline] could not arm cognition desire for ${name}: ${String(error)}`);
+      }
+    });
   }
 
   // Each performer's inner monologue is stored as their own private memory row: owned in

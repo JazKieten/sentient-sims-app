@@ -1,20 +1,20 @@
 import log from 'electron-log';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
-import {
-  CognitionIntent,
-  normalizeActionKey,
-  offeredActions,
-  parseIntentJson,
-  validateIntent,
-} from '../models/CognitionIntent';
+import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
 import { AIActionType } from '../models/AIActionType';
 import { LLMExchange } from '../models/InteractionEventResult';
 import {
-  COGNITION_REVIEW_SYSTEM_PROMPT,
-  COGNITION_SYSTEM_PROMPT,
+  ACTION_CHOICE_SYSTEM_PROMPT,
+  ACTION_OPTIONS_SYSTEM_PROMPT,
+  ACTION_REVIEW_SYSTEM_PROMPT,
+  TICK_MONOLOGUE_SYSTEM_PROMPT,
+  TICK_SCORES_SYSTEM_PROMPT,
   buildCognitionUserPrompt,
+  parseActionChoice,
+  parseActionOptions,
+  parseTickScores,
 } from '../util/formatCognitionPrompt';
 
 // Per-sim lifecycle. PENDING_OUTCOME is the never-re-push rule made structural: a sim
@@ -37,6 +37,9 @@ type SimRuntime = {
   // The last action this service dispatched for the sim — guards against re-dispatching
   // it while the sim is still busy executing it (see the redispatch guard in deliberate)
   lastDispatch?: { action: string; at: number };
+  // A directed scene's Reflection scored this sim over threshold: the next eligible tick
+  // skips monologue/scores and stages the Action Scene directly
+  armedDesire?: { score: number; reason?: string; thought?: string; at: number };
 };
 
 // Base allowance for an in-flight intent before the synthetic close; routing distance
@@ -113,6 +116,11 @@ const CRITICAL_NEED_FIXES: Record<string, string[]> = {
 };
 
 const RELEVANT_MEMORY_COUNT = 4;
+
+// How long a scene-armed action desire stays live waiting for its sim to become
+// eligible (the conversation to end, the cooldown to pass). Past this, the moment
+// has passed — a desire from an hour-old scene should not fire out of nowhere.
+const ARMED_DESIRE_TTL_MS = 10 * 60_000;
 
 // A hung provider request (no response, no error) left a runtime in DELIBERATING
 // forever and — with maxConcurrent 1 — deadlocked every future tick (observed live:
@@ -338,15 +346,20 @@ export class CognitionService {
       return false;
     }
 
-    // Deliberation triggers: idle, urgent need, or just went idle. A content, busy sim
-    // is left alone — continue-bias is structural, not a prompt suggestion. Idle/stand
-    // animations count as idle: Emotion_Idle is the game filling dead time.
+    // Deliberation triggers: idle, urgent need, just went idle, or a live scene-armed
+    // desire. A content, busy sim is left alone — continue-bias is structural, not a
+    // prompt suggestion. Idle/stand animations count as idle: Emotion_Idle is the game
+    // filling dead time.
     const isIdle =
       (!running || isIdleAnimation(running)) &&
       (entry.activity?.queue ?? []).every((queued) => isIdleAnimation(queued));
     const hasLowMotive = this.lowMotives(entry).length > 0;
     const wentIdle = (report.went_idle ?? []).includes(entry.sim_id);
-    return isIdle || hasLowMotive || wentIdle;
+    const armed = runtime.armedDesire !== undefined && now - runtime.armedDesire.at < ARMED_DESIRE_TTL_MS;
+    if (runtime.armedDesire && !armed) {
+      runtime.armedDesire = undefined;
+    }
+    return isIdle || hasLowMotive || wentIdle || armed;
   }
 
   private maybeFixCriticalNeed(entry: SimStateEntry, now: number) {
@@ -568,62 +581,105 @@ export class CognitionService {
         : { ...report, lot: { ...report.lot, action_keys: lotActionKeys.length > 0 ? lotActionKeys : undefined } };
 
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
-    const userPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
+    const situationPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
 
     const simLabel = entry.sim_name ?? simId;
-    const oneShot = await withRetry(
-      () =>
-        this.ctx.generationQueue.runCognition(() =>
-          this.ctx.ai.runOneShot(
-            `Cognition: ${simLabel}`,
-            COGNITION_SYSTEM_PROMPT,
-            userPrompt,
-            400,
-            undefined,
-            AIActionType.COGNITION,
-          ),
-        ),
-      'cognition deliberation',
-    );
+    const threshold = this.ctx.settings.cognitionActionScoreThreshold;
     // Every stage that shaped this tick, so the thought memory can show what led to it
-    const tickExchanges: LLMExchange[] = [oneShot.exchange];
+    const tickExchanges: LLMExchange[] = [];
 
-    const candidate = parseIntentJson(oneShot.text);
-    let validated = validateIntent(candidate, entryView, lotActionKeys);
-    if (!validated.ok) {
-      this.stats.invalidIntents += 1;
-      // The rejected action joins the suppression map so the NEXT prompt names it as
-      // impossible — without this the model gets no signal and re-picks it every tick
-      // (observed live: 3 straight pay_bills rejections after the bills were paid).
-      // NEVER refreshes an existing window: the model re-picking a suppressed need fix
-      // every tick rolled the 10 minutes forward forever (observed live: use_toilet
-      // livelocked after one benign cancel while bladder kept falling)
-      if (candidate?.action) {
-        const key = normalizeActionKey(candidate.action);
-        const until = runtime.suppressedUntil.get(key);
-        if (!until || until < Date.now()) {
-          runtime.suppressedUntil.set(key, Date.now() + FAILED_ACTION_SUPPRESS_MS);
-        }
+    // A directed scene's Reflection may have already produced this sim's monologue and
+    // action score (armed via armDesireFromScene) — the tick then skips straight to the
+    // Action Scene with a fresh snapshot.
+    const armed = runtime.armedDesire;
+    runtime.armedDesire = undefined;
+
+    let thought: string | undefined;
+    let actionScore: number;
+    let actionReason: string | undefined;
+
+    if (armed && Date.now() - armed.at < ARMED_DESIRE_TTL_MS) {
+      thought = armed.thought;
+      actionScore = armed.score;
+      actionReason = armed.reason;
+      log.info(
+        `[Cognition] sim ${simId} acting on scene-armed desire ${actionScore}${actionReason ? ` (${actionReason})` : ''}`,
+      );
+    } else {
+      // The tick D/M/R beat: monologue, then scores. The director's job at tick cadence
+      // is deterministic — the situation prompt IS the briefing.
+      const monologue = await withRetry(
+        () =>
+          this.ctx.generationQueue.runCognition(() =>
+            this.ctx.ai.runOneShot(
+              `Cognition Monologue: ${simLabel}`,
+              TICK_MONOLOGUE_SYSTEM_PROMPT,
+              situationPrompt,
+              120,
+              undefined,
+              AIActionType.COGNITION,
+            ),
+          ),
+        'tick monologue',
+      );
+      tickExchanges.push(monologue.exchange);
+      thought = monologue.text.trim().slice(0, 300);
+      if (thought.length <= 1) {
+        log.warn(`[Cognition] sim ${simId} produced no monologue; continuing`);
+        this.stats.continues += 1;
+        this.toCooldown(simId);
+        return;
       }
-      log.warn(`[Cognition] sim ${simId} invalid intent (${validated.reason}); degrading to continue`);
-    }
-    const modelIntent = validated.ok ? validated.intent : undefined;
-    let intent = validated.ok ? validated.intent : validated.fallback;
 
-    // Review dial (user directive: everything through some version of the reviewed
-    // pipeline). Review-only at tick cadence — the full director stage belongs to scenes.
-    if (validated.ok && intent.kind === 'action' && this.ctx.settings.cognitionPipeline === 'review') {
-      const reviewed = await this.reviewIntent(intent, entryView, userPrompt, lotActionKeys, simLabel);
-      intent = reviewed.intent;
-      if (reviewed.exchange) {
-        tickExchanges.push(reviewed.exchange);
-      }
+      const scored = await withRetry(
+        () =>
+          this.ctx.generationQueue.runCognition(() =>
+            this.ctx.ai.runOneShot(
+              `Cognition Scores: ${simLabel}`,
+              TICK_SCORES_SYSTEM_PROMPT,
+              `${situationPrompt}\n\n${simLabel}'s inner monologue right now: ${thought}`,
+              120,
+              undefined,
+              AIActionType.COGNITION,
+            ),
+          ),
+        'tick scores',
+      );
+      tickExchanges.push(scored.exchange);
+      const tickScores = parseTickScores(scored.text);
+      actionScore = tickScores?.action ?? 1;
+      actionReason = tickScores?.reason;
+
+      // The monologue is the sim's inner life regardless of what follows — stored as
+      // their private memory, priced by the memory score
+      this.storeThought(entry, { kind: 'continue', thought }, tickExchanges, tickScores?.memory);
+      log.info(
+        `[Cognition] sim ${simId} tick — memory ${tickScores?.memory ?? '?'}, action ${actionScore}${
+          actionReason ? ` (${actionReason})` : ''
+        }`,
+      );
     }
 
-    if (intent.kind === 'continue' || intent.kind === 'wait') {
-      this.storeThought(entry, intent, tickExchanges);
+    // The fast brain keeps the wheel below threshold: no Action Scene, no dispatch
+    if (actionScore < threshold) {
       this.stats.continues += 1;
-      this.toCooldown(simId, intent.kind === 'wait' ? 2 : 1);
+      this.toCooldown(simId);
+      return;
+    }
+
+    // ACTION SCENE: the slow brain steps in — director options, the sim's choice, review
+    const intent = await this.runActionScene({
+      entryView,
+      lotActionKeys,
+      situationPrompt,
+      simLabel,
+      thought,
+      actionReason,
+      exchanges: tickExchanges,
+    });
+    if (!intent || intent.kind !== 'action' || !intent.action) {
+      this.stats.continues += 1;
+      this.toCooldown(simId);
       return;
     }
 
@@ -631,69 +687,25 @@ export class CognitionService {
     const busy =
       (runningNow !== '' && !isIdleAnimation(runningNow)) ||
       (entry.activity?.queue ?? []).some((queued) => !isIdleAnimation(queued));
-    const guardBlocks = (candidateIntent: CognitionIntent): string | undefined => {
-      if (candidateIntent.kind !== 'action' || !candidateIntent.action || !busy || !runtime.lastDispatch) {
-        return undefined;
-      }
-      if (Date.now() - runtime.lastDispatch.at >= REDISPATCH_WHILE_BUSY_MS) {
-        return undefined;
-      }
-      if (runtime.lastDispatch.action === candidateIntent.action) {
-        return 'same action';
-      }
+
+    // Redispatch guard survives Full Autonomy: a busy sim choosing the SAME action (or
+    // same need category) it was just dispatched is re-picking, not planning. The old
+    // need-urgency interrupt bar is gone on purpose — an action score over threshold IS
+    // the interrupt justification; the Scores prompt keeps content busy sims low and the
+    // review stage catches clear mistakes.
+    if (busy && runtime.lastDispatch && Date.now() - runtime.lastDispatch.at < REDISPATCH_WHILE_BUSY_MS) {
       const lastCategory = ACTION_NEED_CATEGORY[runtime.lastDispatch.action];
-      if (lastCategory !== undefined && lastCategory === ACTION_NEED_CATEGORY[candidateIntent.action]) {
-        return 'same need';
-      }
-      return undefined;
-    };
-
-    const blockReason = guardBlocks(intent);
-    if (blockReason) {
-      // Code guards outrank the reviewer: if review replaced a clean model intent with
-      // one the guard rejects (observed live: model watch_tv -> review grab_snack while
-      // cooking), restore the model's pick instead of losing the tick to continue
-      if (modelIntent && modelIntent !== intent && !guardBlocks(modelIntent)) {
-        log.info(
-          `[Cognition] sim ${simId} review pick '${intent.action}' blocked (${blockReason}); restoring model intent '${modelIntent.kind === 'action' ? modelIntent.action : modelIntent.kind}'`,
-        );
-        intent = { ...modelIntent, thought: intent.thought ?? modelIntent.thought };
-        if (intent.kind === 'continue' || intent.kind === 'wait') {
-          this.stats.continues += 1;
-          this.toCooldown(simId, intent.kind === 'wait' ? 2 : 1);
-          return;
-        }
-      } else {
+      const sameAction = runtime.lastDispatch.action === intent.action;
+      const sameNeed = lastCategory !== undefined && lastCategory === ACTION_NEED_CATEGORY[intent.action];
+      if (sameAction || sameNeed) {
         this.stats.continues += 1;
         log.info(
-          `[Cognition] sim ${simId} is busy on recently dispatched '${runtime.lastDispatch?.action}'; blocking '${intent.action}' (${blockReason})`,
+          `[Cognition] sim ${simId} is busy on recently dispatched '${runtime.lastDispatch.action}'; blocking '${intent.action}' (${sameAction ? 'same action' : 'same need'})`,
         );
         this.toCooldown(simId);
         return;
       }
     }
-
-    // Interrupt bar: a genuinely busy sim only gets interrupted for a need that is
-    // urgently low or an emergency. Everything else waits for idle — the game's queue is
-    // not a planning buffer (observed live: a shower at hygiene 31 canceled her TV time).
-    if (busy && intent.kind === 'action' && intent.action && intent.urgency !== 'emergency') {
-      const needKey = ACTION_NEED_CATEGORY[intent.action];
-      const needValue = needKey ? entry.self?.needs?.[needKey] : undefined;
-      const urgent = typeof needValue === 'number' && needValue < NEED_URGENT_INTERRUPT;
-      if (!urgent) {
-        this.stats.continues += 1;
-        log.info(
-          `[Cognition] sim ${simId} is busy; '${intent.action}' (${needKey ?? 'no need'} ${needValue ?? 'n/a'}) is not urgent enough to interrupt`,
-        );
-        this.toCooldown(simId);
-        return;
-      }
-    }
-
-    // Thoughts are stored only for intents that survived the guards: a blocked action's
-    // justification is a falsehood ("I smell bad" at hygiene 78, observed live) that
-    // would poison retrieval as if it were her real inner state
-    this.storeThought(entry, intent, tickExchanges);
 
     if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
       this.stats.suggestions += 1;
@@ -709,7 +721,7 @@ export class CognitionService {
     try {
       const requestId = this.ctx.actionDispatcher.dispatch({
         sim_id: simId,
-        action: intent.action ?? 'chat',
+        action: intent.action,
         target_sim_id: intent.target_sim_id,
         target_object_id: intent.target_object_id,
         motivation: intent.motivation ?? intent.thought,
@@ -718,7 +730,7 @@ export class CognitionService {
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;
       runtime.pendingAction = intent.action;
-      runtime.lastDispatch = { action: intent.action ?? 'chat', at: Date.now() };
+      runtime.lastDispatch = { action: intent.action, at: Date.now() };
       this.stats.dispatches += 1;
       this.armPendingTimeout(simId, runtime, entry, intent);
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId})`);
@@ -729,43 +741,158 @@ export class CognitionService {
     }
   }
 
-  private async reviewIntent(
-    intent: CognitionIntent,
-    entry: SimStateEntry,
-    situationPrompt: string,
-    lotActionKeys: string[] | undefined,
-    simLabel: string,
-  ): Promise<{ intent: CognitionIntent; exchange?: LLMExchange }> {
+  // A directed scene's Reflection stage found this sim wanting a change (action score at
+  // or over threshold). Mid-scene is not the moment to dispatch — the desire is armed and
+  // the next eligible tick stages the Action Scene from a fresh snapshot.
+  armDesireFromScene(simId: string, desire: { score: number; reason?: string; thought?: string }) {
+    if (!simId || desire.score < this.ctx.settings.cognitionActionScoreThreshold) {
+      return;
+    }
+    const runtime = this.runtime(simId);
+    runtime.armedDesire = { ...desire, at: Date.now() };
+    log.info(
+      `[Cognition] sim ${simId} armed action desire ${desire.score}${desire.reason ? ` (${desire.reason})` : ''}`,
+    );
+  }
+
+  // The Action Scene: a choose-your-own-adventure beat. The director writes 3-5 options
+  // MECHANICALLY BOUND to the offered vocabulary (validateIntent drops anything invented),
+  // the sim picks one in character, and a reviewer sanity-checks the pick ({"choice": 0}
+  // stands the scene down). Fails inert: any unparseable stage returns undefined and the
+  // sim simply continues.
+  private async runActionScene(params: {
+    entryView: SimStateEntry;
+    lotActionKeys: string[] | undefined;
+    situationPrompt: string;
+    simLabel: string;
+    thought?: string;
+    actionReason?: string;
+    exchanges: LLMExchange[];
+  }): Promise<CognitionIntent | undefined> {
+    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges } = params;
     try {
-      const review = await withRetry(
+      const optionsShot = await withRetry(
         () =>
           this.ctx.generationQueue.runCognition(() =>
             this.ctx.ai.runOneShot(
-              `Cognition Review: ${simLabel}`,
-              COGNITION_REVIEW_SYSTEM_PROMPT,
-              `${situationPrompt}\n\nChosen intent:\n${JSON.stringify(intent)}`,
-              300,
+              `Action Options: ${simLabel}`,
+              ACTION_OPTIONS_SYSTEM_PROMPT,
+              `${situationPrompt}\n\n${simLabel}'s inner monologue: ${thought ?? '(none)'}${
+                actionReason ? `\nWhat is pulling at them: ${actionReason}` : ''
+              }`,
+              400,
               undefined,
-              AIActionType.COGNITION,
+              AIActionType.ACTION_SCENE,
             ),
           ),
-        'cognition review',
+        'action options',
       );
-      const reviewed = validateIntent(parseIntentJson(review.text), entry, lotActionKeys);
-      if (reviewed.ok) {
-        if (JSON.stringify(reviewed.intent) !== JSON.stringify(intent)) {
-          log.info(`[Cognition] review adjusted intent: ${intent.action} -> ${reviewed.intent.kind === 'action' ? reviewed.intent.action : reviewed.intent.kind}`);
-        }
-        return {
-          intent: { ...reviewed.intent, thought: reviewed.intent.thought ?? intent.thought },
-          exchange: review.exchange,
-        };
+      exchanges.push(optionsShot.exchange);
+      const parsedOptions = parseActionOptions(optionsShot.text);
+      if (!parsedOptions) {
+        this.stats.invalidIntents += 1;
+        log.warn(`[Cognition] ${simLabel} action options unparseable; standing down`);
+        return undefined;
       }
-      return { intent, exchange: review.exchange };
+
+      // Bind every option to the offered vocabulary; invented actions and targets die
+      // here, silently — the menu the sim sees contains only executable choices
+      const valid: { intent: CognitionIntent; label: string; key: string }[] = [];
+      parsedOptions.options.forEach((option) => {
+        const validated = validateIntent(
+          {
+            kind: 'action',
+            action: option.action,
+            target_sim_id: option.target_sim_id,
+            target_object_id: option.target_object_id,
+          },
+          entryView,
+          lotActionKeys,
+        );
+        if (!validated.ok || validated.intent.kind !== 'action' || !validated.intent.action) {
+          return;
+        }
+        const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}`;
+        if (!valid.some((existing) => existing.key === key)) {
+          valid.push({ intent: validated.intent, label: option.label ?? validated.intent.action, key });
+        }
+      });
+      if (valid.length === 0) {
+        this.stats.invalidIntents += 1;
+        log.warn(`[Cognition] ${simLabel} action scene produced no valid options; standing down`);
+        return undefined;
+      }
+      const dropped = parsedOptions.options.length - valid.length;
+      if (dropped > 0) {
+        log.debug(`[Cognition] ${simLabel} action scene dropped ${dropped} invalid option(s)`);
+      }
+
+      const menu = valid.map((option, index) => `${index + 1}. [${option.intent.action}] ${option.label}`).join('\n');
+
+      // A single valid option needs no choice call — the sim takes it, review still runs
+      let pickedIndex = 0;
+      let motivation: string | undefined;
+      if (valid.length > 1) {
+        const choiceShot = await withRetry(
+          () =>
+            this.ctx.generationQueue.runCognition(() =>
+              this.ctx.ai.runOneShot(
+                `Action Choice: ${simLabel}`,
+                ACTION_CHOICE_SYSTEM_PROMPT,
+                `${parsedOptions.scene ?? ''}\n\nYou are ${simLabel}. Your inner monologue: ${thought ?? '(none)'}${
+                  actionReason ? `\nWhat is pulling at you: ${actionReason}` : ''
+                }\n\nOptions:\n${menu}`,
+                150,
+                undefined,
+                AIActionType.ACTION_SCENE,
+              ),
+            ),
+          'action choice',
+        );
+        exchanges.push(choiceShot.exchange);
+        const choice = parseActionChoice(choiceShot.text);
+        if (choice && choice.choice >= 1 && choice.choice <= valid.length) {
+          pickedIndex = choice.choice - 1;
+        }
+        motivation = choice?.motivation;
+      }
+
+      const reviewShot = await withRetry(
+        () =>
+          this.ctx.generationQueue.runCognition(() =>
+            this.ctx.ai.runOneShot(
+              `Action Review: ${simLabel}`,
+              ACTION_REVIEW_SYSTEM_PROMPT,
+              `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].intent.action}] ${valid[pickedIndex].label}${
+                motivation ? `\nTheir motivation: ${motivation}` : ''
+              }`,
+              60,
+              undefined,
+              AIActionType.ACTION_SCENE,
+            ),
+          ),
+        'action review',
+      );
+      exchanges.push(reviewShot.exchange);
+      const review = parseActionChoice(reviewShot.text);
+      if (review) {
+        if (review.choice === 0) {
+          log.info(`[Cognition] ${simLabel} action review stood the scene down`);
+          return undefined;
+        }
+        if (review.choice >= 1 && review.choice <= valid.length && review.choice - 1 !== pickedIndex) {
+          log.info(
+            `[Cognition] ${simLabel} action review adjusted choice: ${valid[pickedIndex].intent.action} -> ${valid[review.choice - 1].intent.action}`,
+          );
+          pickedIndex = review.choice - 1;
+        }
+      }
+
+      return { ...valid[pickedIndex].intent, motivation: motivation ?? actionReason, thought };
     } catch (error) {
-      log.warn('[Cognition] review pass failed; keeping original intent', error);
+      log.warn(`[Cognition] action scene failed for ${simLabel}; standing down`, error);
+      return undefined;
     }
-    return { intent };
   }
 
   // Prunes expired entries and returns the still-suppressed action keys for this sim
@@ -792,7 +919,7 @@ export class CognitionService {
     };
   }
 
-  private storeThought(entry: SimStateEntry, intent: CognitionIntent, exchanges: LLMExchange[] = []) {
+  private storeThought(entry: SimStateEntry, intent: CognitionIntent, exchanges: LLMExchange[] = [], importance?: number) {
     if (!intent.thought) {
       return;
     }
@@ -816,8 +943,9 @@ export class CognitionService {
             event_type: 'thought',
           },
           participants: [{ id: entry.sim_id }],
-          // A thought is private: no other sim's retrieval may ever surface it
-          index: { owner: entry.sim_id },
+          // A thought is private: no other sim's retrieval may ever surface it. The
+          // tick's own memory score prices it when the scores stage delivered one.
+          index: { owner: entry.sim_id, importance },
         },
         { notifyMod: false },
       );

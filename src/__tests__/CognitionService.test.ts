@@ -731,6 +731,37 @@ describe('CognitionService', () => {
     expect(oneShotCalls).toHaveLength(0);
   });
 
+  it('an on-lot NPC never ticks its own inner life', async () => {
+    const { cache, cognition, oneShotCalls } = buildCtx();
+    const report = idleSimReport(1);
+    report.sims![0].is_household = false;
+    report.sims![0].self!.needs = { hunger: -99, fun: -80 };
+    cache.ingest(report);
+    await settle();
+
+    // Neither deliberation nor the critical-need rule lane: NPC needs belong to the game
+    expect(cognition.getStats().deliberations).toBe(0);
+    expect(oneShotCalls).toHaveLength(0);
+  });
+
+  it('an on-lot NPC with a scene-armed desire runs its action scene', async () => {
+    const { cache, cognition, dispatched, oneShotCalls } = buildCtx();
+    cognition.armDesireFromScene('100', { score: 9, reason: 'I want a snack', thought: 'Peckish.' });
+    const report = idleSimReport(1);
+    report.sims![0].is_household = false;
+    cache.ingest(report);
+    await settle();
+
+    expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual([
+      'Action Options',
+      'Action Choice',
+      'Action Review',
+    ]);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].sim_id).toBe('100');
+    expect(dispatched[0].action).toBe('grab_snack');
+  });
+
   it('walks an idle off-lot sim into a venue instead of sending them home', async () => {
     // Travel spawns sims on the street outside the venue lot; observed live: she stood
     // outside the bar thinking wistful thoughts while three sims drank inside

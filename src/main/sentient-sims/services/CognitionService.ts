@@ -359,12 +359,19 @@ export class CognitionService {
     if (runtime.armedDesire && !armed) {
       runtime.armedDesire = undefined;
     }
+    // On-lot NPCs ride the report only so scene-armed desires can fire — they never
+    // tick their own inner life (that spend belongs to the household), and the game
+    // manages their needs itself
+    if (entry.is_household === false) {
+      return armed;
+    }
     return isIdle || hasLowMotive || wentIdle || armed;
   }
 
   private maybeFixCriticalNeed(entry: SimStateEntry, now: number) {
     const simId = entry.sim_id;
-    if (!simId || entry.self?.in_ww_scene) {
+    // NPC entries are desire-only passengers: the game runs their needs and homes
+    if (!simId || entry.self?.in_ww_scene || entry.is_household === false) {
       return;
     }
     const runtime = this.runtime(simId);
@@ -422,7 +429,7 @@ export class CognitionService {
   // first; the rule fires on the next report after it ends.
   private maybeGoHomeExhausted(entry: SimStateEntry, now: number) {
     const simId = entry.sim_id;
-    if (!simId || entry.self?.in_ww_scene || entry.activity?.in_social) {
+    if (!simId || entry.self?.in_ww_scene || entry.activity?.in_social || entry.is_household === false) {
       return;
     }
     const runtime = this.runtime(simId);
@@ -476,7 +483,7 @@ export class CognitionService {
     const simId = entry.sim_id;
     const action = isHome ? 'go_home' : 'enter_lot';
     const where = isHome ? 'off the home lot' : 'outside the venue lot';
-    if (!simId) {
+    if (!simId || entry.is_household === false) {
       return;
     }
     const runtime = this.runtime(simId);

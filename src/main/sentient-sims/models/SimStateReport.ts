@@ -93,6 +93,9 @@ export type SimActivity = {
 export type SimStateEntry = PerceptionSnapshot & {
   self?: SimSelfStatus;
   activity?: SimActivity;
+  // False for on-lot NPCs riding the report so scene-armed desires can fire; absent
+  // (older mod builds) means household
+  is_household?: boolean;
 };
 
 export type KnownSim = {

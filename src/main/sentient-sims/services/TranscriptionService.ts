@@ -2,6 +2,7 @@ import log from 'electron-log';
 import OpenAI, { toFile } from 'openai';
 import { ApiContext } from './ApiContext';
 import { AIHealthCheckResponse } from '../models/AIHealthCheckResponse';
+import { openaiDefaultEndpoint } from '../constants';
 
 export class TranscriptionError extends Error {
   constructor(message: string) {
@@ -25,10 +26,23 @@ export class TranscriptionService {
     this.ctx = ctx;
   }
 
-  private getClient(): OpenAI {
+  private getApiKey(): string {
+    const voiceKey = this.ctx.settings.voiceInputKey;
+    if (voiceKey) {
+      return voiceKey;
+    }
+    // Reuse the app's OpenAI key only against OpenAI itself — never send it to a
+    // custom endpoint the user pointed elsewhere
+    if (this.ctx.settings.voiceInputEndpoint === openaiDefaultEndpoint && this.ctx.settings.openaiKey) {
+      return this.ctx.settings.openaiKey;
+    }
     // Local whisper servers ignore auth entirely; a placeholder keeps the SDK happy
     // there while a real endpoint rejects it with a clear 401
-    const apiKey = this.ctx.settings.voiceInputKey || 'not-set';
+    return 'not-set';
+  }
+
+  private getClient(): OpenAI {
+    const apiKey = this.getApiKey();
     const baseURL = this.ctx.settings.voiceInputEndpoint;
     const clientConfig = `${baseURL}:${apiKey}`;
     if (!this.client || this.clientConfig !== clientConfig) {

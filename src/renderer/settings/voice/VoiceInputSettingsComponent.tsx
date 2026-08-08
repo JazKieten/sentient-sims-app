@@ -19,7 +19,18 @@ import { defaultVoiceInputHotkey, defaultVoiceInputModel, openaiDefaultEndpoint 
 import useSetting from 'renderer/hooks/useSetting';
 import HelpButton from 'renderer/components/HelpButton';
 
-const hotkeyPresets = ['Ctrl+Space', 'Ctrl+Alt+Space', 'Ctrl+Shift+Space', 'Alt+V', 'F13'];
+// Single keys must be ones The Sims 4 leaves unbound — the hook observes without
+// consuming, so the game still sees every press
+const hotkeyPresets = [
+  { value: 'Backquote', label: '` (backquote)' },
+  { value: 'Insert', label: 'Insert' },
+  { value: 'ScrollLock', label: 'Scroll Lock' },
+  { value: 'F13', label: 'F13' },
+  { value: 'Ctrl+Space', label: 'Ctrl+Space' },
+  { value: 'Ctrl+Alt+Space', label: 'Ctrl+Alt+Space' },
+  { value: 'Ctrl+Shift+Space', label: 'Ctrl+Shift+Space' },
+  { value: 'Alt+V', label: 'Alt+V' },
+];
 
 const testRecordMs = 3000;
 
@@ -122,12 +133,12 @@ export default function VoiceInputSettingsComponent() {
             <Typography sx={{ minWidth: 110 }}>Hotkey:</Typography>
             <Select
               size="small"
-              value={hotkeyPresets.includes(hotkey.value) ? hotkey.value : hotkeyPresets[0]}
+              value={hotkeyPresets.some((preset) => preset.value === hotkey.value) ? hotkey.value : 'Ctrl+Space'}
               onChange={(change) => void hotkey.setSetting(change.target.value)}
             >
               {hotkeyPresets.map((preset) => (
-                <MenuItem key={preset} value={preset}>
-                  {preset}
+                <MenuItem key={preset.value} value={preset.value}>
+                  {preset.label}
                 </MenuItem>
               ))}
             </Select>
@@ -158,6 +169,7 @@ export default function VoiceInputSettingsComponent() {
               type="password"
               value={apiKey.value}
               onChange={(change) => void apiKey.setSetting(change.target.value)}
+              helperText="Leave empty to reuse your OpenAI key from the AI settings (OpenAI endpoint only)"
             />
           </Stack>
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>

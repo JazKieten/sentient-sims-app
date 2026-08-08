@@ -142,6 +142,29 @@ describe('TranscriptionService', () => {
     await expect(service.transcribe(new ArrayBuffer(16))).rejects.toThrow(TranscriptionError);
   });
 
+  it('falls back to the app OpenAI key on the OpenAI endpoint', async () => {
+    const { settingsService, service } = transcriptionContext();
+    settingsService.set(SettingsEnum.OPENAI_KEY, 'sk-app-key');
+    openaiMocks.create.mockResolvedValue({ text: 'hi' });
+
+    await service.transcribe(new ArrayBuffer(16));
+
+    const config = openaiMocks.constructorConfigs[0] as { apiKey: string };
+    expect(config.apiKey).toBe('sk-app-key');
+  });
+
+  it('never sends the app OpenAI key to a custom endpoint', async () => {
+    const { settingsService, service } = transcriptionContext();
+    settingsService.set(SettingsEnum.OPENAI_KEY, 'sk-app-key');
+    settingsService.set(SettingsEnum.VOICE_INPUT_ENDPOINT, 'http://localhost:8000/v1');
+    openaiMocks.create.mockResolvedValue({ text: 'hi' });
+
+    await service.transcribe(new ArrayBuffer(16));
+
+    const config = openaiMocks.constructorConfigs[0] as { apiKey: string };
+    expect(config.apiKey).toBe('not-set');
+  });
+
   it('rebuilds the client when endpoint or key changes', async () => {
     const { settingsService, service } = transcriptionContext();
     openaiMocks.create.mockResolvedValue({ text: 'one' });

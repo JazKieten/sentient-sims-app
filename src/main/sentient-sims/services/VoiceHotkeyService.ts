@@ -107,6 +107,7 @@ export class VoiceHotkeyService {
       if (binding) {
         this.binding = binding;
         if (this.installHook(uiohook)) {
+          log.info(`Voice hotkey armed: ${hotkey} (${mode})`);
           return;
         }
         this.binding = undefined;
@@ -176,17 +177,32 @@ export class VoiceHotkeyService {
     if (!hotkey) {
       return;
     }
+    // uiohook key names that Electron accelerators spell differently
+    const accelerator = hotkey
+      .split('+')
+      .map((token) => {
+        const trimmed = token.trim();
+        if (trimmed === 'Backquote') {
+          return '`';
+        }
+        if (trimmed === 'ScrollLock') {
+          return 'Scrolllock';
+        }
+        return trimmed;
+      })
+      .join('+');
     try {
-      const registered = globalShortcut.register(hotkey, () => {
+      const registered = globalShortcut.register(accelerator, () => {
         this.callbacks?.onToggle();
       });
       if (registered) {
-        this.fallbackAccelerator = hotkey;
+        this.fallbackAccelerator = accelerator;
+        log.info(`Voice hotkey armed via globalShortcut toggle fallback: ${accelerator}`);
       } else {
-        log.error(`Voice hotkey "${hotkey}" registration failed (already in use?)`);
+        log.error(`Voice hotkey "${accelerator}" registration failed (already in use?)`);
       }
     } catch (err) {
-      log.error(`Voice hotkey "${hotkey}" is not a valid accelerator`, err);
+      log.error(`Voice hotkey "${accelerator}" is not a valid accelerator`, err);
     }
   }
 

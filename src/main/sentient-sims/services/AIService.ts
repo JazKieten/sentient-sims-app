@@ -28,7 +28,7 @@ import { markScenePaced } from '../util/pacedScenes';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
 import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
-import { defaultClassificationPrompt } from '../constants';
+import { defaultClassificationPrompt, playerVoiceSpeaker } from '../constants';
 import {
   BuffEventRequest,
   BuffDescriptionRequest,
@@ -641,6 +641,15 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
     if (primaryEvent.sentient_sims.length >= 2 && spoken.length > 0) {
       return this.runDirectedGeneration(primaryEvent, {
         playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken },
+      });
+    }
+    if (primaryEvent.sentient_sims.length === 1 && spoken.length > 0) {
+      // Solo voice chat: nobody else can hear, so the player speaks directly TO their
+      // sim as The Voice. The non-sim speaker keeps the directed pipeline in dialogue
+      // mode (a playerLine suppresses monologue-only), the sim answers aloud, and the
+      // exchange persists only as the sim's memory — no game social is staged.
+      return this.runDirectedGeneration(primaryEvent, {
+        playerLine: { speaker: playerVoiceSpeaker, text: spoken },
       });
     }
     return this.runGeneration(chatEvent, {

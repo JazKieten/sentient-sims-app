@@ -152,11 +152,21 @@ describe('Chat pipeline', () => {
     expect(userText).toContain('What are you training for?');
   });
 
-  it('falls back to the single-shot path when there is nobody to reply', async () => {
+  it('plays a solo chat as The Voice speaking to the sim', async () => {
+    // Nobody in earshot: the player talks directly TO their sim, who answers aloud
+    // through the directed pipeline — not a monologue beat
+    reviewerOutput = `Marisol Vega: ${actorLine}`;
     mockGeneration();
 
-    const result = await ctx.ai.interactionEvent(buildChatEvent('Talking to myself again.', [playerSim]));
+    const result = await ctx.ai.interactionEvent(buildChatEvent('How are you feeling today?', [playerSim]));
 
-    expect(result.exchanges?.map((exchange) => exchange.label)).toEqual(['Scene Generation', 'Director Review']);
+    expect(result.status).toEqual(InteractionEventStatus.GENERATED);
+    const labels = result.exchanges?.map((exchange) => exchange.label);
+    expect(labels).toEqual(['Director Briefing', 'Actor: Marisol Vega', 'Director Review', 'Scene Scores']);
+    // The sim replies out loud; the player's line is remembered attributed to The Voice
+    expect(result.text).toContain(`Marisol Vega: ${actorLine}`);
+    expect(result.text).not.toContain('The Voice:');
+    expect(result.memory?.content).toEqual(`Marisol Vega: ${actorLine}`);
+    expect(result.memory?.action).toEqual('The Voice: How are you feeling today?');
   });
 });

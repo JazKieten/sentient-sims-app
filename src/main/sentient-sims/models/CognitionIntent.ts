@@ -98,6 +98,13 @@ export function parseIntentJson(raw: string): CognitionIntent | undefined {
   }
 }
 
+// Zone travel takes the PLAYER's game through a loading screen, so it belongs only to
+// household sims. Live 2026-08-07: a bar owner scored 7 on a chat scene, picked go_home,
+// and the push unloaded the player's zone mid-conversation — the load never finished.
+// The mod refuses these for visitors too; filtering here keeps an NPC from ever burning
+// an Action Scene on a verb that cannot run.
+export const HOUSEHOLD_ONLY_ACTIONS = new Set(['go_home', 'go_out', 'travel_to_zone']);
+
 // Offered vocabulary for this tick: object actions whose provider is in the snapshot,
 // socials toward same-room sims. Perception vocabulary == action vocabulary — a target
 // that isn't in the snapshot cannot be acted on, which kills hallucinated targets
@@ -131,7 +138,11 @@ export function offeredActions(
       bits: perceived.social?.bits,
     });
   });
-  return { objectActions, simTargets, lotActions: new Set(lotActionKeys ?? []) };
+  const lotActions = new Set(lotActionKeys ?? []);
+  if (entry.is_household === false) {
+    HOUSEHOLD_ONLY_ACTIONS.forEach((action) => lotActions.delete(action));
+  }
+  return { objectActions, simTargets, lotActions };
 }
 
 export function validateIntent(

@@ -145,7 +145,9 @@ export class MemoryAnnotationService {
   }
 
   private async backfillBatch(batch: MemoryEntity[], session: string | undefined): Promise<number> {
-    const textable = batch.filter((memory) => (memory.observation || memory.content) && memory.event_type !== 'outcome');
+    const textable = batch.filter(
+      (memory) => (memory.observation || memory.content) && memory.event_type !== 'outcome',
+    );
     if (textable.length === 0) {
       return 0;
     }

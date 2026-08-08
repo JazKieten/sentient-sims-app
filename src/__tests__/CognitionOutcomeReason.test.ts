@@ -3,9 +3,9 @@ import { humanizeOutcomeReason } from 'main/sentient-sims/controllers/CognitionC
 
 describe('humanizeOutcomeReason', () => {
   it('unwraps a whole-string repr shell', () => {
-    expect(
-      humanizeOutcomeReason('<TestResult: Missing relationship bit has_met between Elliot and Candy.>'),
-    ).toBe('Missing relationship bit has_met between Elliot and Candy.');
+    expect(humanizeOutcomeReason('<TestResult: Missing relationship bit has_met between Elliot and Candy.>')).toBe(
+      'Missing relationship bit has_met between Elliot and Candy.',
+    );
   });
 
   it('keeps the inner explanation when the repr is prefixed', () => {

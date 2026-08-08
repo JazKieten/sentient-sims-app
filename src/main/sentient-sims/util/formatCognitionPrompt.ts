@@ -251,7 +251,9 @@ export function buildCognitionUserPrompt(
       .slice(0, 5)
       .map((condition) => `${condition.name} (${condition.conditions.join(', ')})`);
     if (brokenThings.length > 0) {
-      lotLines.push(`Something is wrong on the lot: ${brokenThings.join('; ')} — hire_repair_service fixes broken things.`);
+      lotLines.push(
+        `Something is wrong on the lot: ${brokenThings.join('; ')} — hire_repair_service fixes broken things.`,
+      );
     }
     // Dirty things get their own line — hidden from the prompt, the model never once
     // chose clean_up while the offered list carried it (observed live: filthy counter,
@@ -275,8 +277,7 @@ export function buildCognitionUserPrompt(
   const offered = offeredActions(entry, report?.lot?.action_keys);
   const objectList = [...offered.objectActions.keys()].map(pretty).join(', ') || '(none)';
   const simList =
-    [...offered.simTargets.entries()].map(([simId, target]) => describeTarget(simId, target)).join('; ') ||
-    '(no one)';
+    [...offered.simTargets.entries()].map(([simId, target]) => describeTarget(simId, target)).join('; ') || '(no one)';
   sections.push(`OFFERED object actions: ${objectList}`);
   if (offered.lotActions.size > 0) {
     sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);

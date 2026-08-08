@@ -381,7 +381,12 @@ export class GenerationQueueService {
     }
     // Foreground queue is empty: spend leftover capacity on at most one cognition
     // deliberation. New foreground work re-enters drain() and naturally goes first.
-    if (this.jobs.length === 0 && this.cognitionActive === 0 && this.cognitionJobs.length > 0 && this.activeCount < concurrency) {
+    if (
+      this.jobs.length === 0 &&
+      this.cognitionActive === 0 &&
+      this.cognitionJobs.length > 0 &&
+      this.activeCount < concurrency
+    ) {
       const job = this.cognitionJobs.shift();
       if (job) {
         this.activeCount += 1;

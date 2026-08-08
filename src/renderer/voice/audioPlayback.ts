@@ -166,7 +166,9 @@ export async function playAudioStream(
         // with no completion logging the failure was invisible
         const played = audio.currentTime;
         if (played < 0.5) {
-          log.warn(`[TTS] Streaming playback ENDED after only ${played.toFixed(2)}s — likely silent failure (context state: ${context.state})`);
+          log.warn(
+            `[TTS] Streaming playback ENDED after only ${played.toFixed(2)}s — likely silent failure (context state: ${context.state})`,
+          );
         } else {
           log.info(`[TTS] Streaming playback finished after ${played.toFixed(2)}s`);
         }

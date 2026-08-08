@@ -66,7 +66,10 @@ function fallbackContinue(thought?: string): CognitionIntent {
 // the first playtest tick. The vocabulary is snake_case, so fold case and separators
 // before lookup instead of wasting a tick degrading to 'continue'.
 export function normalizeActionKey(action: string): string {
-  return action.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return action
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
 }
 
 // Second-chance lookup for squashed keys ("paybills", observed live) — if the normalized

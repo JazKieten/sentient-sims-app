@@ -42,9 +42,7 @@ export class ActionDispatcherService {
     }
     const existing = this.getInFlight(intent.sim_id);
     if (existing && intent.source === 'cognition') {
-      throw new Error(
-        `sim ${intent.sim_id} already has '${existing.intent.action}' in flight (${existing.requestId})`,
-      );
+      throw new Error(`sim ${intent.sim_id} already has '${existing.intent.action}' in flight (${existing.requestId})`);
     }
     const requestId = randomUUID();
     const message: ModEnqueueInteraction = {

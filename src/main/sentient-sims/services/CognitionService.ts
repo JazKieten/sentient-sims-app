@@ -157,7 +157,6 @@ async function withRetry<T>(makeAttempt: () => Promise<T>, label: string): Promi
   let lastError: unknown;
   for (let attempt = 0; attempt <= LLM_RETRIES; attempt += 1) {
     try {
-      // eslint-disable-next-line no-await-in-loop
       return await withTimeout(makeAttempt(), label);
     } catch (error) {
       lastError = error;
@@ -171,7 +170,9 @@ async function withRetry<T>(makeAttempt: () => Promise<T>, label: string): Promi
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${LLM_CALL_TIMEOUT_MS}ms`)), LLM_CALL_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${LLM_CALL_TIMEOUT_MS}ms`));
+    }, LLM_CALL_TIMEOUT_MS);
     (timer as { unref?: () => void }).unref?.();
     promise.then(
       (value) => {
@@ -211,7 +212,9 @@ export class CognitionService {
 
   constructor(ctx: ApiContext) {
     this.ctx = ctx;
-    ctx.simStateCache.onReport((report) => this.onStateReport(report));
+    ctx.simStateCache.onReport((report) => {
+      this.onStateReport(report);
+    });
   }
 
   getStats(): CognitionStats {
@@ -248,12 +251,16 @@ export class CognitionService {
 
     // Rule-based, no LLM: a critical physical need (accident/starvation imminent) gets
     // its fixing action dispatched directly — the model was watched fumbling this
-    entries.forEach((entry) => this.maybeFixCriticalNeed(entry, now));
+    entries.forEach((entry) => {
+      this.maybeFixCriticalNeed(entry, now);
+    });
 
     // A wrecked sim away from home goes HOME as a rule — checked before the walk-in
     // rule so exhaustion outranks joining the party
     if (report.lot?.is_home === false) {
-      entries.forEach((entry) => this.maybeGoHomeExhausted(entry, now));
+      entries.forEach((entry) => {
+        this.maybeGoHomeExhausted(entry, now);
+      });
     }
 
     // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
@@ -261,7 +268,9 @@ export class CognitionService {
     // for both cases lives on maybeRejoinLot
     entries
       .filter((entry) => entry.self?.on_active_lot === false)
-      .forEach((entry) => this.maybeRejoinLot(entry, now, report.lot?.is_home === true));
+      .forEach((entry) => {
+        this.maybeRejoinLot(entry, now, report.lot?.is_home === true);
+      });
 
     const candidates = entries
       .filter((entry) => this.isEligible(entry, report, now))
@@ -314,7 +323,13 @@ export class CognitionService {
   private runtime(simId: string): SimRuntime {
     let runtime = this.runtimes.get(simId);
     if (!runtime) {
-      runtime = { phase: 'IDLE', cooldownUntil: 0, deliberatedAt: [], suppressedUntil: new Map(), fixIneligibleUntil: new Map() };
+      runtime = {
+        phase: 'IDLE',
+        cooldownUntil: 0,
+        deliberatedAt: [],
+        suppressedUntil: new Map(),
+        fixIneligibleUntil: new Map(),
+      };
       this.runtimes.set(simId, runtime);
     }
     return runtime;
@@ -564,9 +579,7 @@ export class CognitionService {
   }
 
   private urgencyScore(entry: SimStateEntry, report: SimStateReport): number {
-    const emergency = (entry.self?.buffs ?? []).some(
-      (buff) => /death|fire|electrocut/i.test(buff),
-    );
+    const emergency = (entry.self?.buffs ?? []).some((buff) => /death|fire|electrocut/i.test(buff));
     if (emergency) {
       return 1000;
     }
@@ -738,8 +751,8 @@ export class CognitionService {
       this.stats.suggestions += 1;
       log.info(
         `[Cognition][suggest] sim ${simId} would ${intent.action}` +
-          `${intent.target_sim_id ? ` with ${intent.target_sim_id}` : ''}` +
-          `${intent.motivation ? ` — ${intent.motivation}` : ''}`,
+          (intent.target_sim_id ? ` with ${intent.target_sim_id}` : '') +
+          (intent.motivation ? ` — ${intent.motivation}` : ''),
       );
       this.toCooldown(simId);
       return;
@@ -946,7 +959,12 @@ export class CognitionService {
     };
   }
 
-  private storeThought(entry: SimStateEntry, intent: CognitionIntent, exchanges: LLMExchange[] = [], importance?: number) {
+  private storeThought(
+    entry: SimStateEntry,
+    intent: CognitionIntent,
+    exchanges: LLMExchange[] = [],
+    importance?: number,
+  ) {
     if (!intent.thought) {
       return;
     }

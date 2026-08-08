@@ -121,7 +121,9 @@ function idleSimReport(seq: number, overrides: Partial<SimStateReport> = {}): Si
         sim_name: 'Elliot',
         location: { zone_id: 1 },
         sims: [{ sim_id: '200', tier: 'same_room', name: 'Adrian', distance: 3, social: { has_met: true } }],
-        objects: [{ object_id: '900', action_keys: ['grab_snack'], name: 'object_fridge', tier: 'same_room', distance: 4 }],
+        objects: [
+          { object_id: '900', action_keys: ['grab_snack'], name: 'object_fridge', tier: 'same_room', distance: 4 },
+        ],
         self: { mood: 'Fine', needs: { hunger: 50 } },
         activity: { queue: [], running: null, in_social: false },
       },
@@ -134,7 +136,6 @@ async function settle() {
   // A deliberation is now a chain of up to five sequential mocked calls, each several
   // microtask hops deep — generous turns settle it without real timers
   for (let i = 0; i < 64; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
     await Promise.resolve();
   }
 }
@@ -317,7 +318,9 @@ describe('CognitionService', () => {
       }),
     });
     const stranger = idleSimReport(1);
-    stranger.sims![0].sims = [{ sim_id: '200', tier: 'same_room', name: 'Stranger', distance: 2, social: { has_met: false } }];
+    stranger.sims![0].sims = [
+      { sim_id: '200', tier: 'same_room', name: 'Stranger', distance: 2, social: { has_met: false } },
+    ];
     cache.ingest(stranger);
     await settle();
 
@@ -548,10 +551,18 @@ describe('CognitionService', () => {
     // and without success-suppression she brushed 5x in 7 minutes, burning an Action
     // Scene per re-pick before the dispatch guard caught each one
     const { cache, cognition, dispatched } = buildCtx({
-      optionsJson: JSON.stringify({ options: [{ action: 'brush_teeth', target_object_id: '901', label: 'Freshen up' }] }),
+      optionsJson: JSON.stringify({
+        options: [{ action: 'brush_teeth', target_object_id: '901', label: 'Freshen up' }],
+      }),
     });
     const report = idleSimReport(1);
-    report.sims[0].objects!.push({ object_id: '901', action_keys: ['brush_teeth'], name: 'object_sink', tier: 'same_room', distance: 2 });
+    report.sims![0].objects.push({
+      object_id: '901',
+      action_keys: ['brush_teeth'],
+      name: 'object_sink',
+      tier: 'same_room',
+      distance: 2,
+    });
     cache.ingest(report);
     await settle();
     expect(dispatched).toHaveLength(1);
@@ -559,7 +570,13 @@ describe('CognitionService', () => {
     cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'brush_teeth' });
 
     const second = idleSimReport(2);
-    second.sims[0].objects!.push({ object_id: '901', action_keys: ['brush_teeth'], name: 'object_sink', tier: 'same_room', distance: 2 });
+    second.sims![0].objects.push({
+      object_id: '901',
+      action_keys: ['brush_teeth'],
+      name: 'object_sink',
+      tier: 'same_room',
+      distance: 2,
+    });
     cache.ingest(second);
     await settle();
     expect(dispatched).toHaveLength(1);
@@ -620,7 +637,7 @@ describe('CognitionService', () => {
     let currentOptions = JSON.stringify({ options: [{ action: 'cook_meal', label: 'Cook dinner' }] });
     const { cache, cognition, dispatched } = buildCtx({ optionsJson: () => currentOptions });
     const report = idleSimReport(1);
-    report.sims![0].objects![0].action_keys = ['grab_snack', 'cook_meal'];
+    report.sims![0].objects[0].action_keys = ['grab_snack', 'cook_meal'];
     cache.ingest(report);
     await settle();
     expect(dispatched).toHaveLength(1);
@@ -628,7 +645,7 @@ describe('CognitionService', () => {
 
     currentOptions = JSON.stringify({ options: [{ action: 'grab_snack', label: 'A snack' }] });
     const busyReport = idleSimReport(2);
-    busyReport.sims![0].objects![0].action_keys = ['grab_snack', 'cook_meal'];
+    busyReport.sims![0].objects[0].action_keys = ['grab_snack', 'cook_meal'];
     busyReport.sims![0].activity!.running = 'counter_MakeFood_Staging_Basic';
     busyReport.sims![0].self!.needs = { hunger: 5 };
     cache.ingest(busyReport);
@@ -642,7 +659,7 @@ describe('CognitionService', () => {
     // Observed live: bladder -99 while the model kept picking grab_snack at hunger 94
     const { cache, dispatched, oneShotCalls } = buildCtx();
     const report = idleSimReport(1);
-    report.sims![0].objects![0].action_keys = ['use_toilet', 'grab_snack'];
+    report.sims![0].objects[0].action_keys = ['use_toilet', 'grab_snack'];
     report.sims![0].self!.needs = { bladder: -99, hunger: 94 };
     report.sims![0].activity!.running = 'seating_Sit';
     cache.ingest(report);
@@ -658,7 +675,7 @@ describe('CognitionService', () => {
       optionsJson: JSON.stringify({ options: [{ action: 'take_shower', label: 'Rinse off' }] }),
     });
     const report = idleSimReport(1);
-    report.sims![0].objects![0].action_keys = ['take_shower'];
+    report.sims![0].objects[0].action_keys = ['take_shower'];
     report.sims![0].activity!.running = 'TV_Watch';
     report.sims![0].self!.needs = { hygiene: -60, fun: 5 };
     cache.ingest(report);

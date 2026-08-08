@@ -34,6 +34,12 @@ type SimRuntime = {
   // action key -> suppressed-until timestamp; kept out of the offered vocabulary
   // until the moment passes (see recentlyFailedActions)
   suppressedUntil: Map<string, number>;
+  // action key -> backoff-until after the mod's preflight declared the intent
+  // unexecutable ('ineligible': broken fix object). The critical-need rule lane ignores
+  // suppressedUntil by design but MUST respect this map — retrying an impossible fix at
+  // report cadence writes an identical failure memory every 5s (observed live
+  // 2026-08-07: use_toilet vs a broken toilet at bladder -100)
+  fixIneligibleUntil: Map<string, number>;
   // The last action this service dispatched for the sim — guards against re-dispatching
   // it while the sim is still busy executing it (see the redispatch guard in deliberate)
   lastDispatch?: { action: string; at: number };
@@ -135,7 +141,10 @@ const LLM_RETRIES = 1;
 // keeps offering them until the world catches up (broken sink stays 'broken' until the
 // repairman arrives), so success must suppress re-picking just like failure does
 // (observed live: hire_repair_service succeeded, re-picked 15s later, 'already hired')
-const ONE_SHOT_ACTIONS = new Set(['hire_repair_service', 'pay_bills', 'call_firefighter', 'go_out']);
+// brush_teeth: quick hygiene ritual whose itch (low hygiene) it barely moves — without
+// success-suppression the monologue re-wants it forever (observed live 2026-08-07:
+// brushed 4x in 5 minutes, an Action Scene burned per re-pick)
+const ONE_SHOT_ACTIONS = new Set(['hire_repair_service', 'pay_bills', 'call_firefighter', 'go_out', 'brush_teeth']);
 
 // Below this energy, go_out leaves the vocabulary entirely: sleep first, party later.
 // Without it the wrecked-rule and the social drive ping-ponged her home->bar->home
@@ -285,6 +294,12 @@ export class CognitionService {
       const window = event.outcome === 'canceled' ? BENIGN_CLOSE_SUPPRESS_MS : FAILED_ACTION_SUPPRESS_MS;
       runtime.suppressedUntil.set(event.action, Date.now() + window);
     }
+    if (event.outcome === 'ineligible' && event.action) {
+      // Preflight proved the intent can't execute at all (broken fix object) — the
+      // critical-need rule lane must back off this action too, or it re-fires every
+      // state report against the same impossibility
+      runtime.fixIneligibleUntil.set(event.action, Date.now() + FAILED_ACTION_SUPPRESS_MS);
+    }
     // One-shot verbs are DONE on success too — the lot re-offers them until the world
     // catches up (broken sink stays flagged until the repairman arrives), so a success
     // suppresses re-picking exactly like a failure would
@@ -299,7 +314,7 @@ export class CognitionService {
   private runtime(simId: string): SimRuntime {
     let runtime = this.runtimes.get(simId);
     if (!runtime) {
-      runtime = { phase: 'IDLE', cooldownUntil: 0, deliberatedAt: [], suppressedUntil: new Map() };
+      runtime = { phase: 'IDLE', cooldownUntil: 0, deliberatedAt: [], suppressedUntil: new Map(), fixIneligibleUntil: new Map() };
       this.runtimes.set(simId, runtime);
     }
     return runtime;
@@ -389,8 +404,13 @@ export class CognitionService {
       }
       // Deliberately ignores the suppression map: an accident-in-progress warrants
       // retrying even a just-canceled fix (a suppressed use_toilet at bladder -85 must
-      // never mean peeing on the floor while the toilet works fine)
-      const action = fixes.find((fix) => offered.objectActions.has(fix));
+      // never mean peeing on the floor while the toilet works fine). The ineligible
+      // backoff is the one exception — preflight proved the fix object itself unusable,
+      // so retrying is spam, not urgency (observed live 2026-08-07: broken toilet,
+      // use_toilet re-fired and wrote a failure memory every 5s report at bladder -100)
+      const action = fixes.find(
+        (fix) => offered.objectActions.has(fix) && (runtime.fixIneligibleUntil.get(fix) ?? 0) <= now,
+      );
       if (!action) {
         continue;
       }

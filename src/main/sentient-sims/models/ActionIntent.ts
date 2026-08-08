@@ -24,7 +24,9 @@ export type InteractionOutcomeEvent = {
   target_sim_name?: string;
   action?: string;
   interaction_name?: string;
-  outcome: 'success' | 'failure' | 'canceled';
+  // 'ineligible' = the mod's preflight ran the game's own tests and the intent cannot
+  // execute right now (broken fix object, departed target) — nothing was ever pushed
+  outcome: 'success' | 'failure' | 'canceled' | 'ineligible';
   // The game's actual failure reason ("Missing relationship bit has_met between X and Y",
   // "Object is not in an active zone") — this is what teaches cognition not to retry
   // impossible actions

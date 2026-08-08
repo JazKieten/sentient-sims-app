@@ -458,6 +458,31 @@ describe('CognitionService', () => {
     expect(toiletDispatches).toHaveLength(1);
   });
 
+  it('backs off the critical-need rule after preflight declares the fix unusable', async () => {
+    // The rule lane bypasses ordinary suppression by design, but an 'ineligible' close
+    // means the game itself refused the fix object (broken toilet) — without a backoff
+    // the rule re-fired every 5s state report at bladder -100, writing an identical
+    // failure memory per attempt (observed live 2026-08-07)
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    const first = idleSimReport(1);
+    first.sims![0].objects = [
+      { object_id: '901', action_keys: ['use_toilet'], name: 'object_toilet', tier: 'same_room', distance: 2 },
+    ];
+    first.sims![0].self!.needs = { bladder: -90 };
+    cache.ingest(first);
+    await settle();
+    expect(dispatched.filter((intent) => intent.action === 'use_toilet')).toHaveLength(1);
+
+    cognition.onOutcome({ sim_id: '100', outcome: 'ineligible', request_id: 'req-1', action: 'use_toilet' });
+
+    const second = idleSimReport(2);
+    second.sims![0].objects = first.sims![0].objects;
+    second.sims![0].self!.needs = { bladder: -100 };
+    cache.ingest(second);
+    await settle();
+    expect(dispatched.filter((intent) => intent.action === 'use_toilet')).toHaveLength(1);
+  });
+
   it('renders relationship context and the social vocabulary in the monologue prompt', async () => {
     const { cache, prompts } = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
     const report = idleSimReport(1);
@@ -513,6 +538,28 @@ describe('CognitionService', () => {
 
     const second = idleSimReport(2);
     second.lot!.action_keys = ['hire_repair_service'];
+    cache.ingest(second);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('suppresses brush_teeth after success (the hygiene itch it barely moves persists)', async () => {
+    // Observed live 2026-08-07: low hygiene kept the monologue wanting "to feel fresh",
+    // and without success-suppression she brushed 5x in 7 minutes, burning an Action
+    // Scene per re-pick before the dispatch guard caught each one
+    const { cache, cognition, dispatched } = buildCtx({
+      optionsJson: JSON.stringify({ options: [{ action: 'brush_teeth', target_object_id: '901', label: 'Freshen up' }] }),
+    });
+    const report = idleSimReport(1);
+    report.sims[0].objects!.push({ object_id: '901', action_keys: ['brush_teeth'], name: 'object_sink', tier: 'same_room', distance: 2 });
+    cache.ingest(report);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'brush_teeth' });
+
+    const second = idleSimReport(2);
+    second.sims[0].objects!.push({ object_id: '901', action_keys: ['brush_teeth'], name: 'object_sink', tier: 'same_room', distance: 2 });
     cache.ingest(second);
     await settle();
     expect(dispatched).toHaveLength(1);

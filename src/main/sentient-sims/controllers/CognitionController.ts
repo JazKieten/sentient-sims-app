@@ -27,22 +27,24 @@ function outcomeVerb(outcome: InteractionOutcomeEvent['outcome']): string {
 // "<EnqueueResult: Bills: Interaction requires a utility that is shut off. <ExecuteResult: False: (None)>>".
 // Keep the human sentence, drop the machine wrappers — this text lands in a permanent memory
 // row, and raw angle brackets also read as tags in the mod's Flash memories window.
-function humanizeOutcomeReason(reason: string): string {
+export function humanizeOutcomeReason(reason: string): string {
   let text = reason.trim();
-  // Unwrap outer <Label: ...> repr shells (possibly nested)
-  for (;;) {
-    const unwrapped = /^<\w+:\s*([\s\S]*)>$/.exec(text);
-    if (!unwrapped) {
-      break;
-    }
-    text = unwrapped[1].trim();
-  }
-  // Drop any leftover embedded reprs like <ExecuteResult: False: (None)>
+  // Unwrap <Label: ...> repr shells wherever they sit, innermost first — a prefixed
+  // reason like "clean push refused: <EnqueueResult: states do not match...>" must keep
+  // the inner explanation (observed live 2026-08-07: the whole-string-only unwrap never
+  // fired past the prefix, so the repr-strip below deleted the entire why and the
+  // memory read just "clean push refused:")
   let previous;
   do {
     previous = text;
-    text = text.replace(/<[^<>]*>/g, '');
+    text = text.replace(/<\w+:\s*([^<>]*)>/g, '$1');
   } while (text !== previous);
+  // Drop any leftover angle-bracket noise and the bare result plumbing the unwrap
+  // exposes (ExecuteResult bodies like "False: (None)" carry no reason)
+  text = text
+    .replace(/<[^<>]*>/g, '')
+    .replace(/\b(?:True|False|None)\b:?\s*\(None\)/g, '')
+    .replace(/\(\s*\)/g, '');
   return text.replace(/\s{2,}/g, ' ').trim();
 }
 

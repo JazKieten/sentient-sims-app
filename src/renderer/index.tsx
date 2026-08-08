@@ -25,6 +25,7 @@ import { AISettingsProvider } from './providers/AISettingsProvider';
 import { VersionsProvider } from './providers/VersionsProvider';
 import TraitsPage from './TraitsPage';
 import { AudioContextProvider } from './providers/AudioContextProvider';
+import { VoiceInputProvider } from './providers/VoiceInputProvider';
 import OfflineMemory from './OfflineMemory';
 import { WebsocketProvider } from './providers/WebsocketProvider';
 import 'aws-amplify/auth/enable-oauth-listener';
@@ -113,11 +114,13 @@ root.render(
                 <VersionsProvider>
                   <AISettingsProvider>
                     <AudioContextProvider>
-                      <ChatGenerationProvider>
-                        <DebugModeProvider>
-                          <RouterProvider router={router} />
-                        </DebugModeProvider>
-                      </ChatGenerationProvider>
+                      <VoiceInputProvider>
+                        <ChatGenerationProvider>
+                          <DebugModeProvider>
+                            <RouterProvider router={router} />
+                          </DebugModeProvider>
+                        </ChatGenerationProvider>
+                      </VoiceInputProvider>
                     </AudioContextProvider>
                   </AISettingsProvider>
                 </VersionsProvider>

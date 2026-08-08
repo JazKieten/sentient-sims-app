@@ -58,6 +58,16 @@ export enum SettingsEnum {
   COGNITION_PIPELINE = 'cognitionPipeline', // legacy review dial; unused since the Action Scene pipeline
   // Full Autonomy: a tick/scene action score at or above this stages an Action Scene
   COGNITION_ACTION_SCORE_THRESHOLD = 'cognitionActionScoreThreshold',
+  // Voice input: hold-to-talk mic capture transcribed via an OpenAI-compatible
+  // /audio/transcriptions endpoint, injected into the game as the active sim speaking
+  VOICE_INPUT_ENABLED = 'voiceInputEnabled',
+  VOICE_INPUT_ENDPOINT = 'voiceInputEndpoint',
+  VOICE_INPUT_KEY = 'voiceInputKey',
+  VOICE_INPUT_MODEL = 'voiceInputModel',
+  VOICE_INPUT_HOTKEY = 'voiceInputHotkey',
+  VOICE_INPUT_HOTKEY_MODE = 'voiceInputHotkeyMode', // hold | toggle
+  VOICE_INPUT_LANGUAGE = 'voiceInputLanguage', // ISO-639-1 hint, empty = auto-detect
+  VOICE_INPUT_DEVICE_ID = 'voiceInputDeviceId', // empty = system default mic
 }
 
 export enum DeprecatedSettingsEnum {

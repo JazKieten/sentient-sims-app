@@ -128,6 +128,21 @@ export function sendSceneLineToMod(line: DialogueLine & { preamble?: string }) {
   });
 }
 
+export function sendPlayerVoiceMessageToMod(text: string) {
+  sendModNotification({
+    type: ModWebsocketMessageType.PLAYER_VOICE_MESSAGE,
+    text,
+  });
+}
+
+export function sendPlayerVoiceStatusToMod(status: 'listening' | 'transcribing' | 'error', detail?: string) {
+  sendModNotification({
+    type: ModWebsocketMessageType.PLAYER_VOICE_STATUS,
+    status,
+    detail,
+  });
+}
+
 export function playTTS(text: string, sims?: SentientSim[], voiceOverrides?: Map<string, string>) {
   playTTSLines(
     parseDialogueLines(

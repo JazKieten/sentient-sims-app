@@ -103,3 +103,9 @@ export const backgroundIdleDelayMs = 10000;
 export const defaultElevenLabsEndpoint = 'https://api.elevenlabs.io/v1';
 export const defaultKokoroEndpoint = 'https://api.kokorotts.com';
 export const defaultVLLMEndpoint = 'http://localhost:8000/v1';
+export const defaultVoiceInputModel = 'whisper-1';
+export const defaultVoiceInputHotkey = 'Ctrl+Space';
+// Backstop for a lost keyup (alt-tab mid-hold) so the mic never stays hot indefinitely
+export const voiceInputMaxRecordMs = 60000;
+// Recordings shorter than this are accidental hotkey taps, not speech
+export const voiceInputMinAudioBytes = 1000;

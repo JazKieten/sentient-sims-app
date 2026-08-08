@@ -8,6 +8,7 @@ import { OpenAIVoiceSettingsComponent } from './voice/OpenAIVoiceSettingsCompone
 import { SentientSimsAIVoiceSettingsComponent } from './voice/SentientSimsAIVoiceSettingsComponent';
 import { KokoroAIVoiceSettingsComponent } from './voice/KokoroAIVoiceSettingsComponent';
 import { ElevenLabsVoiceSettingsComponent } from './voice/ElevenLabsVoiceSettingsComponent';
+import VoiceInputSettingsComponent from './voice/VoiceInputSettingsComponent';
 
 export default function VoiceSettingsComponent() {
   const aiSettings = useAISettings();
@@ -103,6 +104,7 @@ export default function VoiceSettingsComponent() {
           {voiceSettingsComponent}
         </Grid>
       ) : null}
+      <VoiceInputSettingsComponent />
     </>
   );
 }

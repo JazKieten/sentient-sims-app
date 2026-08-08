@@ -7,6 +7,7 @@ import { DialogueLine } from './formatter/PromptFormatter';
 import { getAllBrowserWindows } from './util/browserWindows';
 import { resolveHtmlPath } from '../util';
 import { ApiContext } from './services/ApiContext';
+import { VoiceInputService } from './services/VoiceInputService';
 import { InteractionDTO } from './db/dto/InteractionDTO';
 import { Animation } from './models/Animation';
 
@@ -21,7 +22,7 @@ async function handleSelectDirectory() {
   return null;
 }
 
-export default function ipcHandlers(ctx: ApiContext) {
+export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputService) {
   ipcMain.handle('dialog:selectDirectory', handleSelectDirectory);
   ipcMain.on('set-setting', (_event: IpcMainEvent, setting: SettingsEnum, value: unknown) => {
     if (setting !== SettingsEnum.ACCESS_TOKEN) {
@@ -72,5 +73,23 @@ export default function ipcHandlers(ctx: ApiContext) {
   ipcMain.handle('save-animation-locally', (event, animation: Animation) => {
     const animationService = ctx.animations;
     animationService.saveLocalAnimation(animation);
+  });
+
+  // The renderer delivers the finished recording; transcription runs main-side so the
+  // STT key never enters the renderer
+  ipcMain.handle('voice-transcribe', (_event, audio: ArrayBuffer, mimeType?: string) => {
+    return voiceInput.handleAudio(audio, mimeType);
+  });
+  ipcMain.on('voice-record-error', (_event: IpcMainEvent, message: string) => {
+    voiceInput.handleRecordError(message);
+  });
+  // Settings-page "Test" path: transcribes without sending anything to the game
+  ipcMain.handle('voice-transcribe-test', async (_event, audio: ArrayBuffer, mimeType?: string) => {
+    try {
+      const text = await ctx.transcription.transcribe(audio, mimeType);
+      return { text };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
   });
 }

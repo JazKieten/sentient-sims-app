@@ -29,11 +29,13 @@ import debug from 'electron-debug';
 import electronUpdater from 'electron-updater';
 import { resolveHtmlPath } from './util';
 import { ApiContext } from './sentient-sims/services/ApiContext';
+import { VoiceInputService } from './sentient-sims/services/VoiceInputService';
 import { version as releaseAppVersion } from '../../release/app/package.json';
 
 log.initialize({ preload: true });
 
 let mainWindow: BrowserWindow | null = null;
+let voiceInputService: VoiceInputService | null = null;
 
 if (process.env.NODE_ENV === 'production') {
   installSourceMapSupport();
@@ -123,7 +125,6 @@ const createWindow = async () => {
 
   const settingsService = new SettingsService();
   settingsService.runMigrations();
-  settingsService.onSettingChanged(notifySettingChanged);
 
   const directoryService = new DirectoryService(settingsService);
   const ctx = new ApiContext({
@@ -136,7 +137,16 @@ const createWindow = async () => {
     // mod-out-of-date error on every connect. Report the real app version instead.
     appVersion: app.isPackaged ? app.getVersion() : releaseAppVersion,
   });
-  ipcHandlers(ctx);
+  voiceInputService?.shutdown();
+  voiceInputService = new VoiceInputService(ctx);
+  // Single listener slot: compose so both the renderer cache and the voice hotkey
+  // react to setting writes
+  settingsService.onSettingChanged((key, value) => {
+    notifySettingChanged(key, value);
+    voiceInputService?.onSettingChanged(key);
+  });
+  ipcHandlers(ctx, voiceInputService);
+  voiceInputService.initialize();
 
   if (ctx.settings.debugLogs) {
     enableDebugLogging();
@@ -197,6 +207,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// The uiohook keyboard-hook thread keeps the process alive unless stopped
+app.on('will-quit', () => {
+  voiceInputService?.shutdown();
 });
 
 app

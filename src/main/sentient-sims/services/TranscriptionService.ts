@@ -1,0 +1,80 @@
+import log from 'electron-log';
+import OpenAI, { toFile } from 'openai';
+import { ApiContext } from './ApiContext';
+import { AIHealthCheckResponse } from '../models/AIHealthCheckResponse';
+
+export class TranscriptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TranscriptionError';
+  }
+}
+
+// Speech-to-text over any OpenAI-compatible /audio/transcriptions endpoint (OpenAI,
+// Groq, local faster-whisper/speaches). Deliberately separate from the generation
+// providers: the STT endpoint/key/model are an independent settings axis, so this owns
+// its own client instead of borrowing OpenAIService's LLM-configured one.
+export class TranscriptionService {
+  private readonly ctx: ApiContext;
+
+  private client?: OpenAI;
+
+  private clientConfig?: string;
+
+  constructor(ctx: ApiContext) {
+    this.ctx = ctx;
+  }
+
+  private getClient(): OpenAI {
+    // Local whisper servers ignore auth entirely; a placeholder keeps the SDK happy
+    // there while a real endpoint rejects it with a clear 401
+    const apiKey = this.ctx.settings.voiceInputKey || 'not-set';
+    const baseURL = this.ctx.settings.voiceInputEndpoint;
+    const clientConfig = `${baseURL}:${apiKey}`;
+    if (!this.client || this.clientConfig !== clientConfig) {
+      this.client = new OpenAI({
+        dangerouslyAllowBrowser: process.env.NODE_ENV === 'test',
+        apiKey,
+        baseURL,
+        timeout: 30000,
+        maxRetries: 0,
+      });
+      this.clientConfig = clientConfig;
+    }
+
+    return this.client;
+  }
+
+  async transcribe(audio: ArrayBuffer, mimeType = 'audio/webm'): Promise<string> {
+    const client = this.getClient();
+    const language = this.ctx.settings.voiceInputLanguage.trim();
+    // The filename extension is how whisper servers detect the container format
+    const file = await toFile(Buffer.from(audio), 'speech.webm', { type: mimeType });
+
+    try {
+      const response = await client.audio.transcriptions.create({
+        file,
+        model: this.ctx.settings.voiceInputModel,
+        ...(language ? { language } : {}),
+      });
+      return response.text.trim();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Voice transcription failed:', error);
+      throw new TranscriptionError(message);
+    }
+  }
+
+  async healthCheck(): Promise<AIHealthCheckResponse> {
+    // No cheap transcription ping exists; a models listing works on OpenAI, Groq,
+    // and the common local whisper servers
+    try {
+      await this.getClient().models.list();
+      return { status: 'OK' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error('Error testing transcription endpoint:', error);
+      return { error: `not working, ${message}` };
+    }
+  }
+}

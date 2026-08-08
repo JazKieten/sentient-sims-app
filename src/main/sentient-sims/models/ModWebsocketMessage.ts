@@ -15,6 +15,12 @@ export enum ModWebsocketMessageType {
   // the app's interest and runs anyway (three stacked showers observed live)
   CANCEL_INTERACTION = 'cancel_interaction',
   REQUEST_PERCEPTION = 'request_perception',
+  // The player's transcribed mic speech; the mod injects it as the active sim's spoken
+  // line (same event shape as the Chat panel's new_chat_message)
+  PLAYER_VOICE_MESSAGE = 'player_voice_message',
+  // Recording lifecycle so the game can show "Listening…" / mic errors while the app
+  // is unfocused behind the game window
+  PLAYER_VOICE_STATUS = 'player_voice_status',
 }
 
 export type ModWebsocketMessage = {
@@ -91,6 +97,15 @@ export type ModCancelInteraction = ModWebsocketMessage & {
   request_id: string;
 };
 
+export type ModPlayerVoiceMessage = ModWebsocketMessage & {
+  text: string;
+};
+
+export type ModPlayerVoiceStatus = ModWebsocketMessage & {
+  status: 'listening' | 'transcribing' | 'error';
+  detail?: string;
+};
+
 export type WebsocketNotification =
   | ModWebsocketMessage
   | ModWebsocketNotification
@@ -101,4 +116,6 @@ export type WebsocketNotification =
   | ModSceneLine
   | ModEnqueueInteraction
   | ModRequestPerception
-  | ModCancelInteraction;
+  | ModCancelInteraction
+  | ModPlayerVoiceMessage
+  | ModPlayerVoiceStatus;

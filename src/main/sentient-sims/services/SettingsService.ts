@@ -27,6 +27,8 @@ import {
   openrouterDefaultModel,
   sentientSimsAIDefaultModel,
   defaultSentientSimsAIHost,
+  defaultVoiceInputHotkey,
+  defaultVoiceInputModel,
 } from '../constants';
 import { disableDebugLogging, enableDebugLogging } from '../util/debugLog';
 import { defaultSentientSimsAITTSSettings, SentientSimsAITTSSettings } from '../models/SentientSimsAITTSSettings';
@@ -253,6 +255,38 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD.toString()]: {
         type: 'number',
         default: 7,
+      },
+      [SettingsEnum.VOICE_INPUT_ENABLED.toString()]: {
+        type: 'boolean',
+        default: false,
+      },
+      [SettingsEnum.VOICE_INPUT_ENDPOINT.toString()]: {
+        type: 'string',
+        default: openaiDefaultEndpoint,
+      },
+      [SettingsEnum.VOICE_INPUT_KEY.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.VOICE_INPUT_MODEL.toString()]: {
+        type: 'string',
+        default: defaultVoiceInputModel,
+      },
+      [SettingsEnum.VOICE_INPUT_HOTKEY.toString()]: {
+        type: 'string',
+        default: defaultVoiceInputHotkey,
+      },
+      [SettingsEnum.VOICE_INPUT_HOTKEY_MODE.toString()]: {
+        type: 'string',
+        default: 'hold',
+      },
+      [SettingsEnum.VOICE_INPUT_LANGUAGE.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.VOICE_INPUT_DEVICE_ID.toString()]: {
+        type: 'string',
+        default: '',
       },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
@@ -852,6 +886,34 @@ export class SettingsService {
 
   get cognitionActionScoreThreshold(): number {
     return Math.min(10, Math.max(1, this.get(SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD) as number));
+  }
+
+  get voiceInputEnabled(): boolean {
+    return this.get(SettingsEnum.VOICE_INPUT_ENABLED) as boolean;
+  }
+
+  get voiceInputEndpoint(): string {
+    return this.get(SettingsEnum.VOICE_INPUT_ENDPOINT) as string;
+  }
+
+  get voiceInputKey(): string {
+    return this.get(SettingsEnum.VOICE_INPUT_KEY) as string;
+  }
+
+  get voiceInputModel(): string {
+    return this.get(SettingsEnum.VOICE_INPUT_MODEL) as string;
+  }
+
+  get voiceInputHotkey(): string {
+    return this.get(SettingsEnum.VOICE_INPUT_HOTKEY) as string;
+  }
+
+  get voiceInputHotkeyMode(): 'hold' | 'toggle' {
+    return (this.get(SettingsEnum.VOICE_INPUT_HOTKEY_MODE) as string) === 'toggle' ? 'toggle' : 'hold';
+  }
+
+  get voiceInputLanguage(): string {
+    return this.get(SettingsEnum.VOICE_INPUT_LANGUAGE) as string;
   }
 
   get prefetchMaxQueueDepth(): number {

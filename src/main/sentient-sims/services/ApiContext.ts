@@ -61,6 +61,7 @@ import { SceneService } from './SceneService';
 import { ProviderConfigService } from './ProviderConfigService';
 import { SentientSimsAIService } from './SentientSimsAIService';
 import { SettingsService } from './SettingsService';
+import { TranscriptionService } from './TranscriptionService';
 import { UpdateService } from './UpdateService';
 import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
@@ -229,6 +230,7 @@ export class ApiContext {
   private readonly _memoryRetrievalService: MemoryRetrievalService;
   private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
+  private readonly _transcriptionService: TranscriptionService;
   // One logging wrapper per provider service, so repeated getGenerationService calls
   // hand back the same object instead of allocating a new proxy each time
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
@@ -311,6 +313,7 @@ export class ApiContext {
     this._memoryAnnotationService = new MemoryAnnotationService(this);
     this._memoryRetrievalService = new MemoryRetrievalService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
+    this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService);
     this._memoryRepository.setOnMemoryUpserted((memory) => {
@@ -415,6 +418,10 @@ export class ApiContext {
 
   get memoryAnnotation(): MemoryAnnotationService {
     return this._memoryAnnotationService;
+  }
+
+  get transcription(): TranscriptionService {
+    return this._transcriptionService;
   }
 
   get memoryRetrieval(): MemoryRetrievalService {

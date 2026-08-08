@@ -1,0 +1,214 @@
+import { useEffect, useState } from 'react';
+import {
+  Box,
+  Button,
+  Checkbox,
+  Divider,
+  FormControlLabel,
+  FormHelperText,
+  MenuItem,
+  Select,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
+import MicIcon from '@mui/icons-material/Mic';
+import log from 'electron-log';
+import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
+import { defaultVoiceInputHotkey, defaultVoiceInputModel, openaiDefaultEndpoint } from 'main/sentient-sims/constants';
+import useSetting from 'renderer/hooks/useSetting';
+import HelpButton from 'renderer/components/HelpButton';
+
+const hotkeyPresets = ['Ctrl+Space', 'Ctrl+Alt+Space', 'Ctrl+Shift+Space', 'Alt+V', 'F13'];
+
+const testRecordMs = 3000;
+
+export default function VoiceInputSettingsComponent() {
+  const enabled = useSetting<boolean>(SettingsEnum.VOICE_INPUT_ENABLED, false);
+  const endpoint = useSetting<string>(SettingsEnum.VOICE_INPUT_ENDPOINT, openaiDefaultEndpoint);
+  const apiKey = useSetting<string>(SettingsEnum.VOICE_INPUT_KEY, '');
+  const model = useSetting<string>(SettingsEnum.VOICE_INPUT_MODEL, defaultVoiceInputModel);
+  const hotkey = useSetting<string>(SettingsEnum.VOICE_INPUT_HOTKEY, defaultVoiceInputHotkey);
+  const hotkeyMode = useSetting<string>(SettingsEnum.VOICE_INPUT_HOTKEY_MODE, 'hold');
+  const language = useSetting<string>(SettingsEnum.VOICE_INPUT_LANGUAGE, '');
+  const deviceId = useSetting<string>(SettingsEnum.VOICE_INPUT_DEVICE_ID, '');
+
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [testState, setTestState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const [testResult, setTestResult] = useState<string>();
+  const [testError, setTestError] = useState<string>();
+
+  useEffect(() => {
+    if (!enabled.value) {
+      return;
+    }
+    void (async () => {
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        setDevices(all.filter((device) => device.kind === 'audioinput'));
+      } catch (err) {
+        log.error('Unable to enumerate audio devices', err);
+      }
+    })();
+  }, [enabled.value, testState]);
+
+  async function runTest() {
+    setTestResult(undefined);
+    setTestError(undefined);
+    setTestState('recording');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: deviceId.value ? { deviceId: { exact: deviceId.value } } : true,
+      });
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => {
+          track.stop();
+        });
+        setTestState('transcribing');
+        void (async () => {
+          try {
+            const audio = await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer();
+            const result = await window.electron.testTranscribeVoice(audio, 'audio/webm');
+            if (result.error) {
+              setTestError(result.error);
+            } else {
+              setTestResult(result.text || '(heard nothing)');
+            }
+          } catch (err) {
+            setTestError(err instanceof Error ? err.message : String(err));
+          } finally {
+            setTestState('idle');
+          }
+        })();
+      };
+      recorder.start();
+      setTimeout(() => {
+        recorder.stop();
+      }, testRecordMs);
+    } catch (err) {
+      setTestError(err instanceof Error ? err.message : String(err));
+      setTestState('idle');
+    }
+  }
+
+  return (
+    <Box sx={{ width: '100%' }}>
+      <Divider sx={{ marginY: 2 }} />
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: 2,
+        }}
+      >
+        <FormControlLabel
+          label="Enable Voice Input (talk to Sims with your microphone)"
+          control={
+            <Checkbox checked={enabled.value} onChange={(change) => void enabled.setSetting(change.target.checked)} />
+          }
+        />
+        <HelpButton url="https://github.com/guspuffygit/sentient-sims-app/wiki/Voice" />
+      </Box>
+      {enabled.value ? (
+        <Stack spacing={2} sx={{ maxWidth: 640 }}>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>Hotkey:</Typography>
+            <Select
+              size="small"
+              value={hotkeyPresets.includes(hotkey.value) ? hotkey.value : hotkeyPresets[0]}
+              onChange={(change) => void hotkey.setSetting(change.target.value)}
+            >
+              {hotkeyPresets.map((preset) => (
+                <MenuItem key={preset} value={preset}>
+                  {preset}
+                </MenuItem>
+              ))}
+            </Select>
+            <Select
+              size="small"
+              value={hotkeyMode.value}
+              onChange={(change) => void hotkeyMode.setSetting(change.target.value)}
+            >
+              <MenuItem value="hold">Hold to talk</MenuItem>
+              <MenuItem value="toggle">Press to start/stop</MenuItem>
+            </Select>
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>Endpoint:</Typography>
+            <TextField
+              size="small"
+              fullWidth
+              value={endpoint.value}
+              onChange={(change) => void endpoint.setSetting(change.target.value)}
+              helperText="Any OpenAI-compatible /audio/transcriptions endpoint (OpenAI, Groq, local whisper server)"
+            />
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>API Key:</Typography>
+            <TextField
+              size="small"
+              fullWidth
+              type="password"
+              value={apiKey.value}
+              onChange={(change) => void apiKey.setSetting(change.target.value)}
+            />
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>Model:</Typography>
+            <TextField
+              size="small"
+              value={model.value}
+              onChange={(change) => void model.setSetting(change.target.value)}
+            />
+            <Typography sx={{ minWidth: 80 }}>Language:</Typography>
+            <TextField
+              size="small"
+              sx={{ width: 100 }}
+              value={language.value}
+              placeholder="auto"
+              onChange={(change) => void language.setSetting(change.target.value)}
+            />
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>Microphone:</Typography>
+            <Select
+              size="small"
+              displayEmpty
+              value={deviceId.value}
+              onChange={(change) => void deviceId.setSetting(change.target.value)}
+              sx={{ minWidth: 260 }}
+            >
+              <MenuItem value="">System default</MenuItem>
+              {devices.map((device) => (
+                <MenuItem key={device.deviceId} value={device.deviceId}>
+                  {device.label || `Microphone (${device.deviceId.slice(0, 8)})`}
+                </MenuItem>
+              ))}
+            </Select>
+            <Button
+              variant="outlined"
+              startIcon={<MicIcon />}
+              disabled={testState !== 'idle'}
+              onClick={() => void runTest()}
+            >
+              {testState === 'recording' ? 'Speak now…' : testState === 'transcribing' ? 'Transcribing…' : 'Test'}
+            </Button>
+          </Stack>
+          {testResult ? <FormHelperText>Heard: “{testResult}”</FormHelperText> : null}
+          {testError ? <FormHelperText error>Error: {testError}</FormHelperText> : null}
+          <FormHelperText>
+            Hold the hotkey while the game is focused, speak, and release — your words become your active Sim&apos;s
+            spoken line to whoever they&apos;re talking to.
+          </FormHelperText>
+        </Stack>
+      ) : null}
+    </Box>
+  );
+}

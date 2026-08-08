@@ -146,6 +146,30 @@ const electronHandler = {
 
     return () => ipcRenderer.removeListener('websocket-status-change', callback);
   },
+  onVoiceRecordStart: (callback: IpcCallback) => {
+    ipcRenderer.on('voice-record-start', callback);
+
+    return () => ipcRenderer.removeListener('voice-record-start', callback);
+  },
+  onVoiceRecordStop: (callback: IpcCallback) => {
+    ipcRenderer.on('voice-record-stop', callback);
+
+    return () => ipcRenderer.removeListener('voice-record-stop', callback);
+  },
+  onVoiceTranscript: (callback: IpcCallback) => {
+    ipcRenderer.on('voice-transcript', callback);
+
+    return () => ipcRenderer.removeListener('voice-transcript', callback);
+  },
+  transcribeVoice: (audio: ArrayBuffer, mimeType?: string): Promise<string> => {
+    return ipcRenderer.invoke('voice-transcribe', audio, mimeType) as Promise<string>;
+  },
+  testTranscribeVoice: (audio: ArrayBuffer, mimeType?: string): Promise<{ text?: string; error?: string }> => {
+    return ipcRenderer.invoke('voice-transcribe-test', audio, mimeType) as Promise<{ text?: string; error?: string }>;
+  },
+  notifyVoiceRecordError: (message: string) => {
+    ipcRenderer.send('voice-record-error', message);
+  },
   setAmplify: async (key: string, value: string): Promise<unknown> => {
     return ipcRenderer.invoke('set-amplify', key, value);
   },

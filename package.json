@@ -143,6 +143,7 @@
     "selenium-webdriver": "^4.17.0",
     "typescript": "^5.8.2",
     "typescript-eslint": "^8.45.0",
+    "uiohook-napi": "1.5.5",
     "vite": "^7.3.5",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.8"

@@ -352,15 +352,23 @@ export class AIService {
       // The event driving this boundary belongs to the NEW location — as do any other prefetches
       // already queued there — so only pending work from other (old) locations is flushed.
       this.ctx.generationQueue.flushToFallback(event.environment.location_id);
-      await this.runSceneReflection(previousScene);
+      // The traveller is the player's sim — the reflection is their private recollection
+      const traveller = event.sentient_sims.find((sentientSim) => sentientSim.is_player_sim);
+      await this.runSceneReflection(
+        previousScene,
+        traveller ? { simId: traveller.sim_id, simName: traveller.name } : undefined,
+      );
     }
   }
 
   // At a scene boundary the AI reflects on the scene that just ended: a sentence or two on what
-  // happened and how it felt, then one sentence per character interacted with. Stored as a normal
-  // memory row tagged event_type='reflection', so it surfaces in the Memories UI and feeds future
+  // happened and how it felt, then one sentence per character interacted with. First person from
+  // the pov sim's perspective and owner-stamped to them, exactly like monologue/thought rows
+  // (observed live 2026-08-09: with no identity anchor the model wrote a floating observer's
+  // review — Marisol's own reflection said "Interacting with Marisol Vega felt natural").
+  // Stored tagged event_type='reflection', so it surfaces in the Memories UI and feeds future
   // prompts via the <PAST_REFLECTIONS> block. Best-effort: any failure is logged and swallowed.
-  async runSceneReflection(previousScene: SceneState) {
+  async runSceneReflection(previousScene: SceneState, pov?: { simId: string; simName: string }) {
     try {
       const sceneMemories = this.ctx.memoryRepository.getSceneMemories(
         previousScene.locationId,
@@ -381,17 +389,24 @@ export class AIService {
         previousScene.startedAt,
       );
       const names = this.ctx.participantRepository.getParticipantNames(participantIds);
-      const namesList = names.length > 0 ? names.join(', ') : 'the people present';
+      // The reflecting sim doesn't get a sentence about "interacting with" themself
+      const others = pov ? names.filter((name) => name !== pov.simName) : names;
+      const namesList = others.length > 0 ? others.join(', ') : 'the people present';
 
       const transcript = this.ctx.promptBuilder
         .groupMemories(sceneMemories)
         .map((message) => message.content)
         .join('\n');
 
-      const systemPrompt = `The scene at ${location.name} (${location.lot_type}) has ended. Reflect on it in plain prose — no headers, labels, or lists.
-First, one or two sentences on what happened in the scene and how it felt.
-Then exactly one sentence for each of these characters — ${namesList} — about interacting with them and how it made you feel.
-Keep it concise and grounded. Do not invent events that are not in the scene below.`;
+      const identity = pov ? `You are ${pov.simName}. ` : '';
+      const othersLine =
+        others.length > 0
+          ? `Then exactly one sentence for each of these characters — ${namesList} — about interacting with them and how it made you feel.\n`
+          : '';
+      const systemPrompt = `${identity}The scene at ${location.name} (${location.lot_type}) has ended. Reflect on it in plain prose — no headers, labels, or lists.
+Write in first person ("I ..."), as your own private thoughts — never refer to yourself in the third person.
+First, one or two sentences on what happened in the scene and how it felt to you.
+${othersLine}Keep it concise and grounded. Do not invent events that are not in the scene below.`;
 
       const reflection = await this.runOneShot(
         'Scene Reflection',
@@ -414,14 +429,20 @@ Keep it concise and grounded. Do not invent events that are not in the scene bel
       }
 
       const reflectionMemory: MemoryEntity = {
-        content: text,
+        // Name-prefixed like monologue rows ("<Name> (thinking): ...") so the first-person
+        // prose stays attributed when it lands in shared blocks like <PAST_REFLECTIONS>
+        content: pov ? `${pov.simName} (reflecting): ${text}` : text,
         location_id: previousScene.locationId,
         event_type: 'reflection',
       };
       const participants: ParticipantDTO[] = participantIds.map((id) => ({ id }));
       // Reflections are internal monologue for retrieval/prompting; notifyMod false keeps
-      // the whole reflection prose from being pushed to the mod as one giant subtitle block
-      this.ctx.memoryRepository.createMemory({ memory: reflectionMemory, participants }, { notifyMod: false });
+      // the whole reflection prose from being pushed to the mod as one giant subtitle block.
+      // Owner-stamped: first-person "I" prose must never surface as another sim's own memory.
+      this.ctx.memoryRepository.createMemory(
+        { memory: reflectionMemory, participants, index: pov ? { owner: pov.simId } : undefined },
+        { notifyMod: false },
+      );
       log.info(`[Reflection] Saved reflection for scene ${previousScene.sceneId}: ${text}`);
     } catch (err) {
       log.error(`[Reflection] Failed to generate reflection for scene ${previousScene.sceneId}`, err);

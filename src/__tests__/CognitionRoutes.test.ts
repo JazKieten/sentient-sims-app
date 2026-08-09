@@ -181,8 +181,10 @@ describe('cognition routes', () => {
     });
 
     const reflectedScenes: unknown[] = [];
-    vi.spyOn(ctx.ai, 'runSceneReflection').mockImplementation((scene) => {
+    const reflectedPovs: unknown[] = [];
+    vi.spyOn(ctx.ai, 'runSceneReflection').mockImplementation((scene, pov) => {
       reflectedScenes.push(scene);
+      reflectedPovs.push(pov);
       return Promise.resolve();
     });
 
@@ -194,6 +196,8 @@ describe('cognition routes', () => {
     expect(result).toMatchObject({ ok: true, reflected: true, scene_id: scene?.sceneId });
     expect(reflectedScenes).toHaveLength(1);
     expect(reflectedScenes[0]).toMatchObject({ sceneId: scene?.sceneId, locationId: 42 });
+    // First-person reflections need to know whose head they're in
+    expect(reflectedPovs[0]).toMatchObject({ simId: '123', simName: 'Marisol Rocca' });
 
     // The old scene ended and a fresh one started at the same location, so the next
     // travel boundary only covers what happens after the nap

@@ -254,7 +254,10 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD.toString()]: {
         type: 'number',
-        default: 7,
+        // Live scores cluster 2-7: at 7 an NPC arc almost never fires (Phase D playtest
+        // peaked at 6 without arming), at 1 contentment itself stages Action Scenes
+        // (floodgates 2026-08-09). 6 lets genuine wants through.
+        default: 6,
       },
       [SettingsEnum.VOICE_INPUT_ENABLED.toString()]: {
         type: 'boolean',

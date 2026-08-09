@@ -357,18 +357,24 @@ export class AIService {
       await this.runSceneReflection(
         previousScene,
         traveller ? { simId: traveller.sim_id, simName: traveller.name } : undefined,
+        'travel',
       );
     }
   }
 
-  // At a scene boundary the AI reflects on the scene that just ended: a sentence or two on what
-  // happened and how it felt, then one sentence per character interacted with. First person from
-  // the pov sim's perspective and owner-stamped to them, exactly like monologue/thought rows
+  // At a scene boundary the sim writes a short diary entry about the stretch that just ended:
+  // what happened, how they feel about it now, and the people they spent it with — framed as
+  // end-of-day before sleep, or "before I left" on a travel boundary. First person from the
+  // pov sim's perspective and owner-stamped to them, exactly like monologue/thought rows
   // (observed live 2026-08-09: with no identity anchor the model wrote a floating observer's
   // review — Marisol's own reflection said "Interacting with Marisol Vega felt natural").
   // Stored tagged event_type='reflection', so it surfaces in the Memories UI and feeds future
   // prompts via the <PAST_REFLECTIONS> block. Best-effort: any failure is logged and swallowed.
-  async runSceneReflection(previousScene: SceneState, pov?: { simId: string; simName: string }) {
+  async runSceneReflection(
+    previousScene: SceneState,
+    pov?: { simId: string; simName: string },
+    boundary?: 'sleep' | 'travel',
+  ) {
     try {
       const sceneMemories = this.ctx.memoryRepository.getSceneMemories(
         previousScene.locationId,
@@ -399,14 +405,21 @@ export class AIService {
         .join('\n');
 
       const identity = pov ? `You are ${pov.simName}. ` : '';
+      // Diary framing follows the boundary: sleep closes the day, travel closes a visit
+      const framing =
+        boundary === 'sleep'
+          ? `The day is winding down at ${location.name} and you're writing in your diary before sleep.`
+          : boundary === 'travel'
+            ? `You've just left ${location.name} and are writing in your diary about your time there.`
+            : `A stretch of your day at ${location.name} has ended and you're writing it down in your diary.`;
       const othersLine =
         others.length > 0
-          ? `Then exactly one sentence for each of these characters — ${namesList} — about interacting with them and how it made you feel.\n`
+          ? `Mention each of the people you spent this time with — ${namesList} — what passed between you and how they left you feeling.\n`
           : '';
-      const systemPrompt = `${identity}The scene at ${location.name} (${location.lot_type}) has ended. Reflect on it in plain prose — no headers, labels, or lists.
-Write in first person ("I ..."), as your own private thoughts — never refer to yourself in the third person.
-First, one or two sentences on what happened in the scene and how it felt to you.
-${othersLine}Keep it concise and grounded. Do not invent events that are not in the scene below.`;
+      const systemPrompt = `${identity}${framing}
+Write a short diary entry — a few sentences in your own voice: first person, past tense, plain prose. No headers, no labels, no lists, and no greeting like "Dear Diary" — just the entry itself. Never refer to yourself in the third person.
+Sum up what happened and how you feel about it now.
+${othersLine}Keep it concise and grounded. Do not invent events that are not in the notes below.`;
 
       const reflection = await this.runOneShot(
         'Scene Reflection',
@@ -431,7 +444,7 @@ ${othersLine}Keep it concise and grounded. Do not invent events that are not in 
       const reflectionMemory: MemoryEntity = {
         // Name-prefixed like monologue rows ("<Name> (thinking): ...") so the first-person
         // prose stays attributed when it lands in shared blocks like <PAST_REFLECTIONS>
-        content: pov ? `${pov.simName} (reflecting): ${text}` : text,
+        content: pov ? `${pov.simName} (diary): ${text}` : text,
         location_id: previousScene.locationId,
         event_type: 'reflection',
       };

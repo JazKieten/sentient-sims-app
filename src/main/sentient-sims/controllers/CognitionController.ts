@@ -176,8 +176,8 @@ export class CognitionController {
         return res.json({ ok: true, reflected: false, reason: 'no active scene' });
       }
       log.info(`[Cognition] sleep boundary for ${who}: reflecting on scene ${previousScene.sceneId}`);
-      // The sleeper is the reflecting mind — their day closes in their own first-person voice
-      await this.ctx.ai.runSceneReflection(previousScene, { simId, simName: who });
+      // The sleeper is the reflecting mind — their day closes as a diary entry in their voice
+      await this.ctx.ai.runSceneReflection(previousScene, { simId, simName: who }, 'sleep');
       return res.json({ ok: true, reflected: true, scene_id: previousScene.sceneId });
     } catch (err) {
       log.error('Error handling sleep boundary', err);

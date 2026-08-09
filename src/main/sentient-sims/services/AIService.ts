@@ -253,32 +253,33 @@ function once(callback: () => void): () => void {
   };
 }
 
-// A group social arrives with every member of the conversation, but the scene plays as a
-// pair: the in-game actor keeps the first slot (pre-actions attribute the interaction to
-// them) and a random other member takes the second, so a long group conversation rotates
-// through partners instead of replaying the same two sims. Relationships are trimmed to
-// the chosen pair — the event carries pairwise bits for the whole group, and bits
-// referencing sims outside the narrowed event crash formatSims' lookup.
+// FLOODGATES EXPERIMENT: a group social keeps every member of the conversation as a
+// performer (a three-sim discussion plays as a three-sim scene) instead of narrowing to
+// an actor+partner pair. Beyond the cap, the in-game actor keeps the first slot
+// (pre-actions attribute the interaction to them), the player sim is always kept, and
+// the rest fill randomly. Relationships are trimmed to the kept set — the event carries
+// pairwise bits for the whole group, and bits referencing sims outside the event crash
+// formatSims' lookup.
+export const MAX_SCENE_PERFORMERS = 8;
 export function toPrimaryInteractionEvent<T extends SSEvent>(event: T): T {
-  if (event.sentient_sims.length <= 2) {
+  if (event.sentient_sims.length <= MAX_SCENE_PERFORMERS) {
     return event;
   }
   const [actor, ...others] = event.sentient_sims;
-  // When an NPC initiates a group beat, the player's sim joins as the partner more often
-  // than not — the main character carries the conversation — while still leaving room
-  // for NPC-NPC exchanges; player-initiated beats rotate uniformly through the group
-  const playerPartner = actor.is_player_sim ? undefined : others.find((sim) => sim.is_player_sim);
-  const partner =
-    playerPartner && Math.random() < 0.6 ? playerPartner : others[Math.floor(Math.random() * others.length)];
-  const pair = [actor, partner];
-  const pairIds = new Set(pair.map((sim) => sim.sim_id));
+  const playerSim = actor.is_player_sim ? undefined : others.find((sim) => sim.is_player_sim);
+  const kept = [actor, ...(playerSim ? [playerSim] : [])];
+  const pool = others.filter((sim) => sim !== playerSim);
+  while (kept.length < MAX_SCENE_PERFORMERS && pool.length > 0) {
+    kept.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  const keptIds = new Set(kept.map((sim) => sim.sim_id));
   return {
     ...event,
-    sentient_sims: pair,
+    sentient_sims: kept,
     relationships: {
       ...event.relationships,
       relationship_bits: (event.relationships?.relationship_bits ?? []).filter(
-        (bit) => pairIds.has(bit.sim_one_id) && pairIds.has(bit.sim_two_id),
+        (bit) => keptIds.has(bit.sim_one_id) && keptIds.has(bit.sim_two_id),
       ),
     },
   };
@@ -585,8 +586,7 @@ ${othersLine}Keep it concise and grounded. Do not invent events that are not in 
   }
 
   async handleContinue(event: ContinueInteractionEvent) {
-    // Group continues narrow to a pair like fresh interactions do (a 7-sim continue would
-    // otherwise run 7 actor turns); the random partner keeps the group convo rotating
+    // Group continues keep the full performer set (capped) like fresh interactions do
     const primaryEvent = toPrimaryInteractionEvent(event);
     if (primaryEvent.sentient_sims.length >= 1) {
       // Directed continue needs prior memories to pick up from; fall through when there are none

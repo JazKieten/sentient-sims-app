@@ -187,6 +187,21 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   });
 }
 
+// One LLM stage in the cognition lane. The timeout/retry clock starts when the stage
+// LEAVES the queue — the lane runs one stage at a time below foreground dialogue work,
+// so a stage can sit queued far longer than any healthy call runs. Wrapping the enqueue
+// instead burned the whole 15s budget on queue wait under load and killed healthy
+// stages, retrying them to the back of the line (observed live 2026-08-09 floodgates:
+// 38 armed desires, 9 timeout deaths, 4 dispatches). Retrying inside the held slot also
+// means a genuine provider stall retries immediately instead of re-queueing.
+function runStage<T>(
+  queue: { runCognition<R>(task: () => Promise<R>): Promise<R> },
+  label: string,
+  makeAttempt: () => Promise<T>,
+): Promise<T> {
+  return queue.runCognition(() => withRetry(makeAttempt, label));
+}
+
 export type CognitionStats = {
   deliberations: number;
   dispatches: number;
@@ -648,19 +663,15 @@ export class CognitionService {
     } else {
       // The tick D/M/R beat: monologue, then scores. The director's job at tick cadence
       // is deterministic — the situation prompt IS the briefing.
-      const monologue = await withRetry(
-        () =>
-          this.ctx.generationQueue.runCognition(() =>
-            this.ctx.ai.runOneShot(
-              `Cognition Monologue: ${simLabel}`,
-              TICK_MONOLOGUE_SYSTEM_PROMPT,
-              situationPrompt,
-              120,
-              undefined,
-              AIActionType.COGNITION,
-            ),
-          ),
-        'tick monologue',
+      const monologue = await runStage(this.ctx.generationQueue, 'tick monologue', () =>
+        this.ctx.ai.runOneShot(
+          `Cognition Monologue: ${simLabel}`,
+          TICK_MONOLOGUE_SYSTEM_PROMPT,
+          situationPrompt,
+          120,
+          undefined,
+          AIActionType.COGNITION,
+        ),
       );
       tickExchanges.push(monologue.exchange);
       thought = monologue.text.trim().slice(0, 300);
@@ -671,19 +682,15 @@ export class CognitionService {
         return;
       }
 
-      const scored = await withRetry(
-        () =>
-          this.ctx.generationQueue.runCognition(() =>
-            this.ctx.ai.runOneShot(
-              `Cognition Scores: ${simLabel}`,
-              TICK_SCORES_SYSTEM_PROMPT,
-              `${situationPrompt}\n\n${simLabel}'s inner monologue right now: ${thought}`,
-              120,
-              undefined,
-              AIActionType.COGNITION,
-            ),
-          ),
-        'tick scores',
+      const scored = await runStage(this.ctx.generationQueue, 'tick scores', () =>
+        this.ctx.ai.runOneShot(
+          `Cognition Scores: ${simLabel}`,
+          TICK_SCORES_SYSTEM_PROMPT,
+          `${situationPrompt}\n\n${simLabel}'s inner monologue right now: ${thought}`,
+          120,
+          undefined,
+          AIActionType.COGNITION,
+        ),
       );
       tickExchanges.push(scored.exchange);
       const tickScores = parseTickScores(scored.text);
@@ -811,21 +818,17 @@ export class CognitionService {
   }): Promise<CognitionIntent | undefined> {
     const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges } = params;
     try {
-      const optionsShot = await withRetry(
-        () =>
-          this.ctx.generationQueue.runCognition(() =>
-            this.ctx.ai.runOneShot(
-              `Action Options: ${simLabel}`,
-              ACTION_OPTIONS_SYSTEM_PROMPT,
-              `${situationPrompt}\n\n${simLabel}'s inner monologue: ${thought ?? '(none)'}${
-                actionReason ? `\nWhat is pulling at them: ${actionReason}` : ''
-              }`,
-              400,
-              undefined,
-              AIActionType.ACTION_SCENE,
-            ),
-          ),
-        'action options',
+      const optionsShot = await runStage(this.ctx.generationQueue, 'action options', () =>
+        this.ctx.ai.runOneShot(
+          `Action Options: ${simLabel}`,
+          ACTION_OPTIONS_SYSTEM_PROMPT,
+          `${situationPrompt}\n\n${simLabel}'s inner monologue: ${thought ?? '(none)'}${
+            actionReason ? `\nWhat is pulling at them: ${actionReason}` : ''
+          }`,
+          400,
+          undefined,
+          AIActionType.ACTION_SCENE,
+        ),
       );
       exchanges.push(optionsShot.exchange);
       const parsedOptions = parseActionOptions(optionsShot.text);
@@ -873,21 +876,17 @@ export class CognitionService {
       let pickedIndex = 0;
       let motivation: string | undefined;
       if (valid.length > 1) {
-        const choiceShot = await withRetry(
-          () =>
-            this.ctx.generationQueue.runCognition(() =>
-              this.ctx.ai.runOneShot(
-                `Action Choice: ${simLabel}`,
-                ACTION_CHOICE_SYSTEM_PROMPT,
-                `${parsedOptions.scene ?? ''}\n\nYou are ${simLabel}. Your inner monologue: ${thought ?? '(none)'}${
-                  actionReason ? `\nWhat is pulling at you: ${actionReason}` : ''
-                }\n\nOptions:\n${menu}`,
-                150,
-                undefined,
-                AIActionType.ACTION_SCENE,
-              ),
-            ),
-          'action choice',
+        const choiceShot = await runStage(this.ctx.generationQueue, 'action choice', () =>
+          this.ctx.ai.runOneShot(
+            `Action Choice: ${simLabel}`,
+            ACTION_CHOICE_SYSTEM_PROMPT,
+            `${parsedOptions.scene ?? ''}\n\nYou are ${simLabel}. Your inner monologue: ${thought ?? '(none)'}${
+              actionReason ? `\nWhat is pulling at you: ${actionReason}` : ''
+            }\n\nOptions:\n${menu}`,
+            150,
+            undefined,
+            AIActionType.ACTION_SCENE,
+          ),
         );
         exchanges.push(choiceShot.exchange);
         const choice = parseActionChoice(choiceShot.text);
@@ -897,21 +896,17 @@ export class CognitionService {
         motivation = choice?.motivation;
       }
 
-      const reviewShot = await withRetry(
-        () =>
-          this.ctx.generationQueue.runCognition(() =>
-            this.ctx.ai.runOneShot(
-              `Action Review: ${simLabel}`,
-              ACTION_REVIEW_SYSTEM_PROMPT,
-              `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].intent.action}] ${valid[pickedIndex].label}${
-                motivation ? `\nTheir motivation: ${motivation}` : ''
-              }`,
-              60,
-              undefined,
-              AIActionType.ACTION_SCENE,
-            ),
-          ),
-        'action review',
+      const reviewShot = await runStage(this.ctx.generationQueue, 'action review', () =>
+        this.ctx.ai.runOneShot(
+          `Action Review: ${simLabel}`,
+          ACTION_REVIEW_SYSTEM_PROMPT,
+          `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].intent.action}] ${valid[pickedIndex].label}${
+            motivation ? `\nTheir motivation: ${motivation}` : ''
+          }`,
+          60,
+          undefined,
+          AIActionType.ACTION_SCENE,
+        ),
       );
       exchanges.push(reviewShot.exchange);
       const review = parseActionChoice(reviewShot.text);

@@ -6,6 +6,7 @@
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
+import { isRomanceAge } from '../models/ActionLoadout';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
@@ -316,8 +317,18 @@ export function buildCognitionUserPrompt(
     const plain: string[] = [];
     const romantic: string[] = [];
     const mean: string[] = [];
+    // Romance needs BOTH sides adult-or-teen: the actor, and at least one same-room sim
+    // who could receive it. Unknown age (older mod build) blocks it. Live 2026-08-10:
+    // nothing read age anywhere, so a CHILD's prompt offered 'flirt' at whoever was in
+    // the room — and an adult's offered it at a child.
+    const romanceAllowed =
+      isRomanceAge(entry.self?.age) &&
+      (entry.sims ?? []).some((perceived) => perceived.tier === 'same_room' && isRomanceAge(perceived.age));
     SOCIAL_ACTIONS.forEach((action) => {
       if (action !== 'chat' && offLoadoutActions?.has(action)) {
+        return;
+      }
+      if (ROMANTIC_SOCIALS.has(action) && !romanceAllowed) {
         return;
       }
       if (ROMANTIC_SOCIALS.has(action)) {

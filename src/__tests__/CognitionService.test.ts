@@ -132,11 +132,13 @@ function idleSimReport(seq: number, overrides: Partial<SimStateReport> = {}): Si
         sim_id: '100',
         sim_name: 'Elliot',
         location: { zone_id: 1 },
-        sims: [{ sim_id: '200', tier: 'same_room', name: 'Adrian', distance: 3, social: { has_met: true } }],
+        sims: [
+          { sim_id: '200', tier: 'same_room', name: 'Adrian', distance: 3, age: 'ADULT', social: { has_met: true } },
+        ],
         objects: [
           { object_id: '900', action_keys: ['grab_snack'], name: 'object_fridge', tier: 'same_room', distance: 4 },
         ],
-        self: { mood: 'Fine', needs: { hunger: 50 } },
+        self: { mood: 'Fine', needs: { hunger: 50 }, age: 'ADULT' },
         activity: { queue: [], running: null, in_social: false },
       },
     ],
@@ -529,10 +531,11 @@ describe('CognitionService', () => {
         tier: 'same_room',
         name: 'Adrian',
         distance: 3,
+        age: 'ADULT',
         // The SocialContext bit is transient conversation tone — it must not render
         social: { has_met: true, friendship: 62, romance: 18, bits: ['relbit_SocialContext_Awkwardness_Casual'] },
       },
-      { sim_id: '300', tier: 'same_room', name: 'Kira', distance: 4, social: { has_met: false } },
+      { sim_id: '300', tier: 'same_room', name: 'Kira', distance: 4, age: 'ADULT', social: { has_met: false } },
     ];
     cache.ingest(report);
     await settle();
@@ -545,6 +548,29 @@ describe('CognitionService', () => {
     expect(prompt).toContain('OFFERED social actions');
     expect(prompt).toContain('romantic only: flirt, kiss');
     expect(prompt).toContain('mean: insult');
+  });
+
+  it('never offers romance across an age line, in either direction', async () => {
+    // Live 2026-08-10: age rode every report and was read by nothing, so a CHILD's
+    // prompt offered 'flirt' at whoever happened to be in the room
+    const child = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const childReport = idleSimReport(1);
+    childReport.sims![0].self!.age = 'CHILD';
+    child.cache.ingest(childReport);
+    await settle();
+    expect(child.prompts[0]).toContain('OFFERED social actions');
+    expect(child.prompts[0]).not.toContain('romantic only');
+    // Everything else survives — this is a romance gate, not a social blackout
+    expect(child.prompts[0]).toContain('mean: insult');
+
+    // ...and the other direction: an adult whose only company is a child
+    const adult = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const adultReport = idleSimReport(1);
+    adultReport.sims![0].sims![0].age = 'CHILD';
+    adult.cache.ingest(adultReport);
+    await settle();
+    expect(adult.prompts[0]).toContain('OFFERED social actions');
+    expect(adult.prompts[0]).not.toContain('romantic only');
   });
 
   it('cuts go_out from the vocabulary when the sim is too tired', async () => {

@@ -66,6 +66,21 @@ export const DISCRETIONARY_ACTIONS = new Set([
   'invite_in',
 ]);
 
+// Romance is gated on age at every stage: the planner never offers these keys to a
+// non-adult, validate() drops them from a loadout, and the prompt never renders them
+// toward a non-adult target. Observed live 2026-08-10: nothing read age anywhere, and
+// the nightly planner handed 'flirt' to Mackenzie Scott — a CHILD — two days running.
+export const ROMANCE_ACTIONS = new Set(['flirt', 'kiss']);
+
+// Ages the mod reports (str(sim_info.age) minus the 'Age.' prefix). Only these may use
+// or receive a romance verb. Unknown/absent age blocks romance — an older mod build that
+// sends no age on perceived sims must fail CLOSED here, not open.
+const ROMANCE_AGES = new Set(['TEEN', 'YOUNGADULT', 'ADULT', 'ELDER']);
+
+export function isRomanceAge(age: string | undefined): boolean {
+  return age !== undefined && ROMANCE_AGES.has(age.trim().toUpperCase());
+}
+
 // Grouped view of DISCRETIONARY_ACTIONS for planner prompts — same keys, human order
 export const DISCRETIONARY_GROUPS: Record<string, string[]> = {
   fun: ['watch_tv', 'read_book', 'browse_web', 'play_piano', 'play_guitar', 'dance'],

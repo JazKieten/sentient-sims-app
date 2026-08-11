@@ -6,6 +6,7 @@ import { GoalPoolEntry, SimStateEntry } from 'main/sentient-sims/models/SimState
 import {
   ALWAYS_AVAILABLE_ACTIONS,
   DISCRETIONARY_ACTIONS,
+  isRomanceAge,
   offLoadoutActions,
 } from 'main/sentient-sims/models/ActionLoadout';
 
@@ -125,6 +126,7 @@ describe('DailyPlanService validation', () => {
     const output = service.validate(
       { goals: [], loadout: ['dance', 'gossip', 'flirt', 'hug', 'watch_tv', 'read_book'] },
       POOL,
+      'ADULT',
     );
     expect(output.loadout).toEqual(['dance', 'gossip', 'flirt']);
   });
@@ -199,7 +201,7 @@ describe('DailyPlanService prompts', () => {
       ],
       source: 'sleep',
     };
-    const block = service.buildChoicesBlock(POOL, yesterday);
+    const block = service.buildChoicesBlock(POOL, yesterday, 'ADULT');
     expect(block).toContain('Chat with 3 sims [the game marks this one complete]');
     expect(block).toContain('Buy a painting');
     expect(block).not.toContain('Buy a painting [the game marks this one complete]');
@@ -253,6 +255,33 @@ describe('DailyPlanService lazy generation', () => {
     service.acceptPlan('100', 12, { goals: [] }, 'sleep');
     await service.generateLazy(simEntry(), 12);
     expect(plannerPrompts).toHaveLength(0);
+  });
+});
+
+describe('romance age gate', () => {
+  it('only teens and adults may hold or receive a romance verb', () => {
+    ['TEEN', 'YOUNGADULT', 'ADULT', 'ELDER', 'adult'].forEach((age) => expect(isRomanceAge(age)).toBe(true));
+    ['CHILD', 'TODDLER', 'INFANT'].forEach((age) => expect(isRomanceAge(age)).toBe(false));
+    // Unknown age fails CLOSED — an older mod build sends none on perceived sims
+    expect(isRomanceAge(undefined)).toBe(false);
+    expect(isRomanceAge('')).toBe(false);
+  });
+
+  it('strips romance keys from a child loadout but keeps an adult one', () => {
+    const { service } = buildService();
+    const raw = { loadout: ['read_book', 'flirt', 'hug', 'kiss', 'tell_joke'] };
+
+    // Live 2026-08-10: Mackenzie Scott, a CHILD, was handed 'flirt' two days running
+    expect(service.validate(raw, POOL, 'CHILD').loadout).toEqual(['read_book', 'hug', 'tell_joke']);
+    expect(service.validate(raw, POOL, 'ADULT').loadout).toEqual(['read_book', 'flirt', 'hug', 'kiss', 'tell_joke']);
+    // No age at all is unknown, so romance is dropped
+    expect(service.validate(raw, POOL).loadout).toEqual(['read_book', 'hug', 'tell_joke']);
+  });
+
+  it('never shows a child the romance group in the planner prompt', () => {
+    const { service } = buildService();
+    expect(service.buildChoicesBlock(POOL, undefined, 'CHILD')).not.toMatch(/flirt|kiss|romance/);
+    expect(service.buildChoicesBlock(POOL, undefined, 'ADULT')).toMatch(/romance: flirt, kiss/);
   });
 });
 

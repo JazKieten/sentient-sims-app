@@ -415,6 +415,8 @@ export class AIService {
         todaysPlan: dayThatEnded,
         description: this.ctx.dailyPlan.participantDescription(pov.simId, pov.simName),
         traits: entry.self?.traits ?? [],
+        // Gates the romance group out of the planner's ACTION STYLES for non-adults
+        age: entry.self?.age,
       };
     } catch (err) {
       log.warn('[DailyPlan] sleep plan context failed; running plain reflection', err);
@@ -486,7 +488,7 @@ ${othersLine}Keep it concise and grounded. Do not invent events that are not in 
           : `\n- "goal_review": [] (you had no goals set today).`;
       const systemPrompt = planContext
         ? `${identity}${framing} Before sleep you also set intentions for tomorrow.
-${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(planContext.pool, planContext.todaysPlan)}
+${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(planContext.pool, planContext.todaysPlan, planContext.age)}
 
 Reply with ONLY a JSON object:
 {"diary": "the diary entry", "goal_review": [{"id": "<goal id>", "verdict": "met|partial|ignored"}], "goals": ["<goal id>"], "persona": "one sentence", "loadout": ["<action key>"]}
@@ -514,7 +516,7 @@ ${diaryRules}`;
           text = cleanupAIOutput(parsed.diary);
           try {
             this.ctx.dailyPlan.recordReview(pov.simId, planContext.reviewDay, parsed.goal_review);
-            const validated = this.ctx.dailyPlan.validate(parsed, planContext.pool);
+            const validated = this.ctx.dailyPlan.validate(parsed, planContext.pool, planContext.age);
             this.ctx.dailyPlan.acceptPlan(pov.simId, planContext.targetDay, validated, 'sleep');
           } catch (err) {
             log.warn(`[DailyPlan] failed to accept sleep plan for ${pov.simName}`, err);

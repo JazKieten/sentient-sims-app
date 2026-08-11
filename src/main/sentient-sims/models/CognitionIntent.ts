@@ -5,6 +5,7 @@
 // POST, and that rule lives in CognitionService's state machine, not in any prompt.
 
 import { SimStateEntry } from './SimStateReport';
+import { ROMANCE_ACTIONS, isRomanceAge } from './ActionLoadout';
 
 export type CognitionIntentKind = 'action' | 'speak' | 'continue' | 'wait';
 
@@ -207,7 +208,14 @@ export function validateIntent(
     }
     // Chat-first: everything but 'chat' fails on strangers with a missing has_met bit.
     // Coerced in logic so the model can't waste a tick learning the rule.
-    const coerced = target.hasMet ? action : 'chat';
+    //
+    // Age gate, belt-and-braces: the prompt no longer offers romance across an age line,
+    // but a stage that names one anyway must never dispatch it. Coerced rather than
+    // rejected so the tick still spends on something.
+    const targetAge = (entry.sims ?? []).find((perceived) => perceived.sim_id === candidate.target_sim_id)?.age;
+    const romanceBlocked =
+      ROMANCE_ACTIONS.has(action) && !(isRomanceAge(entry.self?.age) && isRomanceAge(targetAge));
+    const coerced = target.hasMet && !romanceBlocked ? action : 'chat';
     return {
       ok: true,
       intent: { ...candidate, action: coerced, thought },

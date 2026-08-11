@@ -7,6 +7,9 @@ export type PerceivedSim = {
   distance?: number;
   // Present only for same_room: identity is never learned through a wall
   name?: string;
+  // Same_room only. Gates romance on the TARGET, not just the actor (see isRomanceAge).
+  // Absent on older mod builds, which reads as unknown and blocks romance.
+  age?: string;
   doing?: string;
   // Observer -> perceived relationship: the has_met gate plus the lore layer
   social?: {

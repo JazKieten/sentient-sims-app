@@ -2,7 +2,7 @@ import log from 'electron-log';
 import { ApiContext } from './ApiContext';
 import { DailyPlan, DailyPlanGoalReview, DailyPlanSource, GoalVerdict } from '../models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from '../models/SimStateReport';
-import { DISCRETIONARY_ACTIONS, DISCRETIONARY_GROUPS } from '../models/ActionLoadout';
+import { DISCRETIONARY_ACTIONS, DISCRETIONARY_GROUPS, ROMANCE_ACTIONS, isRomanceAge } from '../models/ActionLoadout';
 import { AIActionType } from '../models/AIActionType';
 
 // Each game day a household sim carries a plan: 1-2 goals picked FROM THE GAME'S OWN
@@ -97,7 +97,9 @@ export class DailyPlanService {
 
   // Validate raw planner output against the pool and the discretionary set — the same
   // bind-to-offered philosophy as validateIntent: anything not offered dies silently.
-  validate(raw: Record<string, unknown>, pool: GoalPoolEntry[]): PlannerOutput {
+  // `age` gates romance: a non-adult, or a sim whose age we don't know, never keeps a
+  // romance key even if the model names one.
+  validate(raw: Record<string, unknown>, pool: GoalPoolEntry[], age?: string): PlannerOutput {
     const poolById = new Map(pool.map((entry) => [entry.id, entry]));
     const goals: GoalPoolEntry[] = [];
     if (Array.isArray(raw.goals)) {
@@ -127,7 +129,8 @@ export class DailyPlanService {
             .toLowerCase()
             .replace(/[\s-]+/g, '_'),
         )
-        .filter((key) => DISCRETIONARY_ACTIONS.has(key));
+        .filter((key) => DISCRETIONARY_ACTIONS.has(key))
+        .filter((key) => !ROMANCE_ACTIONS.has(key) || isRomanceAge(age));
       const deduped = [...new Set(keys)].slice(0, this.ctx.settings.dailyLoadoutSize);
       loadout = deduped.length >= MIN_LOADOUT ? deduped : undefined;
     }
@@ -220,7 +223,7 @@ export class DailyPlanService {
 
   // Prompt fragment shared by the sleep and lazy planners: the goal pool (choose by id)
   // and the discretionary action styles (pick the day's loadout).
-  buildChoicesBlock(pool: GoalPoolEntry[], includeYesterday?: DailyPlan): string {
+  buildChoicesBlock(pool: GoalPoolEntry[], includeYesterday?: DailyPlan, age?: string): string {
     const lines: string[] = [];
     if (includeYesterday && includeYesterday.goals.length > 0) {
       // Pool-absence is game-verified completion ONLY for durable sources; wants
@@ -239,7 +242,12 @@ export class DailyPlanService {
     const loadoutSize = this.ctx.settings.dailyLoadoutSize;
     lines.push('', `ACTION STYLES you may prepare for the day — pick ${loadoutSize} keys, ONLY from these:`);
     Object.entries(DISCRETIONARY_GROUPS).forEach(([group, keys]) => {
-      lines.push(`${group}: ${keys.join(', ')}`);
+      // A non-adult is never shown the romance group at all — a key the model was never
+      // offered is one it cannot pick, which is cheaper than filtering it afterwards
+      const offered = isRomanceAge(age) ? keys : keys.filter((key) => !ROMANCE_ACTIONS.has(key));
+      if (offered.length > 0) {
+        lines.push(`${group}: ${offered.join(', ')}`);
+      }
     });
     return lines.join('\n');
   }
@@ -258,6 +266,7 @@ export class DailyPlanService {
       const simLabel = entry.sim_name ?? simId;
       const description = this.participantDescription(simId, simLabel);
       const traits = entry.self?.traits ?? [];
+      const age = entry.self?.age;
       const loadoutSize = this.ctx.settings.dailyLoadoutSize;
 
       const systemPrompt = `You are the inner voice of one Sim in The Sims 4, setting intentions for the rest of today.
@@ -281,7 +290,7 @@ Reply with ONLY a JSON object:
         traits.length > 0 ? `Traits: ${traits.join(', ')}` : '',
         hourLine,
         '',
-        this.buildChoicesBlock(pool),
+        this.buildChoicesBlock(pool, undefined, age),
       ]
         .filter(Boolean)
         .join('\n');
@@ -298,7 +307,7 @@ Reply with ONLY a JSON object:
         );
         const parsed = parsePlannerJson(shot.text);
         if (parsed) {
-          const validated = this.validate(parsed, pool);
+          const validated = this.validate(parsed, pool, age);
           if (validated.goals.length > 0 || validated.persona || validated.loadout) {
             output = validated;
           }

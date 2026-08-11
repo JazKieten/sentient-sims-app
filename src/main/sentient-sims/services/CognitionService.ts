@@ -308,10 +308,23 @@ export class CognitionService {
   // is only ever declared by the mod's outcome report — never by dispatch acceptance.
   onOutcome(event: InteractionOutcomeEvent) {
     const runtime = this.runtimes.get(event.sim_id);
-    if (!runtime || runtime.phase !== 'PENDING_OUTCOME') {
+    if (!runtime) {
       return;
     }
     if (event.request_id && runtime.pendingRequestId && event.request_id !== runtime.pendingRequestId) {
+      return;
+    }
+    if (runtime.phase !== 'PENDING_OUTCOME') {
+      // The outcome landed after the 90s release already gave up on it. The release
+      // suppressed the verb on the assumption the world never answered — but for a long
+      // action the mod answers late with "still running when the app timed out; left it
+      // running", so the world DID answer and the verb works. Leaving the suppression
+      // told a Sim mid-song that playing guitar was "NOT possible right now, do not
+      // choose" while her only goal that day was to practise an instrument (observed
+      // live 2026-08-10). Lift it; never extend one from here.
+      if (event.outcome === 'success' && event.action && !ONE_SHOT_ACTIONS.has(event.action)) {
+        runtime.suppressedUntil.delete(event.action);
+      }
       return;
     }
     if (event.outcome !== 'success' && event.action) {

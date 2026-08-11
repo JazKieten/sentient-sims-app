@@ -268,6 +268,28 @@ describe('CognitionService', () => {
     expect(cognition.getStats().invalidIntents).toBe(1);
   });
 
+  it('lifts the timeout suppression when the action reports success late', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(95_000);
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+
+    // A long action answers late: the mod left it running and reports success. The
+    // release had already suppressed the verb assuming silence — the world answered,
+    // so the verb must come back (live 2026-08-10: a Sim mid-song was told 'play
+    // guitar' was NOT possible while her only goal was to practise an instrument)
+    cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'grab_snack' });
+
+    cache.ingest(idleSimReport(2));
+    await settle();
+    expect(dispatched).toHaveLength(2);
+    expect(cognition.getStats().invalidIntents).toBe(0);
+  });
+
   it('suggest mode logs the would-be intent without dispatching', async () => {
     const { cache, cognition, dispatched, storedMemories } = buildCtx({ autonomyLevel: 'suggest' });
     cache.ingest(idleSimReport(1));

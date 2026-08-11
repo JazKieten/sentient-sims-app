@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { DailyPlanService, parsePlannerJson } from 'main/sentient-sims/services/DailyPlanService';
-import { DailyPlan } from 'main/sentient-sims/models/DailyPlan';
+import { DailyPlan, sleepPlanDays } from 'main/sentient-sims/models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from 'main/sentient-sims/models/SimStateReport';
 import {
   ALWAYS_AVAILABLE_ACTIONS,
@@ -156,6 +156,23 @@ describe('DailyPlanService persistence', () => {
     expect(service.needsLazyPlan('100', undefined)).toBe(false);
   });
 
+  it('lets a sleep plan replace a lazy row once, keeping any review already on it', () => {
+    const { service, rows } = buildService();
+    // Bedtime after midnight: the lazy planner has already filled the day the sim is in
+    service.acceptPlan('100', 44, { goals: [POOL[2]], persona: 'Drifting.' }, 'lazy');
+    service.recordReview('100', 44, [{ id: 'Whim_BuyPainting', verdict: 'partial' }]);
+
+    const upgraded = service.acceptPlan('100', 44, { goals: [POOL[0]], persona: 'Be bold.' }, 'sleep');
+    expect(upgraded?.source).toEqual('sleep');
+    expect(upgraded?.persona).toEqual('Be bold.');
+    // savePlan is INSERT OR REPLACE — the verdicts must survive the row being rewritten
+    expect(rows.get('100|44')?.review).toEqual([{ id: 'Whim_BuyPainting', verdict: 'partial' }]);
+
+    // ...but only once: a second sleep boundary that night must not overwrite it
+    const again = service.acceptPlan('100', 44, { goals: [], persona: 'Someone else.' }, 'sleep');
+    expect(again?.persona).toEqual('Be bold.');
+  });
+
   it('records reviews only for planned goals with valid verdicts', () => {
     const { service, rows } = buildService();
     service.acceptPlan('100', 10, { goals: [POOL[0], POOL[1]] }, 'sleep');
@@ -236,6 +253,32 @@ describe('DailyPlanService lazy generation', () => {
     service.acceptPlan('100', 12, { goals: [] }, 'sleep');
     await service.generateLazy(simEntry(), 12);
     expect(plannerPrompts).toHaveLength(0);
+  });
+});
+
+describe('sleepPlanDays', () => {
+  it('plans the day the sim wakes into, not endingDay + 1', () => {
+    // Ordinary evening bedtime: they wake tomorrow, and today is the day to grade
+    expect(sleepPlanDays(43, 22)).toEqual({ targetDay: 44, reviewDay: 43 });
+    expect(sleepPlanDays(43, 17)).toEqual({ targetDay: 44, reviewDay: 43 });
+
+    // After midnight they are ALREADY in the day they wake into (live 2026-08-10: a
+    // 00:05 bedtime planned day 45, graded a 13-second-old day 44, and left day 43
+    // — the day actually lived — unreviewed forever)
+    expect(sleepPlanDays(44, 0)).toEqual({ targetDay: 44, reviewDay: 43 });
+    expect(sleepPlanDays(44, 2)).toEqual({ targetDay: 44, reviewDay: 43 });
+    expect(sleepPlanDays(44, 4)).toEqual({ targetDay: 44, reviewDay: 43 });
+  });
+
+  it('plans nothing for a daytime nap', () => {
+    // They wake into a day that is already planned and half-lived
+    expect(sleepPlanDays(44, 5)).toBeUndefined();
+    expect(sleepPlanDays(44, 13)).toBeUndefined();
+    expect(sleepPlanDays(44, 16)).toBeUndefined();
+  });
+
+  it('falls back to the old behaviour when the mod sends no hour', () => {
+    expect(sleepPlanDays(44, undefined)).toEqual({ targetDay: 45, reviewDay: 44 });
   });
 });
 

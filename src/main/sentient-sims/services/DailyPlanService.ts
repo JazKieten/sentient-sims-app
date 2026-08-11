@@ -137,6 +137,12 @@ export class DailyPlanService {
 
   // Persist + cache a validated plan. Idempotent per (sim, day): an existing row wins —
   // a second nap re-fires the sleep boundary and must not overwrite the day's plan.
+  //
+  // The one exception: a sleep plan may replace a lazy/fallback row. A sim who goes to
+  // bed after midnight is planning the day they are already in, and the lazy planner has
+  // usually just filled that day with the cheap fallback (no diary, no yesterday's goals,
+  // no review). The nightly call is strictly better, so it wins — but only once, and
+  // never over another sleep plan.
   acceptPlan(
     simId: string,
     absoluteDay: number,
@@ -144,7 +150,8 @@ export class DailyPlanService {
     source: DailyPlanSource,
   ): DailyPlan | undefined {
     const existing = this.activePlan(simId, absoluteDay);
-    if (existing) {
+    const upgrading = source === 'sleep' && existing !== undefined && existing.source !== 'sleep';
+    if (existing && !upgrading) {
       log.info(`[DailyPlan] sim ${simId} already has a plan for day ${absoluteDay}; keeping it`);
       return existing;
     }
@@ -155,12 +162,17 @@ export class DailyPlanService {
       persona: output.persona,
       loadout: output.loadout,
       source,
+      // savePlan is INSERT OR REPLACE — carry any verdicts already written onto this row
+      // rather than dropping them with the old row
+      review: existing?.review,
     };
     try {
       this.ctx.dailyPlanRepository.savePlan(plan);
       this.cache.set(simId, plan);
       log.info(
-        `[DailyPlan] sim ${simId} day ${absoluteDay} (${source}): goals [${plan.goals
+        `[DailyPlan] sim ${simId} day ${absoluteDay} (${source}${
+          upgrading ? `, replacing ${existing?.source}` : ''
+        }): goals [${plan.goals
           .map((goal) => goal.id)
           .join(', ')}], loadout [${(plan.loadout ?? []).join(', ')}]${plan.persona ? ` — "${plan.persona}"` : ''}`,
       );

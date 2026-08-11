@@ -51,6 +51,7 @@ import {
   parseDialogueLines,
   splitLinesForPacing,
 } from '../formatter/PromptFormatter';
+import { sleepPlanDays } from '../models/DailyPlan';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { InputFormatter } from '../formatter/InputOutputFormatting';
 import { MythoMaxFormatter } from '../formatter/MythoMaxFormatter';
@@ -377,7 +378,10 @@ export class AIService {
   // returns the diary AND tomorrow's goals/persona/loadout plus a review of today's
   // goals. Any parse failure degrades to the plain diary — the reflection must never
   // be lost to plan parsing; the lazy planner covers the plan side.
-  private buildSleepPlanContext(pov: { simId: string; simName: string }, sleepClock?: { absolute_day?: number }) {
+  private buildSleepPlanContext(
+    pov: { simId: string; simName: string },
+    sleepClock?: { hour?: number; absolute_day?: number },
+  ) {
     try {
       if (!this.ctx.settings.dailyGoalsEnabled) {
         return undefined;
@@ -388,16 +392,27 @@ export class AIService {
       if (!pool || pool.length === 0 || endingDay === undefined) {
         return undefined;
       }
-      const targetDay = endingDay + 1;
-      if (this.ctx.dailyPlan.activePlan(pov.simId, targetDay)) {
-        // A second nap re-fires the boundary; tomorrow is already planned
+      // The plan belongs to the day the sim WAKES INTO, which is not endingDay + 1 when
+      // they went to bed after midnight
+      const days = sleepPlanDays(endingDay, sleepClock?.hour);
+      if (!days) {
+        return undefined;
+      }
+      const { targetDay, reviewDay } = days;
+      // A second sleep that night re-fires the boundary and must not replan — but the
+      // day that ended may still be ungraded, and bailing here used to lose its review
+      // for good (nothing else ever writes one)
+      const alreadyPlanned = this.ctx.dailyPlan.activePlan(pov.simId, targetDay)?.source === 'sleep';
+      const dayThatEnded = this.ctx.dailyPlan.activePlan(pov.simId, reviewDay);
+      const reviewPending = dayThatEnded !== undefined && dayThatEnded.goals.length > 0 && !dayThatEnded.review;
+      if (alreadyPlanned && !reviewPending) {
         return undefined;
       }
       return {
         pool,
-        endingDay,
+        reviewDay,
         targetDay,
-        todaysPlan: this.ctx.dailyPlan.activePlan(pov.simId, endingDay),
+        todaysPlan: dayThatEnded,
         description: this.ctx.dailyPlan.participantDescription(pov.simId, pov.simName),
         traits: entry.self?.traits ?? [],
       };
@@ -498,7 +513,7 @@ ${diaryRules}`;
         if (parsed && typeof parsed.diary === 'string' && parsed.diary.trim().length > 1) {
           text = cleanupAIOutput(parsed.diary);
           try {
-            this.ctx.dailyPlan.recordReview(pov.simId, planContext.endingDay, parsed.goal_review);
+            this.ctx.dailyPlan.recordReview(pov.simId, planContext.reviewDay, parsed.goal_review);
             const validated = this.ctx.dailyPlan.validate(parsed, planContext.pool);
             this.ctx.dailyPlan.acceptPlan(pov.simId, planContext.targetDay, validated, 'sleep');
           } catch (err) {

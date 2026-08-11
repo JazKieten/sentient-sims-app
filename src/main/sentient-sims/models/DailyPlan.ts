@@ -24,6 +24,35 @@ export type DailyPlan = {
   review?: DailyPlanGoalReview[];
 };
 
+// A sim who goes to bed at 00:05 is ALREADY in the day they will wake into, so the
+// overnight plan belongs to today and the day that just ended is yesterday. Bedtimes
+// between 22:00 and 02:00 are ordinary in The Sims 4, so treating every sleep as
+// "plan endingDay + 1" misfiled the good plan a day ahead on a large share of nights,
+// graded a plan that had existed for seconds, and left the day actually lived
+// unreviewed (observed live 2026-08-10: rows for days 43/44/45 all wrong).
+export const NIGHT_STARTS_HOUR = 17;
+export const SMALL_HOURS_END_HOUR = 5;
+
+// Which day a sleep boundary plans for, and which day its review grades.
+// undefined = this sleep is a daytime nap: the sim wakes into a day that is already
+// planned and only half-lived, so there is nothing to plan and nothing to grade.
+export function sleepPlanDays(
+  endingDay: number,
+  hour?: number,
+): { targetDay: number; reviewDay: number } | undefined {
+  if (hour === undefined) {
+    // Older mod sends no clock hour — keep the original behaviour rather than guess
+    return { targetDay: endingDay + 1, reviewDay: endingDay };
+  }
+  if (hour < SMALL_HOURS_END_HOUR) {
+    return { targetDay: endingDay, reviewDay: endingDay - 1 };
+  }
+  if (hour >= NIGHT_STARTS_HOUR) {
+    return { targetDay: endingDay + 1, reviewDay: endingDay };
+  }
+  return undefined;
+}
+
 export type DailyPlanEntity = {
   sim_id: string;
   absolute_day: number;

@@ -196,10 +196,10 @@ export function buildCognitionUserPrompt(
   memoriesBlock?: string,
   unavailableActions?: string[],
   plan?: TodaysPlanBlock,
-  // Discretionary keys OFF today's loadout: filtered out of the rendered social lists
-  // (object/lot channels are narrowed upstream). Never listed as "NOT possible" — off-
-  // loadout keys must be ABSENT from the prompt, not named.
-  offLoadoutActions?: Set<string>,
+  // Keys hidden from this sim today — off today's loadout, or forbidden by their age.
+  // Filtered out of the rendered social lists (object/lot channels are narrowed upstream).
+  // Never listed as "NOT possible": a hidden key is ABSENT from the prompt, not named.
+  hiddenActions?: Set<string>,
 ): string {
   const sections: string[] = [];
   const name = entry.sim_name ?? entry.sim_id;
@@ -325,7 +325,7 @@ export function buildCognitionUserPrompt(
       isRomanceAge(entry.self?.age) &&
       (entry.sims ?? []).some((perceived) => perceived.tier === 'same_room' && isRomanceAge(perceived.age));
     SOCIAL_ACTIONS.forEach((action) => {
-      if (action !== 'chat' && offLoadoutActions?.has(action)) {
+      if (action !== 'chat' && hiddenActions?.has(action)) {
         return;
       }
       if (ROMANTIC_SOCIALS.has(action) && !romanceAllowed) {

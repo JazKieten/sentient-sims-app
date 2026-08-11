@@ -550,6 +550,29 @@ describe('CognitionService', () => {
     expect(prompt).toContain('mean: insult');
   });
 
+  it('hides age-blocked SOCIALS, not just age-blocked objects', async () => {
+    // The object/lot channels are narrowed through entryView, but the social list is
+    // rendered from the static SOCIAL_ACTIONS set — so it needs the hidden keys handed
+    // to it explicitly. Live 2026-08-10: a CHILD was offered 'deep conversation', the
+    // exact verb the game refuses her ("Actor's age is Age.CHILD, must be one of...").
+    const { cache, prompts } = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const report = idleSimReport(1);
+    report.sims![0].self!.age = 'CHILD';
+    report.sims![0].self!.age_blocked = ['deep_conversation', 'tell_joke', 'read_book'];
+    cache.ingest(report);
+    await settle();
+
+    const prompt = prompts[0];
+    expect(prompt).toContain('OFFERED social actions');
+    expect(prompt).not.toContain('deep conversation');
+    expect(prompt).not.toContain('tell joke');
+    // The verbs their age DOES allow survive — this is a filter, not a gag
+    expect(prompt).toContain('chat');
+    expect(prompt).toContain('ask about day');
+    // And a hidden key is ABSENT from the whole prompt, never named as forbidden
+    expect(prompt).not.toContain('NOT possible');
+  });
+
   it('never offers romance across an age line, in either direction', async () => {
     // Live 2026-08-10: age rode every report and was read by nothing, so a CHILD's
     // prompt offered 'flirt' at whoever happened to be in the room

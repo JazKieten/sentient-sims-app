@@ -667,6 +667,12 @@ export class CognitionService {
         ? suppressed
         : new Set([...suppressed, ...offLoadout, ...ageBlocked]);
 
+    // Object/lot keys are narrowed through entryView below, but the SOCIAL list is
+    // rendered from the static SOCIAL_ACTIONS set, so it needs the hidden keys handed to
+    // it explicitly. Missing ageBlocked here left 'deep conversation' on a CHILD's offered
+    // socials — the exact verb the game refuses her (caught live 2026-08-10).
+    const hiddenActions = new Set([...offLoadout, ...ageBlocked]);
+
     const entryView = this.withoutSuppressedActions(entry, narrowed);
     const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
     const reportView: SimStateReport =
@@ -681,7 +687,7 @@ export class CognitionService {
       memoriesBlock,
       [...suppressed],
       plan && (plan.goals.length > 0 || plan.persona) ? { goals: plan.goals, persona: plan.persona } : undefined,
-      offLoadout,
+      hiddenActions,
     );
 
     const simLabel = entry.sim_name ?? simId;
@@ -769,7 +775,7 @@ export class CognitionService {
       thought,
       actionReason,
       exchanges: tickExchanges,
-      offLoadout,
+      hiddenActions,
     });
     if (!intent || intent.kind !== 'action' || !intent.action) {
       this.stats.continues += 1;
@@ -862,11 +868,11 @@ export class CognitionService {
     thought?: string;
     actionReason?: string;
     exchanges: LLMExchange[];
-    // Belt-and-braces for the daily loadout: the director never saw off-loadout keys
-    // (vocabulary narrowed upstream), but if a stage names one anyway it dies here
-    offLoadout?: Set<string>;
+    // Belt-and-braces: the director never saw off-loadout or age-blocked keys (the
+    // vocabulary was narrowed upstream), but if a stage names one anyway it dies here
+    hiddenActions?: Set<string>;
   }): Promise<CognitionIntent | undefined> {
-    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges, offLoadout } =
+    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges, hiddenActions } =
       params;
     try {
       const optionsShot = await runStage(this.ctx.generationQueue, 'action options', () =>
@@ -906,8 +912,8 @@ export class CognitionService {
         if (!validated.ok || validated.intent.kind !== 'action' || !validated.intent.action) {
           return;
         }
-        if (offLoadout?.has(validated.intent.action)) {
-          log.debug(`[Cognition] ${simLabel} action scene dropped off-loadout option '${validated.intent.action}'`);
+        if (hiddenActions?.has(validated.intent.action)) {
+          log.debug(`[Cognition] ${simLabel} action scene dropped hidden option '${validated.intent.action}'`);
           return;
         }
         const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}`;

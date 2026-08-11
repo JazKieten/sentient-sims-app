@@ -278,6 +278,23 @@ describe('romance age gate', () => {
     expect(service.validate(raw, POOL).loadout).toEqual(['read_book', 'hug', 'tell_joke']);
   });
 
+  it('drops verbs the age cannot run, from the loadout and the prompt', () => {
+    const { service } = buildService();
+    // From the game's own affordance tests: a CHILD cannot read_book, tell_joke or
+    // deep_conversation. Live 2026-08-10: Mackenzie Scott had all three prepped.
+    const blocked = ['read_book', 'tell_joke', 'deep_conversation', 'cook_meal'];
+    const raw = { loadout: ['read_book', 'browse_web', 'tell_joke', 'dance', 'hug'] };
+
+    expect(service.validate(raw, POOL, 'CHILD', blocked).loadout).toEqual(['browse_web', 'dance', 'hug']);
+    // An adult with no blocked list keeps everything
+    expect(service.validate(raw, POOL, 'ADULT').loadout).toEqual(raw.loadout);
+
+    const block = service.buildChoicesBlock(POOL, undefined, 'CHILD', blocked);
+    expect(block).not.toMatch(/read_book|tell_joke|deep_conversation/);
+    // ...but the verbs they CAN run are still offered
+    expect(block).toContain('browse_web');
+  });
+
   it('never shows a child the romance group in the planner prompt', () => {
     const { service } = buildService();
     expect(service.buildChoicesBlock(POOL, undefined, 'CHILD')).not.toMatch(/flirt|kiss|romance/);

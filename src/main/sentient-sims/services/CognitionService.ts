@@ -659,7 +659,13 @@ export class CognitionService {
     // NEVER added to the "NOT possible" line below: the hard filter means ABSENT from
     // the prompt, not named as forbidden
     const offLoadout = offLoadoutActions(plan?.loadout);
-    const narrowed = offLoadout.size === 0 ? suppressed : new Set([...suppressed, ...offLoadout]);
+    // Verbs this sim's age cannot run are cut the same way: a child offered read_book
+    // spends an Action Scene on a guaranteed refusal (live 2026-08-10, Mackenzie Scott)
+    const ageBlocked = entry.self?.age_blocked ?? [];
+    const narrowed =
+      offLoadout.size === 0 && ageBlocked.length === 0
+        ? suppressed
+        : new Set([...suppressed, ...offLoadout, ...ageBlocked]);
 
     const entryView = this.withoutSuppressedActions(entry, narrowed);
     const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));

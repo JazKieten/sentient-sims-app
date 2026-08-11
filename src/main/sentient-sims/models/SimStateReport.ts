@@ -95,6 +95,10 @@ export type SimSelfStatus = {
   in_ww_scene?: boolean;
   next_objective?: NextObjective;
   age?: string;
+  // Whitelist keys this sim's AGE cannot run, read mod-side from the game's own affordance
+  // tests (a CHILD cannot read_book, tell_joke, cook_meal, deep_conversation, ...). Absent
+  // on older mod builds, which simply means no age filtering.
+  age_blocked?: string[];
   mood?: string;
   on_active_lot?: boolean;
   // Household sims only; capped at 12 (durable goals first, wants fill the rest)

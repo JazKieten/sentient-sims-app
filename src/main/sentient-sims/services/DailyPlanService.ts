@@ -99,7 +99,12 @@ export class DailyPlanService {
   // bind-to-offered philosophy as validateIntent: anything not offered dies silently.
   // `age` gates romance: a non-adult, or a sim whose age we don't know, never keeps a
   // romance key even if the model names one.
-  validate(raw: Record<string, unknown>, pool: GoalPoolEntry[], age?: string): PlannerOutput {
+  validate(
+    raw: Record<string, unknown>,
+    pool: GoalPoolEntry[],
+    age?: string,
+    ageBlocked?: string[],
+  ): PlannerOutput {
     const poolById = new Map(pool.map((entry) => [entry.id, entry]));
     const goals: GoalPoolEntry[] = [];
     if (Array.isArray(raw.goals)) {
@@ -130,7 +135,9 @@ export class DailyPlanService {
             .replace(/[\s-]+/g, '_'),
         )
         .filter((key) => DISCRETIONARY_ACTIONS.has(key))
-        .filter((key) => !ROMANCE_ACTIONS.has(key) || isRomanceAge(age));
+        .filter((key) => !ROMANCE_ACTIONS.has(key) || isRomanceAge(age))
+        // A prepped verb the sim's age cannot run is a wasted loadout slot for the day
+        .filter((key) => !(ageBlocked ?? []).includes(key));
       const deduped = [...new Set(keys)].slice(0, this.ctx.settings.dailyLoadoutSize);
       loadout = deduped.length >= MIN_LOADOUT ? deduped : undefined;
     }
@@ -223,7 +230,12 @@ export class DailyPlanService {
 
   // Prompt fragment shared by the sleep and lazy planners: the goal pool (choose by id)
   // and the discretionary action styles (pick the day's loadout).
-  buildChoicesBlock(pool: GoalPoolEntry[], includeYesterday?: DailyPlan, age?: string): string {
+  buildChoicesBlock(
+    pool: GoalPoolEntry[],
+    includeYesterday?: DailyPlan,
+    age?: string,
+    ageBlocked?: string[],
+  ): string {
     const lines: string[] = [];
     if (includeYesterday && includeYesterday.goals.length > 0) {
       // Pool-absence is game-verified completion ONLY for durable sources; wants
@@ -244,7 +256,9 @@ export class DailyPlanService {
     Object.entries(DISCRETIONARY_GROUPS).forEach(([group, keys]) => {
       // A non-adult is never shown the romance group at all — a key the model was never
       // offered is one it cannot pick, which is cheaper than filtering it afterwards
-      const offered = isRomanceAge(age) ? keys : keys.filter((key) => !ROMANCE_ACTIONS.has(key));
+      const offered = keys
+        .filter((key) => isRomanceAge(age) || !ROMANCE_ACTIONS.has(key))
+        .filter((key) => !(ageBlocked ?? []).includes(key));
       if (offered.length > 0) {
         lines.push(`${group}: ${offered.join(', ')}`);
       }
@@ -267,6 +281,7 @@ export class DailyPlanService {
       const description = this.participantDescription(simId, simLabel);
       const traits = entry.self?.traits ?? [];
       const age = entry.self?.age;
+      const ageBlocked = entry.self?.age_blocked;
       const loadoutSize = this.ctx.settings.dailyLoadoutSize;
 
       const systemPrompt = `You are the inner voice of one Sim in The Sims 4, setting intentions for the rest of today.
@@ -290,7 +305,7 @@ Reply with ONLY a JSON object:
         traits.length > 0 ? `Traits: ${traits.join(', ')}` : '',
         hourLine,
         '',
-        this.buildChoicesBlock(pool, undefined, age),
+        this.buildChoicesBlock(pool, undefined, age, ageBlocked),
       ]
         .filter(Boolean)
         .join('\n');
@@ -307,7 +322,7 @@ Reply with ONLY a JSON object:
         );
         const parsed = parsePlannerJson(shot.text);
         if (parsed) {
-          const validated = this.validate(parsed, pool, age);
+          const validated = this.validate(parsed, pool, age, ageBlocked);
           if (validated.goals.length > 0 || validated.persona || validated.loadout) {
             output = validated;
           }

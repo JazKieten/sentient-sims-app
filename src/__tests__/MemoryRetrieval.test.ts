@@ -6,7 +6,12 @@ import {
   NoopEmbeddingService,
   embeddingToBuffer,
 } from 'main/sentient-sims/services/EmbeddingService';
-import { recencyScore, scoreCandidate } from 'main/sentient-sims/services/MemoryRetrievalService';
+import { MemoryWithIndex } from 'main/sentient-sims/db/entities/MemoryIndexEntity';
+import {
+  MemoryRetrievalService,
+  recencyScore,
+  scoreCandidate,
+} from 'main/sentient-sims/services/MemoryRetrievalService';
 import { summarizeMemory, PromptRequestBuilderOptions } from 'main/sentient-sims/services/PromptRequestBuilderService';
 import { SSEvent, SSEventType } from 'main/sentient-sims/models/InteractionEvents';
 import { SentientSim } from 'main/sentient-sims/models/SentientSim';
@@ -94,6 +99,83 @@ describe('scoring', () => {
     );
     expect(unannotated.importance).toBeCloseTo(0.8);
     expect(unannotated.similarity).toEqual(0);
+  });
+});
+
+// The echo-chamber brake works on the scored list, so it needs no database: a fake
+// candidate repository keeps it runnable wherever the native sqlite binding isn't
+function cappingContext(candidates: MemoryWithIndex[]): ApiContext {
+  return {
+    memoryIndexRepository: { getRetrievalCandidates: () => candidates },
+    embedding: new NoopEmbeddingService(),
+  } as unknown as ApiContext;
+}
+
+describe('self-authored cap', () => {
+  // Four fresh thoughts (the measured echo chamber: 35 of 39 rows one topic) plus two
+  // ordinary memories, thoughts deliberately outscoring everything on importance
+  const candidates: MemoryWithIndex[] = [
+    {
+      id: 1,
+      location_id: 1,
+      content: 'blues again',
+      event_type: 'thought',
+      timestamp: '2026-08-09 12:00:00',
+      importance: 9,
+    },
+    {
+      id: 2,
+      location_id: 1,
+      content: 'more blues',
+      event_type: 'thought',
+      timestamp: '2026-08-09 11:00:00',
+      importance: 9,
+    },
+    {
+      id: 3,
+      location_id: 1,
+      content: 'still blues',
+      event_type: 'thought',
+      timestamp: '2026-08-09 10:00:00',
+      importance: 9,
+    },
+    {
+      id: 4,
+      location_id: 1,
+      content: 'always blues',
+      event_type: 'monologue',
+      timestamp: '2026-08-09 09:00:00',
+      importance: 9,
+    },
+    { id: 5, location_id: 1, content: 'cooked dinner with Frank', timestamp: '2026-08-09 08:00:00', importance: 3 },
+    {
+      id: 6,
+      location_id: 1,
+      content: 'wrote in my diary',
+      event_type: 'reflection',
+      timestamp: '2026-08-09 07:00:00',
+      importance: 3,
+    },
+  ];
+
+  it('keeps at most one rumination row and fills k from the rest', async () => {
+    const service = new MemoryRetrievalService(cappingContext(candidates));
+    const capped = await service.retrieve({
+      participantIds: ['100'],
+      queryText: 'anything',
+      k: 4,
+      maxSelfAuthored: 1,
+    });
+
+    // 1 thought + the two non-rumination rows; reflections are NOT capped (the diary is
+    // the identity thread that should compound)
+    expect(capped.map((result) => result.memory.id)).toEqual([1, 5, 6]);
+  });
+
+  it('leaves retrieval untouched when the cap is unset', async () => {
+    const service = new MemoryRetrievalService(cappingContext(candidates));
+    const uncapped = await service.retrieve({ participantIds: ['100'], queryText: 'anything', k: 4 });
+    expect(uncapped.map((result) => result.memory.id)).toEqual([1, 2, 3, 4]);
   });
 });
 

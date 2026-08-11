@@ -259,6 +259,16 @@ export function defaultStore(cwd?: string) {
         // (floodgates 2026-08-09). 6 lets genuine wants through.
         default: 6,
       },
+      [SettingsEnum.DAILY_GOALS_ENABLED.toString()]: {
+        type: 'boolean',
+        // On by default: inert against an older mod (no absolute_day/goal_pool in
+        // reports) and every failure path fails open to pre-plan behavior
+        default: true,
+      },
+      [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
+        type: 'number',
+        default: 6,
+      },
       [SettingsEnum.VOICE_INPUT_ENABLED.toString()]: {
         type: 'boolean',
         default: false,
@@ -889,6 +899,14 @@ export class SettingsService {
 
   get cognitionActionScoreThreshold(): number {
     return Math.min(10, Math.max(1, this.get(SettingsEnum.COGNITION_ACTION_SCORE_THRESHOLD) as number));
+  }
+
+  get dailyGoalsEnabled(): boolean {
+    return this.get(SettingsEnum.DAILY_GOALS_ENABLED) as boolean;
+  }
+
+  get dailyLoadoutSize(): number {
+    return Math.min(10, Math.max(3, this.get(SettingsEnum.DAILY_LOADOUT_SIZE) as number));
   }
 
   get voiceInputEnabled(): boolean {

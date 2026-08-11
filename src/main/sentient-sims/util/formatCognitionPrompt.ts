@@ -77,7 +77,7 @@ Nobody hears this. No narration, no third person, no JSON, no quotation marks.`;
 export const TICK_SCORES_SYSTEM_PROMPT = `You are scoring one Sim's present moment, judged from their own point of view. Their inner monologue is the strongest signal.
 Reply with ONLY a JSON object: {"memory": <1-10>, "action": <1-10>, "action_reason": "one short line"}
 - "memory": how memorable this moment is for them. 1 means routine and forgettable, 10 means life-changing.
-- "action": how strongly they want to CHANGE what they are doing right now — something more, something less, or something different. 1-3 means content to carry on, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now. A content Sim mid-activity scores low; boredom, loneliness, low needs, and restless thoughts push it up.
+- "action": how strongly they want to CHANGE what they are doing right now — something more, something less, or something different. 1-3 means content to carry on, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now. A content Sim mid-activity scores low; boredom, loneliness, low needs, and restless thoughts push it up. If a TODAYS_PLAN block is present and what they are doing now ignores or conflicts with today's goals, that pushes the score up.
 - "action_reason": what they would want to do or change, in their voice.`;
 
 export const ACTION_OPTIONS_SYSTEM_PROMPT = `You are directing a choose-your-own-adventure beat for one Sim in The Sims 4 who wants a change of course.
@@ -86,7 +86,8 @@ Given their situation, their inner monologue, and what is pulling at them, reply
 Rules:
 - 3 to 5 options, each a genuinely different answer to the pull — more of something, less of something, or something new. No filler.
 - Every "action" MUST be an action key from the OFFERED lists in the situation; social actions need a target_sim_id from the OFFERED people. Never invent actions, targets, or ids.
-- At least one option should directly answer what is pulling at them.`;
+- At least one option should directly answer what is pulling at them.
+- If a TODAYS_PLAN block is present, at least one option should serve one of today's goals.`;
 
 export const ACTION_CHOICE_SYSTEM_PROMPT = `You are one Sim in The Sims 4 choosing what to do next, like picking a path in a choose-your-own-adventure book.
 Given the moment and your numbered options, reply with ONLY a JSON object: {"choice": <option number>, "motivation": "why, in your own voice, one short line"}
@@ -180,11 +181,24 @@ export function parseActionChoice(raw: string): { choice: number; motivation?: s
   };
 }
 
+// The day's plan as the prompt sees it: goal labels + the persona stage direction.
+// The loadout is deliberately NOT rendered — the OFFERED lists are already narrowed to
+// it, and naming the mechanism invites meta-reasoning about "allowed actions".
+export type TodaysPlanBlock = {
+  goals: { label: string }[];
+  persona?: string;
+};
+
 export function buildCognitionUserPrompt(
   entry: SimStateEntry,
   report: SimStateReport | undefined,
   memoriesBlock?: string,
   unavailableActions?: string[],
+  plan?: TodaysPlanBlock,
+  // Discretionary keys OFF today's loadout: filtered out of the rendered social lists
+  // (object/lot channels are narrowed upstream). Never listed as "NOT possible" — off-
+  // loadout keys must be ABSENT from the prompt, not named.
+  offLoadoutActions?: Set<string>,
 ): string {
   const sections: string[] = [];
   const name = entry.sim_name ?? entry.sim_id;
@@ -227,6 +241,18 @@ export function buildCognitionUserPrompt(
     });
     selfLines.push('</STATUS>');
     sections.push(selfLines.join('\n'));
+  }
+
+  if (plan && (plan.goals.length > 0 || plan.persona)) {
+    const planLines: string[] = ['<TODAYS_PLAN>'];
+    if (plan.persona) {
+      planLines.push(`Who I want to be today: ${plan.persona}`);
+    }
+    if (plan.goals.length > 0) {
+      planLines.push(`Today's goals: ${plan.goals.map((goal) => goal.label).join('; ')}.`);
+    }
+    planLines.push('</TODAYS_PLAN>');
+    sections.push(planLines.join('\n'));
   }
 
   const activity = entry.activity;
@@ -285,11 +311,15 @@ export function buildCognitionUserPrompt(
   sections.push(`OFFERED people to talk to: ${simList}`);
   if (offered.simTargets.size > 0) {
     // The model can't name a social it was never shown — before this line existed every
-    // conversation degraded to plain 'chat' (the vocabulary was validation-only)
+    // conversation degraded to plain 'chat' (the vocabulary was validation-only).
+    // Off-loadout socials are simply not shown ('chat' is always available).
     const plain: string[] = [];
     const romantic: string[] = [];
     const mean: string[] = [];
     SOCIAL_ACTIONS.forEach((action) => {
+      if (action !== 'chat' && offLoadoutActions?.has(action)) {
+        return;
+      }
       if (ROMANTIC_SOCIALS.has(action)) {
         romantic.push(pretty(action));
       } else if (MEAN_SOCIALS.has(action)) {
@@ -298,9 +328,16 @@ export function buildCognitionUserPrompt(
         plain.push(pretty(action));
       }
     });
-    sections.push(
-      `OFFERED social actions (need a target_sim_id; match them to the relationship): ${plain.join(', ')}; romantic only: ${romantic.join(', ')}; mean: ${mean.join(', ')}.`,
-    );
+    const socialParts = [
+      `OFFERED social actions (need a target_sim_id; match them to the relationship): ${plain.join(', ')}`,
+    ];
+    if (romantic.length > 0) {
+      socialParts.push(`romantic only: ${romantic.join(', ')}`);
+    }
+    if (mean.length > 0) {
+      socialParts.push(`mean: ${mean.join(', ')}`);
+    }
+    sections.push(`${socialParts.join('; ')}.`);
   }
   if (unavailableActions?.length) {
     // Negative feedback the model otherwise never gets: without this, a sim whose

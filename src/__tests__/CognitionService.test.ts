@@ -17,6 +17,9 @@ type CtxOptions = {
   optionsJson?: JsonProvider;
   choiceJson?: JsonProvider;
   reviewJson?: JsonProvider;
+  // Daily plan stub: what activePlan returns and whether the lazy planner should fire
+  plan?: { goals: { label: string }[]; persona?: string; loadout?: string[] };
+  needsLazyPlan?: boolean;
 };
 
 function resolveJson(provider: JsonProvider | undefined): string | undefined {
@@ -46,6 +49,7 @@ function buildCtx(options: CtxOptions = {}) {
   const oneShotCalls: string[] = [];
   const prompts: string[] = [];
   const storedMemories: unknown[] = [];
+  const lazyPlanCalls: unknown[][] = [];
 
   const ctx = {
     settings: {
@@ -104,10 +108,18 @@ function buildCtx(options: CtxOptions = {}) {
     memoryRetrieval: {
       retrieve: () => Promise.resolve([]),
     },
+    dailyPlan: {
+      activePlan: () => options.plan,
+      needsLazyPlan: () => options.needsLazyPlan ?? false,
+      generateLazy: (...args: unknown[]) => {
+        lazyPlanCalls.push(args);
+        return Promise.resolve();
+      },
+    },
   } as unknown as ApiContext;
 
   const cognition = new CognitionService(ctx);
-  return { ctx, cache, cognition, dispatched, released, oneShotCalls, prompts, storedMemories };
+  return { ctx, cache, cognition, dispatched, released, oneShotCalls, prompts, storedMemories, lazyPlanCalls };
 }
 
 function idleSimReport(seq: number, overrides: Partial<SimStateReport> = {}): SimStateReport {
@@ -840,5 +852,78 @@ describe('CognitionService', () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].action).toBe('enter_lot');
     expect(oneShotCalls).toHaveLength(0);
+  });
+
+  it('daily loadout hard-filters off-loadout keys: absent from OFFERED and from NOT-possible', async () => {
+    const { cache, dispatched, prompts } = buildCtx({
+      plan: {
+        goals: [{ label: 'Chat with 3 sims' }],
+        persona: 'Today I want to be the friend who actually listens.',
+        loadout: ['dance', 'gossip', 'deep_conversation'],
+      },
+      // The director names an off-loadout key anyway — belt-and-braces must drop it
+      optionsJson: JSON.stringify({
+        options: [
+          { action: 'watch_tv', target_object_id: '901', label: 'Zone out' },
+          { action: 'grab_snack', target_object_id: '900', label: 'Raid the fridge' },
+        ],
+      }),
+    });
+    const report = idleSimReport(1);
+    report.lot!.clock!.absolute_day = 12;
+    report.sims![0].objects.push({
+      object_id: '901',
+      action_keys: ['watch_tv'],
+      name: 'object_tv',
+      tier: 'same_room',
+      distance: 3,
+    });
+    cache.ingest(report);
+    await settle();
+
+    const monologuePrompt = prompts[0];
+    // The plan block renders persona + goals; the loadout itself is never named
+    expect(monologuePrompt).toContain('<TODAYS_PLAN>');
+    expect(monologuePrompt).toContain('friend who actually listens');
+    expect(monologuePrompt).toContain("Today's goals: Chat with 3 sims.");
+    expect(monologuePrompt).not.toContain('loadout');
+    // watch_tv is off-loadout: gone from the offered vocabulary AND not listed as
+    // impossible (absent means absent)
+    expect(monologuePrompt).not.toContain('watch tv');
+    // Off-loadout socials vanish from the social line; prepped ones and chat stay
+    expect(monologuePrompt).toContain('gossip');
+    expect(monologuePrompt).not.toContain('tell joke');
+    // Always-available keys survive any loadout
+    expect(monologuePrompt).toContain('grab snack');
+
+    // The watch_tv option died in validation; the always-available snack dispatched
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('grab_snack');
+  });
+
+  it('fires the lazy planner once when a household sim has no plan for today', async () => {
+    const { cache, dispatched, lazyPlanCalls, prompts } = buildCtx({ needsLazyPlan: true });
+    const report = idleSimReport(1);
+    report.lot!.clock!.absolute_day = 12;
+    cache.ingest(report);
+    await settle();
+
+    expect(lazyPlanCalls).toHaveLength(1);
+    // The planless tick proceeds unfiltered — no TODAYS_PLAN block, dispatch as normal
+    expect(prompts[0]).not.toContain('<TODAYS_PLAN>');
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('an old mod (no absolute_day) leaves the plan machinery inert', async () => {
+    const { cache, dispatched, lazyPlanCalls, prompts } = buildCtx({
+      plan: { goals: [{ label: 'ghost goal' }], persona: 'ghost', loadout: ['dance', 'gossip', 'flirt'] },
+      needsLazyPlan: true,
+    });
+    cache.ingest(idleSimReport(1)); // default clock has no absolute_day
+    await settle();
+
+    expect(lazyPlanCalls).toHaveLength(0);
+    expect(prompts[0]).not.toContain('<TODAYS_PLAN>');
+    expect(dispatched).toHaveLength(1);
   });
 });

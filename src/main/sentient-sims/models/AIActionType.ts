@@ -23,6 +23,8 @@ export enum AIActionType {
   COGNITION = 'cognition',
   // Full Autonomy Action Scenes (options/choice/review) — fired only over threshold
   ACTION_SCENE = 'action_scene',
+  // Nightly (or lazy mid-day) daily plan: goals from the game pool, persona, loadout
+  DAILY_PLAN = 'daily_plan',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -43,6 +45,7 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.REFLECTION,
   AIActionType.COGNITION,
   AIActionType.ACTION_SCENE,
+  AIActionType.DAILY_PLAN,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -84,6 +87,8 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Cognition Tick';
     case AIActionType.ACTION_SCENE:
       return 'Action Scene';
+    case AIActionType.DAILY_PLAN:
+      return 'Daily Plan';
     default:
       return actionType;
   }
@@ -125,6 +130,8 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Autonomous per-sim tick monologue and scoring (cheap model recommended)';
     case AIActionType.ACTION_SCENE:
       return 'Choose-your-own-adventure action beats when a sim wants a change of course';
+    case AIActionType.DAILY_PLAN:
+      return 'Nightly goals, persona and action loadout per sim';
     default:
       return '';
   }

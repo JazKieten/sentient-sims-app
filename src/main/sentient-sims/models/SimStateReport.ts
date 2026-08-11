@@ -8,7 +8,11 @@ import { PerceptionSnapshot } from './PerceptionSnapshot';
 export type LotClock = {
   hour?: number;
   minute?: number;
+  // Weekday 0-6 — useless for rollover; absolute_day is the monotonic counter
+  // daily plans are keyed on (absent on older mod builds = feature inert)
   day?: number;
+  absolute_day?: number;
+  week?: number;
   speed?: string;
   paused?: boolean;
 };
@@ -66,6 +70,19 @@ export type NextObjective = {
   threshold?: number | string;
 };
 
+// One entry in the game-grounded pool the nightly planner picks daily goals from.
+// id is a tuning class __name__ (stable across sessions); an aspiration/promotion id
+// vanishing from the pool means the game marked it complete — wants reroll, so a
+// missing 'want' id proves nothing.
+// A future mod build may add sources beyond these; nothing branches on an unknown one
+export type GoalSource = 'aspiration' | 'promotion' | 'daily_task' | 'want';
+
+export type GoalPoolEntry = {
+  id: string;
+  source: GoalSource;
+  label: string;
+};
+
 export type SimSelfStatus = {
   needs?: Record<string, number>;
   buffs?: string[];
@@ -80,6 +97,8 @@ export type SimSelfStatus = {
   age?: string;
   mood?: string;
   on_active_lot?: boolean;
+  // Household sims only; capped at 12 (durable goals first, wants fill the rest)
+  goal_pool?: GoalPoolEntry[];
 };
 
 export type SimActivity = {

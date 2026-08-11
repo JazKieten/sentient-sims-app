@@ -150,6 +150,24 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       ALTER TABLE memory_index
       ADD COLUMN owner_participant_id INTEGER;
     `,
+    // One row per sim per game day: the nightly planner's goals (validated against the
+    // mod's goal_pool), the free-form persona sentence, and the discretionary action
+    // loadout. Its own table, never memory columns (see migration 011); no FK to
+    // participant for the same REPLACE-delete reason as participant_voice (013).
+    // review is written the FOLLOWING night when the diary grades how the day went.
+    '015-create-daily-plan': `
+      CREATE TABLE daily_plan (
+        sim_id               TEXT NOT NULL  ,
+        absolute_day         INTEGER NOT NULL  ,
+        goals                TEXT     ,
+        persona              TEXT     ,
+        loadout              TEXT     ,
+        source               TEXT     ,
+        review               TEXT     ,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        PRIMARY KEY ( sim_id, absolute_day )
+      );
+    `,
   }),
 );
 

@@ -163,9 +163,16 @@ export class CognitionController {
   // the same location so the next boundary only covers what happens after the nap.
   postSleepBoundary = async (req: Request, res: Response) => {
     try {
-      const { sim_id: simId, sim_name: simName } = req.body as {
+      const {
+        sim_id: simId,
+        sim_name: simName,
+        clock,
+      } = req.body as {
         sim_id?: string;
         sim_name?: string;
+        // Game clock at the moment of falling asleep (newer mods) — keys the overnight
+        // daily plan to the day the sim wakes into
+        clock?: { hour?: number; absolute_day?: number };
       };
       if (!simId) {
         return res.status(400).json({ error: 'sim_id is required' });
@@ -177,7 +184,7 @@ export class CognitionController {
       }
       log.info(`[Cognition] sleep boundary for ${who}: reflecting on scene ${previousScene.sceneId}`);
       // The sleeper is the reflecting mind — their day closes as a diary entry in their voice
-      await this.ctx.ai.runSceneReflection(previousScene, { simId, simName: who }, 'sleep');
+      await this.ctx.ai.runSceneReflection(previousScene, { simId, simName: who }, 'sleep', clock);
       return res.json({ ok: true, reflected: true, scene_id: previousScene.sceneId });
     } catch (err) {
       log.error('Error handling sleep boundary', err);

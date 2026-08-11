@@ -2,6 +2,7 @@ import log from 'electron-log';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
+import { offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
 import { AIActionType } from '../models/AIActionType';
 import { LLMExchange } from '../models/InteractionEventResult';
@@ -628,15 +629,41 @@ export class CognitionService {
     if (typeof energy === 'number' && energy < TOO_TIRED_TO_GO_OUT) {
       suppressed.add('go_out');
     }
-    const entryView = this.withoutSuppressedActions(entry, suppressed);
-    const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !suppressed.has(key));
+
+    // Daily plan: household sims carry a per-game-day plan (goals + persona + action
+    // loadout). No plan for today yet (app restart, never slept) — fire the lazy
+    // planner in the background and proceed unfiltered THIS tick; the next tick picks
+    // it up. NPCs never plan.
+    const absoluteDay = report.lot?.clock?.absolute_day;
+    let plan;
+    if (entry.is_household !== false && absoluteDay !== undefined) {
+      plan = this.ctx.dailyPlan.activePlan(simId, absoluteDay);
+      if (!plan && this.ctx.dailyPlan.needsLazyPlan(simId, absoluteDay)) {
+        void this.ctx.dailyPlan.generateLazy(entry, absoluteDay);
+      }
+    }
+    // Off-loadout keys are cut from every offering channel like suppressed ones — but
+    // NEVER added to the "NOT possible" line below: the hard filter means ABSENT from
+    // the prompt, not named as forbidden
+    const offLoadout = offLoadoutActions(plan?.loadout);
+    const narrowed = offLoadout.size === 0 ? suppressed : new Set([...suppressed, ...offLoadout]);
+
+    const entryView = this.withoutSuppressedActions(entry, narrowed);
+    const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
     const reportView: SimStateReport =
-      suppressed.size === 0 || !report.lot
+      narrowed.size === 0 || !report.lot
         ? report
         : { ...report, lot: { ...report.lot, action_keys: lotActionKeys.length > 0 ? lotActionKeys : undefined } };
 
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
-    const situationPrompt = buildCognitionUserPrompt(entryView, reportView, memoriesBlock, [...suppressed]);
+    const situationPrompt = buildCognitionUserPrompt(
+      entryView,
+      reportView,
+      memoriesBlock,
+      [...suppressed],
+      plan && (plan.goals.length > 0 || plan.persona) ? { goals: plan.goals, persona: plan.persona } : undefined,
+      offLoadout,
+    );
 
     const simLabel = entry.sim_name ?? simId;
     const threshold = this.ctx.settings.cognitionActionScoreThreshold;
@@ -723,6 +750,7 @@ export class CognitionService {
       thought,
       actionReason,
       exchanges: tickExchanges,
+      offLoadout,
     });
     if (!intent || intent.kind !== 'action' || !intent.action) {
       this.stats.continues += 1;
@@ -815,8 +843,12 @@ export class CognitionService {
     thought?: string;
     actionReason?: string;
     exchanges: LLMExchange[];
+    // Belt-and-braces for the daily loadout: the director never saw off-loadout keys
+    // (vocabulary narrowed upstream), but if a stage names one anyway it dies here
+    offLoadout?: Set<string>;
   }): Promise<CognitionIntent | undefined> {
-    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges } = params;
+    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges, offLoadout } =
+      params;
     try {
       const optionsShot = await runStage(this.ctx.generationQueue, 'action options', () =>
         this.ctx.ai.runOneShot(
@@ -853,6 +885,10 @@ export class CognitionService {
           lotActionKeys,
         );
         if (!validated.ok || validated.intent.kind !== 'action' || !validated.intent.action) {
+          return;
+        }
+        if (offLoadout?.has(validated.intent.action)) {
+          log.debug(`[Cognition] ${simLabel} action scene dropped off-loadout option '${validated.intent.action}'`);
           return;
         }
         const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}`;
@@ -1011,6 +1047,10 @@ export class CognitionService {
         excludeMemoryIds: [],
         // Deliberation is this sim's own head: only their private rows may surface
         ownerScope: [entry.sim_id],
+        // Echo-chamber brake: at most one of the sim's own tick-thoughts may surface —
+        // fresh thoughts win on recency and were feeding the monologue its own words
+        // back (35/39 rows one topic, measured live 2026-08-09)
+        maxSelfAuthored: 1,
       });
       if (retrieved.length === 0) {
         return undefined;

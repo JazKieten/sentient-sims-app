@@ -63,6 +63,7 @@ import { ModAddBuff, ModWebsocketMessageType } from '../models/ModWebsocketMessa
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
+import { parsePlannerJson } from './DailyPlanService';
 import { SceneState } from './SceneService';
 import { MemoryTrace } from '../models/MemoryTrace';
 
@@ -371,10 +372,46 @@ export class AIService {
   // review — Marisol's own reflection said "Interacting with Marisol Vega felt natural").
   // Stored tagged event_type='reflection', so it surfaces in the Memories UI and feeds future
   // prompts via the <PAST_REFLECTIONS> block. Best-effort: any failure is logged and swallowed.
+  // When the sleeper can plan (feature on, goal_pool cached, day known, tomorrow not
+  // already planned), the diary call doubles as the nightly planner: one JSON call
+  // returns the diary AND tomorrow's goals/persona/loadout plus a review of today's
+  // goals. Any parse failure degrades to the plain diary — the reflection must never
+  // be lost to plan parsing; the lazy planner covers the plan side.
+  private buildSleepPlanContext(pov: { simId: string; simName: string }, sleepClock?: { absolute_day?: number }) {
+    try {
+      if (!this.ctx.settings.dailyGoalsEnabled) {
+        return undefined;
+      }
+      const entry = this.ctx.simStateCache.getSim(pov.simId);
+      const pool = entry?.self?.goal_pool;
+      const endingDay = sleepClock?.absolute_day ?? this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+      if (!pool || pool.length === 0 || endingDay === undefined) {
+        return undefined;
+      }
+      const targetDay = endingDay + 1;
+      if (this.ctx.dailyPlan.activePlan(pov.simId, targetDay)) {
+        // A second nap re-fires the boundary; tomorrow is already planned
+        return undefined;
+      }
+      return {
+        pool,
+        endingDay,
+        targetDay,
+        todaysPlan: this.ctx.dailyPlan.activePlan(pov.simId, endingDay),
+        description: this.ctx.dailyPlan.participantDescription(pov.simId, pov.simName),
+        traits: entry.self?.traits ?? [],
+      };
+    } catch (err) {
+      log.warn('[DailyPlan] sleep plan context failed; running plain reflection', err);
+      return undefined;
+    }
+  }
+
   async runSceneReflection(
     previousScene: SceneState,
     pov?: { simId: string; simName: string },
     boundary?: 'sleep' | 'travel',
+    sleepClock?: { hour?: number; absolute_day?: number },
   ) {
     try {
       const sceneMemories = this.ctx.memoryRepository.getSceneMemories(
@@ -385,7 +422,8 @@ export class AIService {
       // reflecting on — travel-heavy play was firing reflections back to back
       if (sceneMemories.length < 2) {
         log.info(
-          `[Reflection] Scene ${previousScene.sceneId} had ${sceneMemories.length} memories, skipping reflection`,
+          `[Reflection] Scene ${previousScene.sceneId} had ${sceneMemories.length} memories, skipping reflection` +
+            (boundary === 'sleep' ? ' (sleep-path daily plan skipped too; the lazy planner covers it)' : ''),
         );
         return;
       }
@@ -417,26 +455,66 @@ export class AIService {
         others.length > 0
           ? `Mention each of the people you spent this time with — ${namesList} — what passed between you and how they left you feeling.\n`
           : '';
-      const systemPrompt = `${identity}${framing}
-Write a short diary entry — a few sentences in your own voice: first person, past tense, plain prose. No headers, no labels, no lists, and no greeting like "Dear Diary" — just the entry itself. Never refer to yourself in the third person.
+      const diaryRules = `Write a short diary entry — a few sentences in your own voice: first person, past tense, plain prose. No headers, no labels, no lists, and no greeting like "Dear Diary" — just the entry itself. Never refer to yourself in the third person.
 Sum up what happened and how you feel about it now.
 ${othersLine}Keep it concise and grounded. Do not invent events that are not in the notes below.`;
 
+      const planContext = boundary === 'sleep' && pov ? this.buildSleepPlanContext(pov, sleepClock) : undefined;
+      const aboutLine = planContext
+        ? `${planContext.description ? `About you: ${planContext.description}\n` : ''}${
+            planContext.traits.length > 0 ? `Your traits: ${planContext.traits.join(', ')}\n` : ''
+          }`
+        : '';
+      const reviewInstruction =
+        planContext && planContext.todaysPlan && planContext.todaysPlan.goals.length > 0
+          ? `\n- "goal_review": a verdict for each of today's goals — honestly, from the notes.`
+          : `\n- "goal_review": [] (you had no goals set today).`;
+      const systemPrompt = planContext
+        ? `${identity}${framing} Before sleep you also set intentions for tomorrow.
+${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(planContext.pool, planContext.todaysPlan)}
+
+Reply with ONLY a JSON object:
+{"diary": "the diary entry", "goal_review": [{"id": "<goal id>", "verdict": "met|partial|ignored"}], "goals": ["<goal id>"], "persona": "one sentence", "loadout": ["<action key>"]}
+- "diary": ${diaryRules.replace(/\n/g, ' ')}${reviewInstruction}
+- "goals": 1 or 2 ids for TOMORROW, chosen ONLY from GOAL OPTIONS.
+- "persona": one short first-person sentence — who you want to be tomorrow (your character for the day, not a task).
+- "loadout": exactly ${this.ctx.settings.dailyLoadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating you'll reach for tomorrow. Match them to the persona and goals.`
+        : `${identity}${framing}
+${diaryRules}`;
+
       const reflection = await this.runOneShot(
-        'Scene Reflection',
+        planContext ? 'Scene Reflection + Daily Plan' : 'Scene Reflection',
         systemPrompt,
         transcript,
-        250,
+        planContext ? 600 : 250,
         undefined,
-        AIActionType.REFLECTION,
+        planContext ? AIActionType.DAILY_PLAN : AIActionType.REFLECTION,
       );
       this.logExchange(reflection.exchange);
-      this.recordTrace([cleanupAIOutput(reflection.text)], {
+
+      let text = cleanupAIOutput(reflection.text);
+      if (planContext && pov) {
+        const parsed = parsePlannerJson(reflection.text);
+        if (parsed && typeof parsed.diary === 'string' && parsed.diary.trim().length > 1) {
+          text = cleanupAIOutput(parsed.diary);
+          try {
+            this.ctx.dailyPlan.recordReview(pov.simId, planContext.endingDay, parsed.goal_review);
+            const validated = this.ctx.dailyPlan.validate(parsed, planContext.pool);
+            this.ctx.dailyPlan.acceptPlan(pov.simId, planContext.targetDay, validated, 'sleep');
+          } catch (err) {
+            log.warn(`[DailyPlan] failed to accept sleep plan for ${pov.simName}`, err);
+          }
+        } else {
+          // The diary must never be lost to plan parsing — keep whatever came back as
+          // the entry and let the lazy planner cover tomorrow
+          log.warn(`[DailyPlan] sleep planner output unparseable for ${pov.simName}; lazy path will plan`);
+        }
+      }
+      this.recordTrace([text], {
         pipeline: 'scene_reflection',
         exchanges: [reflection.exchange],
       });
 
-      const text = cleanupAIOutput(reflection.text);
       if (text.length <= 1) {
         log.error(`[Reflection] Empty reflection produced for scene ${previousScene.sceneId}`);
         return;

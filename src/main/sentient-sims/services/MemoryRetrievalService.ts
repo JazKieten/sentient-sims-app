@@ -30,7 +30,16 @@ export type RetrieveRequest = {
   // is omniscient; actors only ever see what it puts in their briefings). Omitted =
   // shared memories only.
   ownerScope?: string[];
+  // Cap on self-authored rumination rows ('thought'/'monologue') in the result. A sim's
+  // own tick-thoughts win on recency and dominate the candidate pool, so retrieval
+  // feeds the monologue its own words back — the echo chamber measured live 2026-08-09
+  // (35 of 39 thought rows one topic). 'reflection' rows are deliberately NOT capped:
+  // the diary is the identity thread that SHOULD compound. Omitted = old behavior.
+  maxSelfAuthored?: number;
 };
+
+// The rumination row types maxSelfAuthored counts against
+const SELF_AUTHORED_EVENT_TYPES = new Set(['thought', 'monologue']);
 
 // Timestamps are SQLite CURRENT_TIMESTAMP strings (UTC, second precision, 'YYYY-MM-DD HH:MM:SS').
 export function recencyScore(timestamp: string | undefined, now: Date): number {
@@ -98,7 +107,26 @@ export class MemoryRetrievalService {
     const scored = scoreable.map((candidate) => scoreCandidate(candidate, queryVector, now));
     // Ties (same score, e.g. no embeddings and equal importance) break toward newer memories
     scored.sort((a, b) => b.score - a.score || (b.memory.id ?? 0) - (a.memory.id ?? 0));
-    return scored.slice(0, request.k);
+    if (request.maxSelfAuthored === undefined) {
+      return scored.slice(0, request.k);
+    }
+    // Walk best-first, skipping rumination rows beyond the cap and filling to k from
+    // the rest — the top non-thought memories still surface in rank order
+    const selected: RetrievedMemory[] = [];
+    let selfAuthored = 0;
+    for (const candidate of scored) {
+      if (selected.length >= request.k) {
+        break;
+      }
+      if (SELF_AUTHORED_EVENT_TYPES.has(candidate.memory.event_type ?? '')) {
+        if (selfAuthored >= request.maxSelfAuthored) {
+          continue;
+        }
+        selfAuthored += 1;
+      }
+      selected.push(candidate);
+    }
+    return selected;
   }
 
   private async embedQuery(queryText: string): Promise<Float32Array | undefined> {

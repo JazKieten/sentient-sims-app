@@ -58,6 +58,9 @@ export enum SettingsEnum {
   COGNITION_PIPELINE = 'cognitionPipeline', // legacy review dial; unused since the Action Scene pipeline
   // Full Autonomy: a tick/scene action score at or above this stages an Action Scene
   COGNITION_ACTION_SCORE_THRESHOLD = 'cognitionActionScoreThreshold',
+  // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
+  DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
+  DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',
   // Voice input: hold-to-talk mic capture transcribed via an OpenAI-compatible
   // /audio/transcriptions endpoint, injected into the game as the active sim speaking
   VOICE_INPUT_ENABLED = 'voiceInputEnabled',

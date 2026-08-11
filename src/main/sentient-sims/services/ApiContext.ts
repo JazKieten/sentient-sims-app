@@ -18,6 +18,7 @@ import { SettingsController } from '../controllers/SettingsController';
 import { UpdateController } from '../controllers/UpdateController';
 import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
+import { DailyPlanRepository } from '../db/DailyPlanRepository';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -30,6 +31,7 @@ import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { ActionDispatcherService } from './ActionDispatcherService';
+import { DailyPlanService } from './DailyPlanService';
 import { SimStateCache } from './SimStateCache';
 import { CognitionService } from './CognitionService';
 import { AIService } from './AIService';
@@ -224,6 +226,7 @@ export class ApiContext {
   private readonly _actionDispatcherService: ActionDispatcherService;
   private readonly _simStateCache: SimStateCache;
   private readonly _cognitionService: CognitionService;
+  private readonly _dailyPlanService: DailyPlanService;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
@@ -242,6 +245,7 @@ export class ApiContext {
   private readonly _memoryIndexRepository: MemoryIndexRepository;
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
+  private readonly _dailyPlanRepository: DailyPlanRepository;
 
   // --- AI Services ---
   private readonly _sentientSimsAIService: SentientSimsAIService;
@@ -296,6 +300,7 @@ export class ApiContext {
     this._memoryIndexRepository = new MemoryIndexRepository(this._db);
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
+    this._dailyPlanRepository = new DailyPlanRepository(this._db);
 
     this._sceneService = new SceneService();
     this._actionDispatcherService = new ActionDispatcherService();
@@ -320,6 +325,8 @@ export class ApiContext {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);
     });
+
+    this._dailyPlanService = new DailyPlanService(this);
 
     // Last: subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
     this._cognitionService = new CognitionService(this);
@@ -411,6 +418,10 @@ export class ApiContext {
     return this._simStateCache;
   }
 
+  get dailyPlan(): DailyPlanService {
+    return this._dailyPlanService;
+  }
+
   // Evaluated per access so setting an OpenAI key at runtime upgrades from Noop
   get embedding(): EmbeddingService {
     return this._openAIEmbeddingService.isAvailable() ? this._openAIEmbeddingService : this._noopEmbeddingService;
@@ -462,6 +473,10 @@ export class ApiContext {
 
   get interactionRepository(): InteractionRepository {
     return this._interactionRepository;
+  }
+
+  get dailyPlanRepository(): DailyPlanRepository {
+    return this._dailyPlanRepository;
   }
 
   private get sentientSimsAIService(): SentientSimsAIService {

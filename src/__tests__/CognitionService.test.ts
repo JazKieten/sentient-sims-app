@@ -596,6 +596,53 @@ describe('CognitionService', () => {
     expect(adult.prompts[0]).not.toContain('romantic only');
   });
 
+  it('gates teen-plus socials on the TARGET age: hidden, labeled, or aimed right', async () => {
+    // Live 2026-08-11 t64: 'deep_conversation' was selected and dispatched at a CHILD;
+    // only the game's execution gate caught it. The offering side must catch it first.
+    // Child is the only company -> the verb is absent, and the target is named a child.
+    const solo = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const soloReport = idleSimReport(1);
+    soloReport.sims![0].sims![0].age = 'CHILD';
+    solo.cache.ingest(soloReport);
+    await settle();
+    expect(solo.prompts[0]).toContain('OFFERED social actions');
+    expect(solo.prompts[0]).not.toContain('deep conversation');
+    expect(solo.prompts[0]).toContain('a child — keep talk age-appropriate');
+
+    // Mixed-age room -> offered, but labeled so the model aims it at the teen+ target
+    const mixed = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const mixedReport = idleSimReport(1);
+    mixedReport.sims![0].sims!.push({
+      sim_id: '300',
+      tier: 'same_room',
+      name: 'Kid',
+      distance: 2,
+      age: 'CHILD',
+      social: { has_met: true },
+    });
+    mixed.cache.ingest(mixedReport);
+    await settle();
+    expect(mixed.prompts[0]).toContain('teens and up only: deep conversation');
+  });
+
+  it('coerces a teen-plus social dispatched at a child target down to chat', async () => {
+    // Belt-and-braces behind the prompt filter: a stage that names the verb anyway
+    // must never reach the game with a child target
+    const { cache, dispatched } = buildCtx({
+      optionsJson: JSON.stringify({
+        scene: 'A quiet moment.',
+        options: [{ action: 'deep_conversation', target_sim_id: '200', label: 'Really talk' }],
+      }),
+    });
+    const report = idleSimReport(1);
+    report.sims![0].sims![0].age = 'CHILD';
+    cache.ingest(report);
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({ action: 'chat', target_sim_id: '200' });
+  });
+
   it('cuts go_out from the vocabulary when the sim is too tired', async () => {
     const { cache, dispatched } = buildCtx({
       optionsJson: JSON.stringify({ options: [{ action: 'go_out', label: 'Hit the town' }] }),

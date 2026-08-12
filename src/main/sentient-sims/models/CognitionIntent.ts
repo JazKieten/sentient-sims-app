@@ -5,7 +5,7 @@
 // POST, and that rule lives in CognitionService's state machine, not in any prompt.
 
 import { SimStateEntry } from './SimStateReport';
-import { ROMANCE_ACTIONS, isRomanceAge } from './ActionLoadout';
+import { ROMANCE_ACTIONS, TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from './ActionLoadout';
 
 export type CognitionIntentKind = 'action' | 'speak' | 'continue' | 'wait';
 
@@ -50,6 +50,9 @@ export const SOCIAL_ACTIONS = new Set([
 export type SimTargetInfo = {
   name?: string;
   hasMet: boolean;
+  // Age of the perceived target (str(sim_info.age) minus 'Age.'), for target-side age
+  // gates; absent on older mod builds, which fails age-gated socials CLOSED
+  age?: string;
   friendship?: number;
   romance?: number;
   bits?: string[];
@@ -134,6 +137,7 @@ export function offeredActions(
     simTargets.set(perceived.sim_id, {
       name: perceived.name,
       hasMet: perceived.social?.has_met !== false,
+      age: perceived.age,
       friendship: perceived.social?.friendship,
       romance: perceived.social?.romance,
       bits: perceived.social?.bits,
@@ -211,11 +215,12 @@ export function validateIntent(
     //
     // Age gate, belt-and-braces: the prompt no longer offers romance across an age line,
     // but a stage that names one anyway must never dispatch it. Coerced rather than
-    // rejected so the tick still spends on something.
-    const targetAge = (entry.sims ?? []).find((perceived) => perceived.sim_id === candidate.target_sim_id)?.age;
-    const romanceBlocked =
-      ROMANCE_ACTIONS.has(action) && !(isRomanceAge(entry.self?.age) && isRomanceAge(targetAge));
-    const coerced = target.hasMet && !romanceBlocked ? action : 'chat';
+    // rejected so the tick still spends on something. TEEN_PLUS_TARGET_SOCIALS ride the
+    // same TEEN+ rule: the game cancels them at execution when the target is a child
+    // (deep_conversation, caught live 2026-08-11), so they must die here first.
+    const teenPlusGated = ROMANCE_ACTIONS.has(action) || TEEN_PLUS_TARGET_SOCIALS.has(action);
+    const ageBlocked = teenPlusGated && !(isRomanceAge(entry.self?.age) && isRomanceAge(target.age));
+    const coerced = target.hasMet && !ageBlocked ? action : 'chat';
     return {
       ok: true,
       intent: { ...candidate, action: coerced, thought },

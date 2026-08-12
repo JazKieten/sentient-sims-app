@@ -81,6 +81,13 @@ export function isRomanceAge(age: string | undefined): boolean {
   return age !== undefined && ROMANCE_AGES.has(age.trim().toUpperCase());
 }
 
+// Non-romance socials the game refuses when the TARGET is under teen — the age test
+// rides the social's mixer, so preflight passes and the cancel only lands at execution
+// ("TargetSim's age is Age.CHILD, must be one of Age.TEEN, YOUNGADULT, ADULT, ELDER",
+// caught live 2026-08-11: deep_conversation dispatched at a CHILD). The game's list is
+// the same TEEN+ set as romance, so isRomanceAge doubles as the target-age predicate.
+export const TEEN_PLUS_TARGET_SOCIALS = new Set(['deep_conversation']);
+
 // Grouped view of DISCRETIONARY_ACTIONS for planner prompts — same keys, human order
 export const DISCRETIONARY_GROUPS: Record<string, string[]> = {
   fun: ['watch_tv', 'read_book', 'browse_web', 'play_piano', 'play_guitar', 'dance'],

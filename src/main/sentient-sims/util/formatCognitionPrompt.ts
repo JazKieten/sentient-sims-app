@@ -6,7 +6,7 @@
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
-import { isRomanceAge } from '../models/ActionLoadout';
+import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
@@ -38,6 +38,11 @@ function prettyBit(bit: string): string | undefined {
 // social pick match the relationship (get_to_know a stranger, flirt at a spark, not both)
 function describeTarget(simId: string, target: SimTargetInfo): string {
   const parts: string[] = [`sim_id ${simId}`];
+  // A minor target is named as such so the model aims age-gated verbs elsewhere on its
+  // own — the hard filters below are the backstop, this is the signal
+  if (target.age !== undefined && !isRomanceAge(target.age)) {
+    parts.push(`a ${target.age.toLowerCase()} — keep talk age-appropriate`);
+  }
   if (!target.hasMet) {
     parts.push('a stranger — chat to break the ice');
   } else {
@@ -317,13 +322,20 @@ export function buildCognitionUserPrompt(
     const plain: string[] = [];
     const romantic: string[] = [];
     const mean: string[] = [];
+    const teenPlus: string[] = [];
     // Romance needs BOTH sides adult-or-teen: the actor, and at least one same-room sim
     // who could receive it. Unknown age (older mod build) blocks it. Live 2026-08-10:
     // nothing read age anywhere, so a CHILD's prompt offered 'flirt' at whoever was in
     // the room — and an adult's offered it at a child.
-    const romanceAllowed =
-      isRomanceAge(entry.self?.age) &&
-      (entry.sims ?? []).some((perceived) => perceived.tier === 'same_room' && isRomanceAge(perceived.age));
+    const teenPlusTargetPresent = (entry.sims ?? []).some(
+      (perceived) => perceived.tier === 'same_room' && isRomanceAge(perceived.age),
+    );
+    const romanceAllowed = isRomanceAge(entry.self?.age) && teenPlusTargetPresent;
+    // Whether any same-room sim CANNOT receive a teen-plus social (unknown age counts:
+    // fail closed) — only then does the "teens and up" label earn its place
+    const minorPresent = (entry.sims ?? []).some(
+      (perceived) => perceived.tier === 'same_room' && !isRomanceAge(perceived.age),
+    );
     SOCIAL_ACTIONS.forEach((action) => {
       if (action !== 'chat' && hiddenActions?.has(action)) {
         return;
@@ -331,10 +343,19 @@ export function buildCognitionUserPrompt(
       if (ROMANTIC_SOCIALS.has(action) && !romanceAllowed) {
         return;
       }
+      // Non-romance socials the game refuses at a child target (deep_conversation,
+      // dispatched at a CHILD and canceled at execution — live 2026-08-11): with no
+      // teen+ target in the room they are hidden, with a mixed-age room they are
+      // labeled so the model aims them at the right person
+      if (TEEN_PLUS_TARGET_SOCIALS.has(action) && !teenPlusTargetPresent) {
+        return;
+      }
       if (ROMANTIC_SOCIALS.has(action)) {
         romantic.push(pretty(action));
       } else if (MEAN_SOCIALS.has(action)) {
         mean.push(pretty(action));
+      } else if (TEEN_PLUS_TARGET_SOCIALS.has(action) && minorPresent) {
+        teenPlus.push(pretty(action));
       } else {
         plain.push(pretty(action));
       }
@@ -342,6 +363,9 @@ export function buildCognitionUserPrompt(
     const socialParts = [
       `OFFERED social actions (need a target_sim_id; match them to the relationship): ${plain.join(', ')}`,
     ];
+    if (teenPlus.length > 0) {
+      socialParts.push(`teens and up only: ${teenPlus.join(', ')}`);
+    }
     if (romantic.length > 0) {
       socialParts.push(`romantic only: ${romantic.join(', ')}`);
     }

@@ -774,7 +774,22 @@ ${diaryRules}`;
   async handleDoSomething(doSomethingEvent: DoSomethingInteractionEvent) {
     // Solo Do Something plays as a monologue-only directed beat: the player sees the
     // sim's thought via the memory display instead of narrator prose
-    return this.runDirectedGeneration(doSomethingEvent, { action: doSomethingEvent.action });
+    const directed = await this.tryDirectedGeneration(doSomethingEvent, { action: doSomethingEvent.action });
+    if (directed?.status === InteractionEventStatus.GENERATED) {
+      return directed;
+    }
+    return this.runGeneration(
+      doSomethingEvent,
+      {
+        action: doSomethingEvent.action,
+        prePreAction: 'At {location} ({location_type}), {postures},',
+      },
+      {
+        // The player asked for this on their own sim and is watching for the result —
+        // stream it as paced subtitles rather than a suppressed memory block
+        pacedSubtitles: true,
+      },
+    );
   }
 
   async handleChat(chatEvent: ChatInteractionEvent) {
@@ -1436,6 +1451,7 @@ ${
       dialogueText,
       performers.map((sim) => ({ name: sim.name, think: monologueBySim.get(sim.name) })),
       options.directorModel,
+      interactionActionType,
     );
     if (sceneScores.exchange) {
       exchanges.push(sceneScores.exchange);
@@ -1561,6 +1577,7 @@ ${
       '',
       [{ name: performer.name, think }],
       options.directorModel,
+      actionTypeForEvent(event.event_type),
     );
     if (sceneScores.exchange) {
       exchanges.push(sceneScores.exchange);
@@ -1633,6 +1650,7 @@ ${
     dialogueText: string,
     performances: { name: string; think?: string }[],
     model?: string,
+    interactionActionType?: AIActionType,
   ): Promise<{ scores: Map<string, SceneScore>; exchange?: LLMExchange }> {
     const names = performances.map((performance) => performance.name);
     if (names.length === 0) {
@@ -1662,6 +1680,7 @@ Respond with ONLY a JSON object in exactly this shape, covering every character,
         300,
         model,
         AIActionType.DIRECTED_SCENE_SCORES,
+        interactionActionType,
       );
       this.logExchange(oneShot.exchange);
       const scores = parseSceneScores(oneShot.text, names);

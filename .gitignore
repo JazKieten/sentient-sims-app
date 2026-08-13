@@ -43,3 +43,8 @@ certificate.p12
 
 # Keys
 .env
+
+# Playtest captures and Claude session-local files
+.claude/sentience-phase-2/playtest-logs*.txt
+.claude/sentience-phase-2/*.db
+.claude/scheduled_tasks.lock

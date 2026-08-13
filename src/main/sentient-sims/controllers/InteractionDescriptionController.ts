@@ -11,9 +11,14 @@ export class InteractionDescriptionController {
   }
 
   updateInteraction = async (req: Request, res: Response) => {
-    const interaction = req.body as InteractionDTO;
-    await this.ctx.interactions.updateUnmappedInteraction(interaction);
-    res.json({ done: 'done' });
+    try {
+      const interaction = req.body as InteractionDTO;
+      await this.ctx.interactions.updateUnmappedInteraction(interaction);
+      res.json({ done: 'done' });
+    } catch (err) {
+      log.error('[Controller] Error saving interaction online:', err);
+      res.status(500).json({ error: 'Failed to save interaction online.' });
+    }
   };
 
   deleteInteraction = async (req: Request, res: Response) => {
@@ -42,9 +47,30 @@ export class InteractionDescriptionController {
     }
   };
 
-  getOnlineInteractions = async (req: Request, res: Response) => {
+  deleteLocalInteraction = (req: Request, res: Response) => {
     try {
-      const interactions = await this.ctx.interactionRepository.getInteractions();
+      const interaction = req.body as BasicInteraction;
+      this.ctx.interactionRepository.deleteLocalInteraction(interaction.name);
+      res.json({ status: 'success', message: 'Local interaction override deleted.' });
+    } catch (err) {
+      log.error('[Controller] Error deleting local interaction override:', err);
+      res.status(500).json({ error: 'Failed to delete local interaction override.' });
+    }
+  };
+
+  semanticSearchInteractions = async (req: Request, res: Response) => {
+    try {
+      const query = typeof req.query.q === 'string' ? req.query.q : '';
+      res.json(await this.ctx.interactionSemanticSearch.search(query));
+    } catch (err) {
+      log.error('[Controller] Error semantically searching interactions:', err);
+      res.status(500).json({ error: 'Failed to search interactions.' });
+    }
+  };
+
+  getAllInteractions = async (req: Request, res: Response) => {
+    try {
+      const interactions = await this.ctx.interactionRepository.getBrowsableInteractions();
 
       res.json(Object.fromEntries(interactions));
     } catch (err) {

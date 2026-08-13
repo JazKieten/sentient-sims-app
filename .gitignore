@@ -48,3 +48,6 @@ certificate.p12
 .claude/sentience-phase-2/playtest-logs*.txt
 .claude/sentience-phase-2/*.db
 .claude/scheduled_tasks.lock
+
+# Interaction cleanup reports (working data, not code)
+interaction-cleanup-report*.csv

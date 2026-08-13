@@ -53,6 +53,7 @@ import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
 import { MemoryTraceService } from './MemoryTraceService';
 import { AIExchangeLogService } from './AIExchangeLogService';
+import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
 import { NovelAIService } from './NovelAIService';
 import { OpenAIService } from './OpenAIService';
@@ -237,6 +238,7 @@ export class ApiContext {
   // One logging wrapper per provider service, so repeated getGenerationService calls
   // hand back the same object instead of allocating a new proxy each time
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
+  private readonly _interactionSemanticSearchService: InteractionSemanticSearchService;
   private readonly _elevenLabsVoicesService: ElevenLabsVoicesService;
 
   // --- Repositories ---
@@ -317,6 +319,7 @@ export class ApiContext {
 
     this._memoryAnnotationService = new MemoryAnnotationService(this);
     this._memoryRetrievalService = new MemoryRetrievalService(this);
+    this._interactionSemanticSearchService = new InteractionSemanticSearchService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
@@ -445,6 +448,10 @@ export class ApiContext {
 
   get aiExchangeLog(): AIExchangeLogService {
     return this._aiExchangeLogService;
+  }
+
+  get interactionSemanticSearch(): InteractionSemanticSearchService {
+    return this._interactionSemanticSearchService;
   }
 
   get elevenLabsVoices(): ElevenLabsVoicesService {

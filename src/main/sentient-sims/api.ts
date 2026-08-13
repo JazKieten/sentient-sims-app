@@ -1,4 +1,5 @@
 import express, { json } from 'express';
+import electron from 'electron';
 import log from 'electron-log';
 import { modOutOfDate } from './controllers/VersionController';
 import { DebugController } from './controllers/DebugController';
@@ -75,7 +76,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/db/unload', ctx.controller.db.unloadDatabase);
   expressApp.get('/db/list', ctx.controller.db.getSaveGames);
 
-  expressApp.get('/animations/online-all', ctx.controller.animations.getOnlineAnimations);
+  expressApp.get('/animations/all', ctx.controller.animations.getAllAnimations);
 
   expressApp.get('/animations', ctx.controller.animations.getAnimations);
   expressApp.get('/animations/nsfw-enabled', ctx.controller.animations.isNsfwEnabled);
@@ -83,10 +84,13 @@ export function runApi(ctx: ApiContext) {
   expressApp.delete('/animations', ctx.controller.animations.deleteAnimation);
 
   expressApp.post('/animations/save-locally', ctx.controller.animations.saveAnimationLocally);
+  expressApp.delete('/animations/local', ctx.controller.animations.deleteLocalAnimation);
 
   expressApp.get('/interactions/ignored', ctx.controller.interactionDescription.getIgnoredInteractions);
 
-  expressApp.get('/interactions/online-all', ctx.controller.interactionDescription.getOnlineInteractions);
+  expressApp.get('/interactions/all', ctx.controller.interactionDescription.getAllInteractions);
+
+  expressApp.get('/interactions/semantic-search', ctx.controller.interactionDescription.semanticSearchInteractions);
 
   expressApp.get('/traits', ctx.controller.mapping.getTraits);
   expressApp.get('/traits/unmapped', ctx.controller.mapping.getUnmappedTraits);
@@ -95,6 +99,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/moods/unmapped', ctx.controller.mapping.getUnmappedMoods);
 
   expressApp.post('/interactions/save-locally', ctx.controller.interactionDescription.saveInteractionLocally);
+  expressApp.delete('/interactions/local', ctx.controller.interactionDescription.deleteLocalInteraction);
 
   expressApp.post('/interactions', ctx.controller.interactionDescription.updateInteraction);
   expressApp.delete('/interactions', ctx.controller.interactionDescription.deleteInteraction);
@@ -114,9 +119,26 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/cognition/debug/enqueue', ctx.controller.cognition.debugEnqueue);
   expressApp.post('/cognition/debug/perception', ctx.controller.cognition.debugRequestPerception);
 
-  return expressApp.listen(ctx.port, () => {
-    log.debug(`Server is running on port ${ctx.port}`);
+  const server = expressApp.listen(ctx.port, () => {
+    log.info(`Server is running on port ${ctx.port}`);
   });
+
+  // Without this handler a failed bind is an unhandled 'error' event: the process keeps
+  // running with a window but no API, which players see as a blank app.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    log.error(`API server error on port ${ctx.port}`, err);
+    if (err.code === 'EADDRINUSE' || err.code === 'EACCES') {
+      // In tests (ELECTRON_RUN_AS_NODE) dialog is not initialized; skip the popup.
+      (electron as Partial<typeof electron>).dialog?.showErrorBox(
+        'Sentient Sims could not start its local server',
+        `Port ${ctx.port} could not be opened (${err.code}). The app and the game cannot communicate without it.\n\n` +
+          'Another program or a stuck copy of this app may be using the port. ' +
+          'Close other copies of the app (check Task Manager), or restart your computer, then reopen the app.',
+      );
+    }
+  });
+
+  return server;
 }
 
 export function runWebSocketServer(ctx: ApiContext) {

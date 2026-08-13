@@ -1,11 +1,16 @@
-import { Animation } from 'main/sentient-sims/models/Animation';
+import { Animation, BrowsableAnimation } from 'main/sentient-sims/models/Animation';
 import { AIActionType } from '../models/AIActionType';
 import { ApiType } from '../models/ApiType';
 import { axiosClient } from '../clients/AxiosClient';
+import { notifyOnlineMappingsChanged } from '../util/notifyRenderer';
+import { ONLINE_MAPPING_SYNC_INTERVAL_MS, onlineMappingsEqual } from '../util/onlineMappingSync';
 import { ApiContext } from './ApiContext';
 import fs from 'fs';
 import path from 'path';
 import log from 'electron-log';
+
+const FETCH_RETRY_COOLDOWN_MS = 60_000;
+const FETCH_TIMEOUT_MS = 15_000;
 
 export function getAnimationKey(animationAuthor: string, animationIdentifier: string) {
   return `${animationAuthor}:${animationIdentifier}`;
@@ -15,6 +20,8 @@ export class AnimationsService {
   private ctx: ApiContext;
   private localAnimations?: Map<string, Animation>;
   private animations?: Map<string, Animation>;
+  private lastFetchFailure?: number;
+  private syncTimer?: ReturnType<typeof setInterval>;
 
   constructor(ctx: ApiContext) {
     this.ctx = ctx;
@@ -26,23 +33,77 @@ export class AnimationsService {
       return this.animations;
     }
 
-    try {
-      const response = await axiosClient<Record<string, Animation>>({
-        url: '/animations',
-        baseURL: this.ctx.settings.sentientSimsAIEndpoint,
-        headers: {
-          Authentication: this.ctx.settings.accessToken,
-          ...this.ctx.version.getVersionHeaders(),
-        },
-      });
-
-      this.animations = new Map(Object.entries(response.data));
-    } catch (err) {
-      log.error(`[AnimationService] Unable to fetch animations from API`, err);
-      this.animations = new Map<string, Animation>();
+    if (this.lastFetchFailure && Date.now() - this.lastFetchFailure < FETCH_RETRY_COOLDOWN_MS) {
+      return new Map<string, Animation>();
     }
 
-    return this.animations;
+    try {
+      this.animations = await this.fetchAnimations();
+      this.lastFetchFailure = undefined;
+      this.scheduleOnlineSync();
+    } catch (err) {
+      this.lastFetchFailure = Date.now();
+      log.error(`[AnimationService] Unable to fetch animations from API`, err);
+    }
+
+    return this.animations || new Map<string, Animation>();
+  }
+
+  async fetchAnimations(): Promise<Map<string, Animation>> {
+    const response = await axiosClient<Record<string, Animation>>({
+      url: '/animations',
+      baseURL: this.ctx.settings.sentientSimsAIEndpoint,
+      timeout: FETCH_TIMEOUT_MS,
+      headers: {
+        Authentication: this.ctx.settings.accessToken,
+        ...this.ctx.version.getVersionHeaders(),
+      },
+    });
+
+    return new Map(Object.entries(response.data));
+  }
+
+  // Online mappings are shared: when a mapper edits one, every running app should pick
+  // it up without a restart, so the cache re-syncs in the background once it is in use
+  private scheduleOnlineSync() {
+    if (this.syncTimer) {
+      return;
+    }
+    this.syncTimer = setInterval(() => {
+      void this.syncOnlineAnimations();
+    }, ONLINE_MAPPING_SYNC_INTERVAL_MS);
+    this.syncTimer.unref();
+  }
+
+  async syncOnlineAnimations() {
+    try {
+      const latest = await this.fetchAnimations();
+      if (!this.animations || !onlineMappingsEqual(this.animations, latest)) {
+        this.animations = latest;
+        notifyOnlineMappingsChanged('animations');
+      }
+    } catch (err) {
+      // Being offline is normal for a background sync; error-level would nag every interval
+      log.debug('[Sync] Unable to refresh online animations', err);
+    }
+  }
+
+  /**
+   * Every animation the user can browse and edit, merged from all sources.
+   * Precedence matches in-game resolution: local override > online.
+   */
+  async getBrowsableAnimations(): Promise<Map<string, BrowsableAnimation>> {
+    const browsable = new Map<string, BrowsableAnimation>();
+
+    (await this.getAnimations()).forEach((animation, key) => {
+      browsable.set(key, { ...animation, source: 'online' });
+    });
+
+    this.localAnimations?.forEach((animation, key) => {
+      browsable.set(key, { ...animation, source: 'local' });
+    });
+
+    return browsable;
   }
 
   private loadLocalAnimations() {
@@ -63,8 +124,7 @@ export class AnimationsService {
 
   saveLocalAnimation(animation: Animation) {
     if (!animation.author || !animation.id) {
-      log.error(`[Override] Local Animation could not be saved: Author or ID be missing.`);
-      return;
+      throw new Error('Animation is missing an author or id, unable to save local override.');
     }
 
     const animationKey = getAnimationKey(animation.author, animation.id);
@@ -87,6 +147,36 @@ export class AnimationsService {
       log.info(`[Override] Local animation '${animationKey}' saved.`);
     } catch (err) {
       log.error(`[Override] local animation could not be saved`, err);
+      throw err;
+    }
+  }
+
+  deleteLocalAnimation(animation: Animation) {
+    if (!animation.author || !animation.id) {
+      throw new Error('Animation is missing an author or id, unable to delete local override.');
+    }
+
+    const animationKey = getAnimationKey(animation.author, animation.id);
+
+    try {
+      const sentientSimsFolder = this.ctx.directory.getSentientSimsFolder();
+      const localMapPath = path.join(sentientSimsFolder, 'user_animation_overrides.json');
+
+      let localOverrides: Record<string, Animation> = {};
+      if (fs.existsSync(localMapPath)) {
+        const fileContent = fs.readFileSync(localMapPath, 'utf-8');
+        localOverrides = JSON.parse(fileContent) as Record<string, Animation>;
+      }
+
+      const remaining = Object.fromEntries(Object.entries(localOverrides).filter(([key]) => key !== animationKey));
+
+      this.localAnimations = new Map(Object.entries(remaining));
+
+      fs.writeFileSync(localMapPath, JSON.stringify(remaining, null, 2));
+      log.info(`[Override] Local animation '${animationKey}' deleted.`);
+    } catch (err) {
+      log.error(`[Override] local animation could not be deleted`, err);
+      throw err;
     }
   }
 
@@ -105,6 +195,8 @@ export class AnimationsService {
     const result = response.data;
 
     this.animations = new Map(Object.entries(result));
+    this.scheduleOnlineSync();
+    notifyOnlineMappingsChanged('animations');
 
     return result;
   }
@@ -124,6 +216,7 @@ export class AnimationsService {
     if (animation.author && animation.id) {
       this.animations?.delete(getAnimationKey(animation.author, animation.id));
     }
+    notifyOnlineMappingsChanged('animations');
   }
 
   async getAnimation(animationAuthor: string, animationIdentifier: string) {

@@ -28,7 +28,14 @@ import { markScenePaced } from '../util/pacedScenes';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
 import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
-import { defaultClassificationPrompt, directedSceneBudgetMs, playerVoiceSpeaker } from '../constants';
+import {
+  defaultClassificationPrompt,
+  defaultWantsPrefixes,
+  defaultWantsPrompt,
+  directedSceneBudgetMs,
+  playerVoiceSpeaker,
+} from '../constants';
+import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import {
   BuffEventRequest,
   BuffDescriptionRequest,
@@ -717,11 +724,21 @@ ${diaryRules}`;
   }
 
   async handleWants(event: WantsInteractionEvent) {
-    // A want IS inner monologue: a quiet solo beat where the sim takes stock of what
-    // they want right now, played through the same directed pipeline as everything else
-    return this.runDirectedGeneration(event, {
-      action: '{actor.0} pauses for a moment and takes stock of what they want right now.',
-    });
+    const randomAction = defaultWantsPrefixes[Math.floor(Math.random() * defaultWantsPrefixes.length)];
+    return this.runGeneration(
+      event,
+      {
+        preAction: defaultWantsPrompt,
+        preAssistantPreResponse: `{actor.0}:`,
+        assistantPreResponse: randomAction,
+        promptHistoryMode: PromptHistoryMode.NO_USER_HISTORY,
+      },
+      {
+        // Wants are the actor's own first-person voice — speak them as the actor so the
+        // sim's cast/pinned ElevenLabs voice is used instead of the global default
+        ttsSpeaker: event.sentient_sims[0]?.name,
+      },
+    );
   }
 
   async handleWickedWhims(event: WWInteractionEvent) {
@@ -1549,10 +1566,11 @@ ${
   }
 
   // Completion path for a monologue-only (solo) directed scene: no dialogue, no reviewer.
-  // The thought IS the scene — scored by the reflection stage, displayed by the mod's
-  // normal memory path when the interaction completes, never spoken by TTS. The returned
-  // memory row is typed 'monologue' so it stays out of shared scene history, and the
-  // memories POST stamps single-participant monologue rows with their owner.
+  // The thought IS the scene — scored by the reflection stage, spoken aloud in the sim's
+  // own voice and subtitled as "<Name> (to self):" via the paced scene-line stream. The
+  // memory row still records it as a thought ("<Name> (thinking):"), typed 'monologue' so
+  // it stays out of shared scene history, and the memories POST stamps single-participant
+  // monologue rows with their owner.
   private async finishMonologueScene(
     event: SSEvent,
     options: DirectedGenerationOptions,
@@ -1625,8 +1643,17 @@ ${
       );
     }
 
-    // Thoughts are silent: no TTS, no paced subtitle stream
-    const play = once(() => {});
+    // The thought plays aloud as a self-directed aside: marking the scene paced suppresses
+    // the memory block's "(thinking)" subtitle when the mod POSTs the memory back, and the
+    // renderer streams one "(to self)" line to the game timed to the sim's own voice. Only
+    // the on-screen delivery changes — the memory row above still remembers it as a thought.
+    const play = once(() => {
+      markScenePaced(finalText);
+      this.playTtsLines([{ speaker: `${performer.name} (to self)`, text: think }], event.sentient_sims, {
+        paced: true,
+        pacedText: finalText,
+      });
+    });
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);
     } else {

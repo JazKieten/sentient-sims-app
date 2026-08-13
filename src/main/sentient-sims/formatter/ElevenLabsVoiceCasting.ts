@@ -163,7 +163,8 @@ export function castElevenLabsVoice(sim: SentientSim): string {
 }
 
 function findSimForSpeaker(speaker: string, sims: SentientSim[]): SentientSim | undefined {
-  const speakerLower = speaker.toLowerCase();
+  // A delivery label on the speaker ("Jasmine (to self)") never changes whose voice it is
+  const speakerLower = speaker.replace(/\s*\([^)]*\)\s*$/, '').toLowerCase();
   return sims.find((sim) => {
     const nameLower = sim.name.toLowerCase();
     return nameLower === speakerLower || nameLower.startsWith(`${speakerLower} `);

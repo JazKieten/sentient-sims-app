@@ -1445,6 +1445,15 @@ ${
         reviewedLines = parseReviewedLines(compiled.text, simNames).filter(
           (line) => !playerLine || line.speaker !== playerLine.speaker,
         );
+        // The reviewer is an editor, not a writer: it may keep or repair the delivered lines,
+        // never extend the scene. If it continued the conversation anyway, everything past the
+        // delivered line count is its invention — cut it off there.
+        if (reviewedLines.length > performedLines.length) {
+          log.warn(
+            `[Pipeline] Reviewer returned ${reviewedLines.length} lines for ${performedLines.length} delivered — truncating its continuation`,
+          );
+          reviewedLines = reviewedLines.slice(0, performedLines.length);
+        }
       } catch (err) {
         log.error('Director review failed, airing the lines as performed', err);
       }

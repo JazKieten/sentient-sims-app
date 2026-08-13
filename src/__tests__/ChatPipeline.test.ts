@@ -129,6 +129,18 @@ describe('Chat pipeline', () => {
     expect(result.memory?.content).toEqual(`Nancy Landgraab: ${actorLine}`);
   });
 
+  it('cuts the reviewer off when it extends the scene past the delivered lines', async () => {
+    // The known rogue behavior: instead of reviewing, the reviewer keeps writing the scene
+    reviewerOutput = `Nancy Landgraab: ${actorLine}\nNancy Landgraab: Anyway, want to grab a smoothie after?\nMarisol Vega: Sure, sounds great!`;
+    mockGeneration();
+
+    const result = await ctx.ai.interactionEvent(buildChatEvent('Nice, me too!', [playerSim, targetSim]));
+
+    // Only the one delivered line airs; the reviewer's continuation is dropped
+    expect(result.text).toEqual(`Nancy Landgraab: ${actorLine}`);
+    expect(result.memory?.content).toEqual(`Nancy Landgraab: ${actorLine}`);
+  });
+
   it('carries the running conversation into the next chat beat', async () => {
     const generate = mockGeneration();
 

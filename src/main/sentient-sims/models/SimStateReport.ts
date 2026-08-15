@@ -32,6 +32,9 @@ export type LotCondition = {
 
 export type LotBlock = {
   zone_id?: number | string;
+  // The app keys locations by LOT id (what events and outcomes carry); zone_id is the
+  // game's zone handle and does NOT match it
+  lot_id?: string;
   // Human-readable place handles (V-6): the lot's own name and its world id
   lot_name?: string;
   world_id?: string;

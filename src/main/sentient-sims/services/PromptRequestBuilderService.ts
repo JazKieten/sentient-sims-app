@@ -434,12 +434,15 @@ export class PromptRequestBuilderService {
     // V-6: "The Residence" for every lot in the save. The state report's lot block (venue,
     // ownership, conditions) plus the world name is everything the app knows about a place.
     const reportedLot = this.ctx.simStateCache.getReport()?.lot;
+    // Only describe the lot the report is actually about — an event from another lot (a
+    // memory replay, a travelling sim) must not borrow this one's facts. Match on lot_id:
+    // location_id IS the lot id, and the report's zone_id is a different handle entirely.
+    const sameLot = reportedLot?.lot_id !== undefined
+      && String(reportedLot.lot_id) === String(event.environment.location_id);
     this.ctx.defaultDescriptions.considerLocation(
       location,
-      // Only describe the lot the report is actually about — an event from another zone
-      // (a memory replay, a travelling sim) must not borrow this lot's facts
-      String(reportedLot?.zone_id ?? '') === String(event.environment.location_id) ? reportedLot : undefined,
-      String(reportedLot?.zone_id ?? '') === String(event.environment.location_id) ? reportedLot?.lot_name : undefined,
+      sameLot ? reportedLot : undefined,
+      sameLot ? reportedLot.lot_name : undefined,
     );
 
     const dateTime = formatDateTime(event.environment);

@@ -89,7 +89,9 @@ export function notifyMemoryEdited(memory: MemoryEntity) {
   notifyAllWindows('on-memory-edited', memory);
   sendModNotification({
     type: ModWebsocketMessageType.MEMORY_EDITED,
-    memory: withDisplayContent(memory),
+    // Same strip as memory_created: the V-4 name tags are renderer-only and the mod's
+    // SentientMemory ctor took them as unexpected kwargs (live 2026-08-15)
+    memory: withDisplayContent(toModMemory(memory)),
   });
 }
 

@@ -81,6 +81,8 @@ export enum SettingsEnum {
   VOICE_COMMAND_HOTKEY = 'voiceCommandHotkey',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // V-6: write a first description for undescribed sims/lots instead of the stock default
+  GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
 }
 
 export enum DeprecatedSettingsEnum {

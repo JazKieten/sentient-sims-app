@@ -32,6 +32,7 @@ import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { ActionDispatcherService } from './ActionDispatcherService';
 import { VoiceCommandService } from './VoiceCommandService';
+import { DefaultDescriptionService } from './DefaultDescriptionService';
 import { DailyPlanService } from './DailyPlanService';
 import { SimStateCache } from './SimStateCache';
 import { CognitionService } from './CognitionService';
@@ -228,6 +229,7 @@ export class ApiContext {
   private readonly _actionDispatcherService: ActionDispatcherService;
 
   private _voiceCommandService?: VoiceCommandService;
+  private _defaultDescriptionService?: DefaultDescriptionService;
   private readonly _simStateCache: SimStateCache;
   private readonly _cognitionService: CognitionService;
   private readonly _dailyPlanService: DailyPlanService;
@@ -418,6 +420,14 @@ export class ApiContext {
       this._voiceCommandService = new VoiceCommandService(this);
     }
     return this._voiceCommandService;
+  }
+
+  // V-6: lazily built for the same reason as voiceCommand — it needs ai, which is built late
+  get defaultDescriptions(): DefaultDescriptionService {
+    if (!this._defaultDescriptionService) {
+      this._defaultDescriptionService = new DefaultDescriptionService(this);
+    }
+    return this._defaultDescriptionService;
   }
 
   get actionDispatcher(): ActionDispatcherService {

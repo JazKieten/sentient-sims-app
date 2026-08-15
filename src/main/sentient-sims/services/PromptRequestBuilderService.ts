@@ -89,11 +89,20 @@ export class PromptRequestBuilderService {
     sentientSims.forEach((sentientSim) => {
       sims.set(sentientSim.sim_id, sentientSim);
 
+      let storedDescription: string | undefined;
       participants.forEach((participant) => {
-        if (participant.id === sentientSim.sim_id && participant.description) {
-          sentientSim.description = participant.description;
+        if (participant.id === sentientSim.sim_id) {
+          storedDescription = participant.description;
+          if (participant.description) {
+            sentientSim.description = participant.description;
+          }
         }
       });
+
+      // V-6: an undescribed character is the richest they will ever be right here — the
+      // live SentientSim carries the traits/likes/career the generator needs. Fire and
+      // forget: this prompt still goes out with no description, the NEXT one has one.
+      this.ctx.defaultDescriptions.considerSim(sentientSim, storedDescription);
 
       formattedParticipants.push(
         `<CHARACTER_IN_INTERACTION>\n${formatSentientSim(sentientSim, {
@@ -421,6 +430,17 @@ export class PromptRequestBuilderService {
     const location = this.ctx.locationRepository.getLocation({
       id: event.environment.location_id,
     });
+
+    // V-6: "The Residence" for every lot in the save. The state report's lot block (venue,
+    // ownership, conditions) plus the world name is everything the app knows about a place.
+    const reportedLot = this.ctx.simStateCache.getReport()?.lot;
+    this.ctx.defaultDescriptions.considerLocation(
+      location,
+      // Only describe the lot the report is actually about — an event from another zone
+      // (a memory replay, a travelling sim) must not borrow this lot's facts
+      String(reportedLot?.zone_id ?? '') === String(event.environment.location_id) ? reportedLot : undefined,
+      String(reportedLot?.zone_id ?? '') === String(event.environment.location_id) ? reportedLot?.lot_name : undefined,
+    );
 
     const dateTime = formatDateTime(event.environment);
     const season = formatSeason(event.environment);

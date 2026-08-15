@@ -32,6 +32,9 @@ export type LotCondition = {
 
 export type LotBlock = {
   zone_id?: number | string;
+  // Human-readable place handles (V-6): the lot's own name and its world id
+  lot_name?: string;
+  world_id?: string;
   clock?: LotClock;
   venue?: string;
   funds?: number;

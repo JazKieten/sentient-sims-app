@@ -47,6 +47,39 @@ export class ParticipantRepository extends Repository {
     return participant;
   }
 
+  // V-6: persist a GENERATED default description, but only while the character still has
+  // none. The generation is fire-and-forget and can land minutes after the miss that
+  // triggered it — by then the player may have written their own, and a machine-written
+  // placeholder must never overwrite that. Returns whether the row was actually written.
+  setDescriptionIfEmpty(participantId: string, description: string, name?: string): boolean {
+    const result = this.dbService
+      .getDb()
+      .prepare(
+        `UPDATE participant SET description = ?
+         WHERE id = ? AND (description IS NULL OR TRIM(description) = '')`,
+      )
+      .safeIntegers()
+      .run([description, BigInt(participantId)]);
+
+    if (result.changes > 0) {
+      notifySimsChanged();
+      return true;
+    }
+
+    // No row at all yet (getParticipant only inserts when it has something to store)
+    const existing = this.dbService
+      .getDb()
+      .prepare('SELECT id FROM participant WHERE id = ?')
+      .safeIntegers()
+      .all([BigInt(participantId)]) as ParticipantEntity[];
+    if (existing.length === 0) {
+      this.updateParticipant({ id: participantId, description, name });
+      return true;
+    }
+
+    return false;
+  }
+
   getParticipants(getParticipantsRequest: GetParticipantsRequest): ParticipantDTO[] {
     return getParticipantsRequest.map((participantRequest) => this.getParticipant(participantRequest));
   }

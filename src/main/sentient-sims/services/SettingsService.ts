@@ -303,6 +303,10 @@ export function defaultStore(cwd?: string) {
         type: 'number',
         default: 3,
       },
+      [SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
       [SettingsEnum.VOICE_INPUT_ENDPOINT.toString()]: {
         type: 'string',
         default: openaiDefaultEndpoint,
@@ -967,6 +971,10 @@ export class SettingsService {
 
   get voiceCommandHotkey(): string {
     return String(this.get(SettingsEnum.VOICE_COMMAND_HOTKEY) ?? '').trim();
+  }
+
+  get generatedDefaultDescriptions(): boolean {
+    return this.get(SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS) as boolean;
   }
 
   get sceneMaxRounds(): number {

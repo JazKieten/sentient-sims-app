@@ -48,7 +48,26 @@ type SimRuntime = {
   // A directed scene's Reflection scored this sim over threshold: the next eligible tick
   // skips monologue/scores and stages the Action Scene directly
   armedDesire?: { score: number; reason?: string; thought?: string; at: number };
+  // G-10: the dispatched intent with its remaining automatic retries (transient causes only)
+  pendingIntent?: { intent: CognitionIntent; entry: SimStateEntry; retriesLeft: number };
 };
+
+// G-10: outcome causes (mod's ss_failure_reasons) that mean "the moment was wrong, the
+// verb is fine" — the only ones an automatic retry may spend itself on. Everything else
+// (ineligible, no provider, relationship, age, broken object) is structural: no retry.
+const TRANSIENT_OUTCOME_CAUSES = new Set([
+  'target_left',
+  'target_leaving_lot',
+  'sim_left_lot',
+  'mixer_stage_timeout',
+  'bumped_from_queue',
+  'bumped_by_higher_priority',
+  'canceled_before_running',
+  'could_not_route_or_transition',
+  'social_group_dissolved',
+  'target_object_changed',
+]);
+const RETRY_DELAY_MS = 4_000;
 
 // Base allowance for an in-flight intent before the synthetic close; routing distance
 // adds ~1s per meter, doubled for margin (the club DJ booth run took ~45s over 50m).
@@ -266,6 +285,21 @@ export class CognitionService {
 
     const now = Date.now();
 
+    // G-7: daily planning is a background call that touches nothing in-game, so it
+    // fires from the report for every household sim — including sims mid-conversation,
+    // who never reach deliberate() (the in_social deliberation ban stays exactly as is)
+    // and in the 08-04..08-14 playtest therefore never got a plan all day.
+    const absoluteDayForPlans = report.lot?.clock?.absolute_day;
+    if (absoluteDayForPlans !== undefined) {
+      entries
+        .filter((entry) => entry.is_household !== false && entry.sim_id)
+        .forEach((entry) => {
+          if (this.ctx.dailyPlan.needsLazyPlan(entry.sim_id, absoluteDayForPlans)) {
+            void this.ctx.dailyPlan.generateLazy(entry, absoluteDayForPlans);
+          }
+        });
+    }
+
     // Rule-based, no LLM: a critical physical need (accident/starvation imminent) gets
     // its fixing action dispatched directly — the model was watched fumbling this
     entries.forEach((entry) => {
@@ -343,6 +377,10 @@ export class CognitionService {
       }
       return;
     }
+    if (this.maybeRetryTransient(event, runtime)) {
+      return;
+    }
+    runtime.pendingIntent = undefined;
     if (event.outcome !== 'success' && event.action) {
       // A cancel is churn, not proof — short window; real failures sit out the full one
       const window = event.outcome === 'canceled' ? BENIGN_CLOSE_SUPPRESS_MS : FAILED_ACTION_SUPPRESS_MS;
@@ -675,9 +713,7 @@ export class CognitionService {
     let plan;
     if (entry.is_household !== false && absoluteDay !== undefined) {
       plan = this.ctx.dailyPlan.activePlan(simId, absoluteDay);
-      if (!plan && this.ctx.dailyPlan.needsLazyPlan(simId, absoluteDay)) {
-        void this.ctx.dailyPlan.generateLazy(entry, absoluteDay);
-      }
+      // (the lazy planner itself now fires from onStateReport — G-7)
     }
     // Off-loadout keys are cut from every offering channel like suppressed ones — but
     // NEVER added to the "NOT possible" line below: the hard filter means ABSENT from
@@ -710,7 +746,12 @@ export class CognitionService {
       reportView,
       memoriesBlock,
       [...suppressed],
-      plan && (plan.goals.length > 0 || plan.persona) ? { goals: plan.goals, persona: plan.persona } : undefined,
+      plan && (plan.goals.length > 0 || plan.persona)
+        ? {
+            goals: plan.goals.map((goal) => ({ label: goal.label, action_keys: goal.action_keys, reachable: goal.reachable })),
+            persona: plan.persona,
+          }
+        : undefined,
       hiddenActions,
     );
 
@@ -812,6 +853,17 @@ export class CognitionService {
       (runningNow !== '' && !isIdleAnimation(runningNow)) ||
       (entry.activity?.queue ?? []).some((queued) => !isIdleAnimation(queued));
 
+    // G-9: autonomy-echo guard. The mod reports the whitelist verb the sim is ALREADY
+    // doing (reverse index, fallbacks included); dispatching that same verb would only
+    // interrupt the fast brain's own rescue to restart it. Counted as continue.
+    const runningKey = entry.activity?.running_action_key;
+    if (runningKey && runningKey === intent.action) {
+      this.stats.continues += 1;
+      log.info(`[Cognition] sim ${simId} is already doing '${runningKey}' (autonomy); '${intent.action}' counted as continue`);
+      this.toCooldown(simId);
+      return;
+    }
+
     // Redispatch guard survives Full Autonomy: a busy sim choosing the SAME action (or
     // same need category) it was just dispatched is re-picking, not planning. The old
     // need-urgency interrupt bar is gone on purpose — an action score over threshold IS
@@ -855,6 +907,8 @@ export class CognitionService {
       runtime.pendingRequestId = requestId;
       runtime.pendingAction = intent.action;
       runtime.lastDispatch = { action: intent.action, at: Date.now() };
+      // G-10: the intent and its remaining automatic retries ride the pending state
+      runtime.pendingIntent = { intent, entry, retriesLeft: Math.min(3, Math.max(0, intent.retries ?? 1)) };
       this.stats.dispatches += 1;
       this.armPendingTimeout(simId, runtime, entry, intent);
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId})`);
@@ -960,6 +1014,7 @@ export class CognitionService {
       // A single valid option needs no choice call — the sim takes it, review still runs
       let pickedIndex = 0;
       let motivation: string | undefined;
+      let retries: number | undefined;
       if (valid.length > 1) {
         const choiceShot = await runStage(this.ctx.generationQueue, 'action choice', () =>
           this.ctx.ai.runOneShot(
@@ -979,6 +1034,7 @@ export class CognitionService {
           pickedIndex = choice.choice - 1;
         }
         motivation = choice?.motivation;
+        retries = choice?.retries;
       }
 
       const reviewShot = await runStage(this.ctx.generationQueue, 'action review', () =>
@@ -1008,7 +1064,7 @@ export class CognitionService {
         }
       }
 
-      return { ...valid[pickedIndex].intent, motivation: motivation ?? actionReason, thought };
+      return { ...valid[pickedIndex].intent, motivation: motivation ?? actionReason, thought, retries };
     } catch (error) {
       log.warn(`[Cognition] action scene failed for ${simLabel}; standing down`, error);
       return undefined;
@@ -1156,6 +1212,62 @@ export class CognitionService {
       return (entry.objects ?? []).find((object) => object.object_id === intent.target_object_id)?.distance;
     }
     return undefined;
+  }
+
+  // G-10: an automatic re-dispatch of the same intent when the close was TRANSIENT and
+  // the model budgeted a retry for it. Never for ineligible/failure/structural causes;
+  // never past the model's own count (cap 3); never while the verb sits in a suppression
+  // window (the 08-04 refire storm came from ignoring exactly that).
+  private maybeRetryTransient(event: InteractionOutcomeEvent, runtime: SimRuntime): boolean {
+    const pending = runtime.pendingIntent;
+    if (!pending || event.outcome !== 'canceled' || pending.retriesLeft <= 0) {
+      return false;
+    }
+    if (!event.cause || !TRANSIENT_OUTCOME_CAUSES.has(event.cause)) {
+      return false;
+    }
+    const simId = event.sim_id;
+    const action = pending.intent.action;
+    if (!action || action !== event.action) {
+      return false;
+    }
+    if ((runtime.suppressedUntil.get(action) ?? 0) > Date.now() || (runtime.fixIneligibleUntil.get(action) ?? 0) > Date.now()) {
+      return false;
+    }
+    pending.retriesLeft -= 1;
+    this.clearPending(runtime);
+    runtime.phase = 'COOLDOWN';
+    runtime.cooldownUntil = Date.now() + RETRY_DELAY_MS;
+    pushdiag(event.request_id, 'retry', { sim_id: simId, action, cause: event.cause, retries_left: pending.retriesLeft });
+    log.info(`[Cognition] sim ${simId} '${action}' died to transient '${event.cause}'; retrying (${pending.retriesLeft} left)`);
+    const timer = setTimeout(() => {
+      try {
+        if (runtime.phase !== 'COOLDOWN' || this.ctx.actionDispatcher.getInFlight?.(simId)) {
+          return;
+        }
+        const requestId = this.ctx.actionDispatcher.dispatch({
+          sim_id: simId,
+          action,
+          target_sim_id: pending.intent.target_sim_id,
+          target_object_id: pending.intent.target_object_id,
+          motivation: pending.intent.motivation ?? pending.intent.thought,
+          source: 'cognition',
+        });
+        runtime.phase = 'PENDING_OUTCOME';
+        runtime.pendingRequestId = requestId;
+        runtime.pendingAction = action;
+        runtime.lastDispatch = { action, at: Date.now() };
+        runtime.pendingIntent = pending;
+        this.stats.dispatches += 1;
+        this.armPendingTimeout(simId, runtime, pending.entry, pending.intent);
+      } catch (error) {
+        log.warn(`[Cognition] retry dispatch refused for sim ${simId}`, error);
+        runtime.pendingIntent = undefined;
+        this.toCooldown(simId);
+      }
+    }, RETRY_DELAY_MS);
+    timer.unref?.();
+    return true;
   }
 
   private clearPending(runtime: SimRuntime) {

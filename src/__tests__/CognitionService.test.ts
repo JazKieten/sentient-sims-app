@@ -270,6 +270,40 @@ describe('CognitionService', () => {
     expect(cognition.getStats().invalidIntents).toBe(1);
   });
 
+  it('retries once on a transient close, never on ineligible (G-10)', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    // Bumped from the queue: transient — one automatic retry after the delay
+    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-1', action: 'grab_snack', cause: 'bumped_from_queue' });
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(dispatched).toHaveLength(2);
+    expect(dispatched[1].action).toBe('grab_snack');
+    expect(cognition.getPhase('100')).toBe('PENDING_OUTCOME');
+
+    // Default retries is 1: a second transient close is a clean outcome, no re-dispatch
+    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-2', action: 'grab_snack', cause: 'bumped_from_queue' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(dispatched).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it('never retries an ineligible close (G-10)', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    cognition.onOutcome({ sim_id: '100', outcome: 'ineligible', request_id: 'req-1', action: 'grab_snack', cause: 'no_provider_on_lot' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(dispatched).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
   it('lifts the timeout suppression when the action reports success late', async () => {
     vi.useFakeTimers();
     const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });

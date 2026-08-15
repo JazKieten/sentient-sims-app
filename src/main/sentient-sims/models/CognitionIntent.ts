@@ -23,6 +23,11 @@ export type CognitionIntent = {
   // Why, in-world — carried into the outcome memory's pre_action
   motivation?: string;
   urgency?: 'low' | 'normal' | 'emergency';
+  // G-10: automatic re-dispatches the sim is willing to spend if the attempt dies to a
+  // TRANSIENT cause (target left, bumped from the queue, mixer stage timeout). Set by
+  // the model at choice time; default 1, cap 3; never spent on ineligible/structural
+  // causes and always behind the same suppression backoff as any other close.
+  retries?: number;
 };
 
 // Social actions ride sim_Chat + a mixer; on strangers everything except 'chat' fails the

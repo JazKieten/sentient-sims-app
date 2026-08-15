@@ -71,7 +71,7 @@ import { ModAddBuff, ModWebsocketMessageType } from '../models/ModWebsocketMessa
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
-import { parsePlannerJson } from './DailyPlanService';
+import { parsePlannerJson, DailyPlanService } from './DailyPlanService';
 import { SceneState } from './SceneService';
 import { MemoryTrace } from '../models/MemoryTrace';
 
@@ -425,6 +425,9 @@ export class AIService {
         // Gates the romance group out of the planner's ACTION STYLES for non-adults
         age: entry.self?.age,
         ageBlocked: entry.self?.age_blocked,
+        // G-5/G-8: what tonight's lot serves (annotation only) and goals carried too long
+        lotServes: DailyPlanService.lotServedKeys(entry, this.ctx.simStateCache.getReport()?.lot?.action_keys),
+        stuck: this.ctx.dailyPlan.stuckGoals(pov.simId, targetDay),
       };
     } catch (err) {
       log.warn('[DailyPlan] sleep plan context failed; running plain reflection', err);
@@ -494,16 +497,26 @@ ${othersLine}Keep it concise and grounded. Do not invent events that are not in 
         planContext && planContext.todaysPlan && planContext.todaysPlan.goals.length > 0
           ? `\n- "goal_review": a verdict for each of today's goals — honestly, from the notes.`
           : `\n- "goal_review": [] (you had no goals set today).`;
+      // G-6: goals/loadout come BEFORE the diary in the schema — the diary is the long
+      // field and squeezed the trailing ones out at the token cap (6/6 sleep rows had
+      // goals: []); the cap is raised too. The diary stays required, degrade path intact.
       const systemPrompt = planContext
         ? `${identity}${framing} Before sleep you also set intentions for tomorrow.
-${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(planContext.pool, planContext.todaysPlan, planContext.age, planContext.ageBlocked)}
+${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(
+            planContext.pool,
+            planContext.todaysPlan,
+            planContext.age,
+            planContext.ageBlocked,
+            planContext.lotServes,
+            planContext.stuck,
+          )}
 
-Reply with ONLY a JSON object:
-{"diary": "the diary entry", "goal_review": [{"id": "<goal id>", "verdict": "met|partial|ignored"}], "goals": ["<goal id>"], "persona": "one sentence", "loadout": ["<action key>"]}
-- "diary": ${diaryRules.replace(/\n/g, ' ')}${reviewInstruction}
-- "goals": 1 or 2 ids for TOMORROW, chosen ONLY from GOAL OPTIONS.
+Reply with ONLY a JSON object, fields in this order:
+{"goal_review": [{"id": "<goal id>", "verdict": "met|partial|ignored"}], "goals": ["<goal id>"], "loadout": ["<action key>"], "persona": "one sentence", "diary": "the diary entry"}${reviewInstruction}
+- "goals": 1 or 2 ids for TOMORROW, chosen ONLY from GOAL OPTIONS (copy the id exactly). Prefer goals that list [serve it with] verbs.
+- "loadout": exactly ${this.ctx.settings.dailyLoadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating you'll reach for tomorrow. It MUST include the verbs that serve the chosen goals.
 - "persona": one short first-person sentence — who you want to be tomorrow (your character for the day, not a task).
-- "loadout": exactly ${this.ctx.settings.dailyLoadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating you'll reach for tomorrow. Match them to the persona and goals.`
+- "diary": ${diaryRules.replace(/\n/g, ' ')}`
         : `${identity}${framing}
 ${diaryRules}`;
 
@@ -511,7 +524,7 @@ ${diaryRules}`;
         planContext ? 'Scene Reflection + Daily Plan' : 'Scene Reflection',
         systemPrompt,
         transcript,
-        planContext ? 600 : 250,
+        planContext ? 900 : 250,
         undefined,
         planContext ? AIActionType.DAILY_PLAN : AIActionType.REFLECTION,
       );

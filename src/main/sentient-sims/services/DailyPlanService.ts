@@ -4,6 +4,7 @@ import { DailyPlan, DailyPlanGoalReview, DailyPlanSource, GoalVerdict } from '..
 import { GoalPoolEntry, SimStateEntry } from '../models/SimStateReport';
 import { DISCRETIONARY_ACTIONS, DISCRETIONARY_GROUPS, ROMANCE_ACTIONS, isRomanceAge } from '../models/ActionLoadout';
 import { AIActionType } from '../models/AIActionType';
+import { describePlanGoal } from '../util/formatCognitionPrompt';
 
 // Each game day a household sim carries a plan: 1-2 goals picked FROM THE GAME'S OWN
 // objectives (the mod's goal_pool — aspiration steps, promotion requirements, daily
@@ -17,6 +18,13 @@ import { AIActionType } from '../models/AIActionType';
 // pre-plan behavior, never to a crippled sim.
 
 const MAX_GOALS = 2;
+// G-5: keys forced in to serve chosen goals may push the loadout past dailyLoadoutSize
+// by this much before the model's own lowest picks are trimmed to make room
+const GOAL_COVERAGE_TOLERANCE = 2;
+// G-8: a goal carried this many planned days with an 'ignored' verdict is called out;
+// one more and it is withheld from the pool for STUCK_GOAL_WITHHOLD_DAYS
+const STUCK_GOAL_DAYS = 3;
+const STUCK_GOAL_WITHHOLD_DAYS = 2;
 // Fewer surviving keys than this and the loadout is treated as absent (no filter): a
 // parse hiccup must not strip a sim's whole discretionary vocabulary for a day
 const MIN_LOADOUT = 3;
@@ -39,6 +47,43 @@ export type PlannerOutput = {
   loadout?: string[];
   rejected?: PlannerReject[];
 };
+
+// The social keys the planner may count as lot-served whenever anyone is around
+const SOCIAL_KEYS = [
+  'chat', 'ask_about_day', 'ask_about_career', 'get_to_know', 'deep_conversation', 'compliment_outfit',
+  'gossip', 'apologize', 'tell_joke', 'tell_funny_story', 'hug', 'flirt', 'kiss', 'insult', 'invite_in',
+];
+
+// G-6: tolerant goal-id binding. Exact match was silent about the shapes the model
+// actually returns: trailing spaces, different case, "id: X", the LABEL instead of the
+// id, or the label's leading words. 6/6 sleep rows in the playtest DB had goals: [].
+export function bindGoalId(raw: string, pool: GoalPoolEntry[]): GoalPoolEntry | undefined {
+  const cleaned = raw.trim().replace(/^id:\s*/i, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  const exact = pool.find((entry) => entry.id === cleaned);
+  if (exact) {
+    return exact;
+  }
+  const folded = cleaned.toLowerCase();
+  const caseless = pool.find((entry) => entry.id.toLowerCase() === folded);
+  if (caseless) {
+    return caseless;
+  }
+  const byLabel = pool.find((entry) => entry.label.trim().toLowerCase() === folded);
+  if (byLabel) {
+    return byLabel;
+  }
+  // "id — label" or the label with its source prefix stripped
+  const loose = pool.find(
+    (entry) =>
+      folded.startsWith(entry.id.toLowerCase()) ||
+      entry.label.toLowerCase().endsWith(folded) ||
+      (folded.length >= 12 && entry.label.toLowerCase().includes(folded)),
+  );
+  return loose;
+}
 
 export function parsePlannerJson(raw: string): Record<string, unknown> | undefined {
   const match = /\{[\s\S]*\}/.exec(raw);
@@ -117,7 +162,6 @@ export class DailyPlanService {
     simLabel?: string,
   ): PlannerOutput {
     const rejected: PlannerReject[] = [];
-    const poolById = new Map(pool.map((entry) => [entry.id, entry]));
     const goals: GoalPoolEntry[] = [];
     if (Array.isArray(raw.goals)) {
       raw.goals.forEach((goalId) => {
@@ -129,7 +173,7 @@ export class DailyPlanService {
           rejected.push({ field: 'goals', value: JSON.stringify(goalId), reason: 'goal id is not a string' });
           return;
         }
-        const entry = poolById.get(goalId.trim());
+        const entry = bindGoalId(goalId, pool);
         if (!entry) {
           rejected.push({ field: 'goals', value: goalId, reason: 'id not in the offered goal pool' });
           return;
@@ -185,6 +229,40 @@ export class DailyPlanService {
         rejected.push({ field: 'loadout', value: key, reason: `over the loadout size of ${size}` });
       });
       const deduped = keys.slice(0, size);
+      // G-5: the loadout must be able to SERVE the chosen goals. Every discretionary key
+      // that serves a chosen goal is force-included (age/romance rules still apply); past
+      // size + tolerance the model's own lowest picks that serve no goal are trimmed.
+      const serving = new Set<string>();
+      goals.forEach((goal) => {
+        (goal.action_keys ?? []).forEach((key) => {
+          if (
+            DISCRETIONARY_ACTIONS.has(key) &&
+            (!ROMANCE_ACTIONS.has(key) || isRomanceAge(age)) &&
+            !(ageBlocked ?? []).includes(key)
+          ) {
+            serving.add(key);
+          }
+        });
+      });
+      const missing = [...serving].filter((key) => !deduped.includes(key));
+      missing.forEach((key) => {
+        if (deduped.length < size + GOAL_COVERAGE_TOLERANCE) {
+          deduped.push(key);
+          return;
+        }
+        // Trim the last model pick that serves no goal
+        for (let index = deduped.length - 1; index >= 0; index -= 1) {
+          if (!serving.has(deduped[index])) {
+            rejected.push({ field: 'loadout', value: deduped[index], reason: `trimmed to make room for goal-serving key ${key}` });
+            deduped.splice(index, 1);
+            deduped.push(key);
+            return;
+          }
+        }
+      });
+      if (missing.length > 0) {
+        log.info(`[DailyPlan] ${simLabel ?? 'sim'} loadout force-includes goal-serving keys: ${missing.join(', ')}`);
+      }
       if (deduped.length >= MIN_LOADOUT) {
         loadout = deduped;
       } else if (deduped.length > 0) {
@@ -303,6 +381,11 @@ export class DailyPlanService {
     includeYesterday?: DailyPlan,
     age?: string,
     ageBlocked?: string[],
+    // G-5: what the current lot can serve (object/lot channels) — annotate, never filter:
+    // the plan is for the whole day, and the sim may travel
+    lotServes?: Set<string>,
+    // G-8: goal id -> consecutive planned days it was 'ignored'
+    stuck?: Map<string, number>,
   ): string {
     const lines: string[] = [];
     if (includeYesterday && includeYesterday.goals.length > 0) {
@@ -317,7 +400,16 @@ export class DailyPlanService {
     }
     lines.push(`GOAL OPTIONS — choose by id, ONLY from this list:`);
     pool.forEach((entry) => {
-      lines.push(`- id: ${entry.id} — ${entry.label}`);
+      const days = stuck?.get(entry.id) ?? 0;
+      if (days > STUCK_GOAL_DAYS && days <= STUCK_GOAL_DAYS + STUCK_GOAL_WITHHOLD_DAYS) {
+        // Withheld: carried too long without moving — a break, not a ban
+        return;
+      }
+      const carried =
+        days >= STUCK_GOAL_DAYS
+          ? ` [carried ${days} days without moving — change approach or choose something else]`
+          : '';
+      lines.push(`- id: ${entry.id} — ${describePlanGoal(entry)}${carried}`);
     });
     const loadoutSize = this.ctx.settings.dailyLoadoutSize;
     lines.push('', `ACTION STYLES you may prepare for the day — pick ${loadoutSize} keys, ONLY from these:`);
@@ -326,12 +418,59 @@ export class DailyPlanService {
       // offered is one it cannot pick, which is cheaper than filtering it afterwards
       const offered = keys
         .filter((key) => isRomanceAge(age) || !ROMANCE_ACTIONS.has(key))
-        .filter((key) => !(ageBlocked ?? []).includes(key));
+        .filter((key) => !(ageBlocked ?? []).includes(key))
+        .map((key) => (lotServes && lotServes.size > 0 && !lotServes.has(key) ? `${key} (not on this lot)` : key));
       if (offered.length > 0) {
         lines.push(`${group}: ${offered.join(', ')}`);
       }
     });
+    lines.push(
+      '',
+      'Your loadout must include at least one key that serves each goal you choose (see [serve it with]); a goal nothing serves is one to skip.',
+    );
     return lines.join('\n');
+  }
+
+  // G-5: every whitelist key the current lot can serve, from the perception channels
+  // (object action_keys, lot verbs, socials when anyone is around). Empty when unknown.
+  static lotServedKeys(entry: SimStateEntry | undefined, lotActionKeys?: string[]): Set<string> {
+    const keys = new Set<string>();
+    (entry?.objects ?? []).forEach((object) => (object.action_keys ?? []).forEach((key) => keys.add(key)));
+    (lotActionKeys ?? []).forEach((key) => keys.add(key));
+    if ((entry?.sims ?? []).length > 0) {
+      SOCIAL_KEYS.forEach((key) => keys.add(key));
+    }
+    return keys;
+  }
+
+  // G-8: goal id -> consecutive planned days (ending yesterday) on which it was 'ignored'.
+  // Only aspiration/promotion goals can be stuck: wants reroll.
+  stuckGoals(simId: string, todayAbsoluteDay: number): Map<string, number> {
+    const counts = new Map<string, number>();
+    const stopped = new Set<string>();
+    for (let back = 1; back <= STUCK_GOAL_DAYS + STUCK_GOAL_WITHHOLD_DAYS + 1; back += 1) {
+      let plan: DailyPlan | undefined;
+      try {
+        plan = this.ctx.dailyPlanRepository.getPlan(simId, todayAbsoluteDay - back);
+      } catch {
+        break;
+      }
+      if (!plan) {
+        break;
+      }
+      const verdicts = new Map((plan.review ?? []).map((entry) => [entry.id, entry.verdict]));
+      plan.goals.forEach((goal) => {
+        if (stopped.has(goal.id) || (goal.source !== 'aspiration' && goal.source !== 'promotion')) {
+          return;
+        }
+        if (verdicts.get(goal.id) === 'ignored') {
+          counts.set(goal.id, (counts.get(goal.id) ?? 0) + 1);
+        } else {
+          stopped.add(goal.id);
+        }
+      });
+    }
+    return counts;
   }
 
   // Mid-day fallback planner: app restarted, the sim never slept, or the sleep-path
@@ -354,10 +493,10 @@ export class DailyPlanService {
 
       const systemPrompt = `You are the inner voice of one Sim in The Sims 4, setting intentions for the rest of today.
 Reply with ONLY a JSON object:
-{"goals": ["<goal id>"], "persona": "one sentence", "loadout": ["<action key>"]}
-- "goals": 1 or 2 ids chosen ONLY from GOAL OPTIONS — what this Sim genuinely cares about finishing today.
-- "persona": one short first-person sentence of stage direction — who this Sim wants to be today (their character, not a task).
-- "loadout": exactly ${loadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating this Sim will reach for today. Match them to the persona and goals.`;
+{"goals": ["<goal id>"], "loadout": ["<action key>"], "persona": "one sentence"}
+- "goals": 1 or 2 ids chosen ONLY from GOAL OPTIONS — what this Sim genuinely cares about finishing today. Prefer goals that list [serve it with] verbs.
+- "loadout": exactly ${loadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating this Sim will reach for today. It MUST include the verbs that serve the chosen goals.
+- "persona": one short first-person sentence of stage direction — who this Sim wants to be today (their character, not a task).`;
 
       const hourLine =
         entry.self?.needs !== undefined
@@ -373,7 +512,14 @@ Reply with ONLY a JSON object:
         traits.length > 0 ? `Traits: ${traits.join(', ')}` : '',
         hourLine,
         '',
-        this.buildChoicesBlock(pool, undefined, age, ageBlocked),
+        this.buildChoicesBlock(
+          pool,
+          undefined,
+          age,
+          ageBlocked,
+          DailyPlanService.lotServedKeys(entry, this.ctx.simStateCache?.getReport?.()?.lot?.action_keys),
+          this.stuckGoals(simId, absoluteDay),
+        ),
       ]
         .filter(Boolean)
         .join('\n');

@@ -8,8 +8,9 @@
 // failure class), and the rule-lane travel verbs the safety lanes dispatch. The loadout
 // is a personality filter, not a capability system.
 //
-// Mirrors the mod's 38-key whitelist categories (ss_affordance_whitelist.py); drift is
-// guarded by whitelist_version riding every state report.
+// Mirrors the mod's whitelist categories (ss_affordance_whitelist.py — 52 pushable keys
+// as of 2026-08-15 plus two documented-unsupported picker entries); the mod's
+// local/audit_whitelist.py `drift()` diffs these sets against the whitelist.
 
 export const ALWAYS_AVAILABLE_ACTIONS = new Set([
   // need
@@ -33,6 +34,11 @@ export const ALWAYS_AVAILABLE_ACTIONS = new Set([
   // rule-lane travel (exhaustion walks you home whether or not you prepped it)
   'go_home',
   'enter_lot',
+  // baby care: never a personality choice — perception context-gates these (only
+  // offered while a baby is on the lot), and a hungry baby is not a loadout question
+  'feed_baby',
+  'change_diaper',
+  'soothe_baby',
 ]);
 
 // What the nightly planner picks from. Off-loadout keys in this set are removed from
@@ -64,7 +70,25 @@ export const DISCRETIONARY_ACTIONS = new Set([
   'go_out',
   'travel_to_zone',
   'invite_in',
+  // fitness / creative / skill (G-2/G-3, 2026-08-15) — the verbs that can actually
+  // advance an aspiration, career or skill goal
+  'jog',
+  'workout',
+  'paint',
+  'write',
+  'practice_speech',
+  'listen_to_music',
+  'order_drink',
+  'stargaze',
+  'garden',
+  'program',
+  'fish',
+  'play_chess',
 ]);
+
+// Whitelist entries the mod documents but cannot push (the game opens a UI picker).
+// Listed so the drift audit and the prompts agree they exist and are never offered.
+export const KNOWN_UNSUPPORTED_ACTIONS = new Set(['play_chess_with', 'write_book']);
 
 // Romance is gated on age at every stage: the planner never offers these keys to a
 // non-adult, validate() drops them from a loadout, and the prompt never renders them
@@ -105,7 +129,10 @@ export const DISCRETIONARY_GROUPS: Record<string, string[]> = {
   ],
   romance: ['flirt', 'kiss'],
   mean: ['insult'],
-  outings: ['go_out', 'travel_to_zone', 'invite_in'],
+  outings: ['go_out', 'travel_to_zone', 'invite_in', 'order_drink'],
+  fitness: ['jog', 'workout'],
+  creative: ['paint', 'write', 'play_piano', 'play_guitar', 'listen_to_music'],
+  skills: ['practice_speech', 'program', 'garden', 'fish', 'play_chess', 'stargaze'],
 };
 
 // The keys a given loadout removes for the day: discretionary minus the prepped set.

@@ -81,6 +81,11 @@ export type GoalPoolEntry = {
   id: string;
   source: GoalSource;
   label: string;
+  // G-4: whitelist verbs that can advance this goal (mod-side reverse index of the
+  // objective's own affordances + `serves` fragments); reachable=false when none can.
+  // Absent on older mods (treated as unknown, never as unreachable).
+  action_keys?: string[];
+  reachable?: boolean;
 };
 
 export type SimSelfStatus = {
@@ -110,6 +115,10 @@ export type SimActivity = {
   running?: string | null;
   in_social?: boolean;
   hands_full?: boolean;
+  // G-9: the whitelist verb the sim is already doing (running or staged), mapped
+  // mod-side through the reverse index (fallbacks included). A dispatch that names it
+  // is an echo of autonomy, not a decision — counted as continue.
+  running_action_key?: string;
 };
 
 // A sim's entry in the report: the perception snapshot plus internal state

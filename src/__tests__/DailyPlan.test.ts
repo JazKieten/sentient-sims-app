@@ -335,3 +335,69 @@ describe('parsePlannerJson', () => {
     expect(parsePlannerJson('{broken')).toBeUndefined();
   });
 });
+
+describe('goal -> action connection (Phase 3)', () => {
+  const REACHABLE_POOL: GoalPoolEntry[] = [
+    { id: 'objective_Bodybuilder_Jog3', source: 'aspiration', label: 'Aspiration (Bodybuilder): jog x3', action_keys: ['jog', 'workout'], reachable: true },
+    { id: 'objective_Painter_Skill3', source: 'aspiration', label: 'Aspiration (Painter): painting to 3', action_keys: ['paint'], reachable: true },
+    { id: 'objective_Nothing_Serves', source: 'aspiration', label: 'Aspiration (Odd): earn simoleons', action_keys: [], reachable: false },
+  ];
+
+  it('bindGoalId tolerates trimming, case, id: prefixes and labels (G-6)', () => {
+    const { service } = buildService({ loadoutSize: 8 });
+    const bind = (goals: unknown[]) => service.validate({ goals }, REACHABLE_POOL, 'ADULT').goals.map((goal) => goal.id);
+    expect(bind([' objective_Bodybuilder_Jog3 '])).toEqual(['objective_Bodybuilder_Jog3']);
+    expect(bind(['OBJECTIVE_bodybuilder_jog3'])).toEqual(['objective_Bodybuilder_Jog3']);
+    expect(bind(['id: objective_Painter_Skill3'])).toEqual(['objective_Painter_Skill3']);
+    expect(bind(['Aspiration (Painter): painting to 3'])).toEqual(['objective_Painter_Skill3']);
+    expect(bind(['objective_Made_Up'])).toEqual([]);
+  });
+
+  it('force-includes the verbs that serve the chosen goals into the loadout (G-5)', () => {
+    const { service } = buildService({ loadoutSize: 6 });
+    const output = service.validate(
+      {
+        goals: ['objective_Bodybuilder_Jog3', 'objective_Painter_Skill3'],
+        loadout: ['tell_joke', 'gossip', 'hug', 'flirt', 'kiss', 'insult'],
+      },
+      REACHABLE_POOL,
+      'ADULT',
+    );
+    expect(output.loadout).toContain('jog');
+    expect(output.loadout).toContain('workout');
+    expect(output.loadout).toContain('paint');
+    // size 6 + tolerance 2 = 8: one model pick trimmed to make room for the third key
+    expect(output.loadout).toHaveLength(8);
+    expect(output.rejected?.some((entry) => entry.reason.includes('trimmed'))).toBe(true);
+  });
+
+  it('renders serve-it-with verbs, unreachable markers, and lot annotations (G-5)', () => {
+    const { service } = buildService({ loadoutSize: 8 });
+    const block = service.buildChoicesBlock(REACHABLE_POOL, undefined, 'ADULT', [], new Set(['paint', 'chat']));
+    expect(block).toContain('[serve it with: jog, workout]');
+    expect(block).toContain('[no action in your vocabulary serves this yet]');
+    expect(block).toContain('jog (not on this lot)');
+    expect(block).not.toContain('paint (not on this lot)');
+  });
+
+  it('flags a goal ignored 3 planned days running and withholds it on the 4th (G-8)', () => {
+    const { service } = buildService({ loadoutSize: 8 });
+    const goal = REACHABLE_POOL[0];
+    for (let day = 10; day <= 12; day += 1) {
+      service.acceptPlan('100', day, { goals: [goal] }, 'sleep');
+      service.recordReview('100', day, [{ id: goal.id, verdict: 'ignored' }]);
+    }
+    const stuck = service.stuckGoals('100', 13);
+    expect(stuck.get(goal.id)).toBe(3);
+    expect(service.buildChoicesBlock(REACHABLE_POOL, undefined, 'ADULT', [], undefined, stuck)).toContain(
+      'carried 3 days without moving',
+    );
+    service.acceptPlan('100', 13, { goals: [goal] }, 'sleep');
+    service.recordReview('100', 13, [{ id: goal.id, verdict: 'ignored' }]);
+    const withheld = service.stuckGoals('100', 14);
+    expect(withheld.get(goal.id)).toBe(4);
+    expect(service.buildChoicesBlock(REACHABLE_POOL, undefined, 'ADULT', [], undefined, withheld)).not.toContain(
+      'objective_Bodybuilder_Jog3',
+    );
+  });
+});

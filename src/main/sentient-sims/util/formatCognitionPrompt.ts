@@ -96,8 +96,9 @@ Rules:
 - If a TODAYS_PLAN block is present, at least one option should serve one of today's goals.`;
 
 export const ACTION_CHOICE_SYSTEM_PROMPT = `You are one Sim in The Sims 4 choosing what to do next, like picking a path in a choose-your-own-adventure book.
-Given the moment and your numbered options, reply with ONLY a JSON object: {"choice": <option number>, "motivation": "why, in your own voice, one short line"}
-Choose as the character: mood, needs, wants, and your inner monologue decide — not what would look sensible to someone else.`;
+Given the moment and your numbered options, reply with ONLY a JSON object: {"choice": <option number>, "motivation": "why, in your own voice, one short line", "retries": <0-3>}
+Choose as the character: mood, needs, wants, and your inner monologue decide — not what would look sensible to someone else.
+"retries": how many times you would try again if the attempt gets interrupted before it starts (someone walks off, you get bumped) — 0 for a passing whim, 1 normally, up to 3 for something you truly need or care about.`;
 
 export const ACTION_REVIEW_SYSTEM_PROMPT = `You review a Sim's chosen next action for obvious mistakes before it executes.
 Given the situation, the numbered options, and the Sim's choice, reply with ONLY a JSON object: {"choice": <option number to execute>}
@@ -171,19 +172,23 @@ export function parseActionOptions(raw: string): { scene?: string; options: Acti
   return { scene: typeof body.scene === 'string' ? body.scene : undefined, options };
 }
 
-export function parseActionChoice(raw: string): { choice: number; motivation?: string } | undefined {
+export function parseActionChoice(raw: string): { choice: number; motivation?: string; retries?: number } | undefined {
   const parsed = firstJsonBlock(raw);
   if (!parsed || typeof parsed !== 'object') {
     return undefined;
   }
-  const body = parsed as { choice?: unknown; motivation?: unknown };
+  const body = parsed as { choice?: unknown; motivation?: unknown; retries?: unknown };
   const choice = typeof body.choice === 'string' ? Number(body.choice) : body.choice;
   if (typeof choice !== 'number' || Number.isNaN(choice) || choice < 0) {
     return undefined;
   }
+  const rawRetries = typeof body.retries === 'string' ? Number(body.retries) : body.retries;
+  const retries =
+    typeof rawRetries === 'number' && !Number.isNaN(rawRetries) ? Math.min(3, Math.max(0, Math.round(rawRetries))) : undefined;
   return {
     choice: Math.round(choice),
     motivation: typeof body.motivation === 'string' ? body.motivation : undefined,
+    retries,
   };
 }
 
@@ -191,9 +196,21 @@ export function parseActionChoice(raw: string): { choice: number; motivation?: s
 // The loadout is deliberately NOT rendered — the OFFERED lists are already narrowed to
 // it, and naming the mechanism invites meta-reasoning about "allowed actions".
 export type TodaysPlanBlock = {
-  goals: { label: string }[];
+  goals: { label: string; action_keys?: string[]; reachable?: boolean }[];
   persona?: string;
 };
+
+// G-5: a goal reads with the verbs that serve it, so "serve a goal" is a concrete pick
+// and an unreachable goal is named as such instead of silently ignored
+export function describePlanGoal(goal: { label: string; action_keys?: string[]; reachable?: boolean }): string {
+  if (goal.action_keys && goal.action_keys.length > 0) {
+    return `${goal.label} [serve it with: ${goal.action_keys.map(pretty).join(', ')}]`;
+  }
+  if (goal.reachable === false) {
+    return `${goal.label} [no action in your vocabulary serves this yet]`;
+  }
+  return goal.label;
+}
 
 export function buildCognitionUserPrompt(
   entry: SimStateEntry,
@@ -255,7 +272,7 @@ export function buildCognitionUserPrompt(
       planLines.push(`Who I want to be today: ${plan.persona}`);
     }
     if (plan.goals.length > 0) {
-      planLines.push(`Today's goals: ${plan.goals.map((goal) => goal.label).join('; ')}.`);
+      planLines.push(`Today's goals: ${plan.goals.map(describePlanGoal).join('; ')}.`);
     }
     planLines.push('</TODAYS_PLAN>');
     sections.push(planLines.join('\n'));

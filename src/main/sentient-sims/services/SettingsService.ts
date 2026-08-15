@@ -274,7 +274,9 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
-        default: 6,
+        // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
+        // fitness/creative/skill verbs; six slots collapsed every day into socials
+        default: 8,
       },
       [SettingsEnum.VOICE_INPUT_ENABLED.toString()]: {
         type: 'boolean',

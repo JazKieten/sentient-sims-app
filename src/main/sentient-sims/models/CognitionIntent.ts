@@ -53,6 +53,8 @@ export type SimTargetInfo = {
   // Age of the perceived target (str(sim_info.age) minus 'Age.'), for target-side age
   // gates; absent on older mod builds, which fails age-gated socials CLOSED
   age?: string;
+  // Verbs the game refuses toward this target's age (mod-reported); see PerceivedSim
+  targetAgeBlocked?: string[];
   friendship?: number;
   romance?: number;
   bits?: string[];
@@ -138,6 +140,7 @@ export function offeredActions(
       name: perceived.name,
       hasMet: perceived.social?.has_met !== false,
       age: perceived.age,
+      targetAgeBlocked: perceived.target_age_blocked,
       friendship: perceived.social?.friendship,
       romance: perceived.social?.romance,
       bits: perceived.social?.bits,
@@ -219,7 +222,11 @@ export function validateIntent(
     // same TEEN+ rule: the game cancels them at execution when the target is a child
     // (deep_conversation, caught live 2026-08-11), so they must die here first.
     const teenPlusGated = ROMANCE_ACTIONS.has(action) || TEEN_PLUS_TARGET_SOCIALS.has(action);
-    const ageBlocked = teenPlusGated && !(isRomanceAge(entry.self?.age) && isRomanceAge(target.age));
+    const ageBlocked =
+      (teenPlusGated && !(isRomanceAge(entry.self?.age) && isRomanceAge(target.age))) ||
+      // The mod reads the mixer's TargetSim age test itself (P-8); when it says the
+      // target's age is refused, believe it over the hand-kept sets
+      (target.targetAgeBlocked ?? []).includes(action);
     const coerced = target.hasMet && !ageBlocked ? action : 'chat';
     return {
       ok: true,

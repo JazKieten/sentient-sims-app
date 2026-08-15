@@ -45,6 +45,15 @@ export function humanizeOutcomeReason(reason: string): string {
     .replace(/<[^<>]*>/g, '')
     .replace(/\b(?:True|False|None)\b:?\s*\(None\)/g, '')
     .replace(/\(\s*\)/g, '');
+  // Final guard against slots the unwrap emptied (P-9): "between and ." / "Sim []" /
+  // dangling ':' — the mod fills names it knows; this keeps whatever slips through
+  // readable rather than a permanent memory reading "between and ."
+  text = text
+    .replace(/\bbetween\s+and\b/gi, 'between the two of them')
+    .replace(/\bSim\s*\[\s*\]/g, 'the sim')
+    .replace(/\s+([.,;:])/g, '$1')
+    .replace(/[.:]+\s*:\s*$/g, '.')
+    .replace(/:\s*$/g, '');
   return text.replace(/\s{2,}/g, ' ').trim();
 }
 

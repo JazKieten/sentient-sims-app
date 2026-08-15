@@ -25,6 +25,17 @@ describe('humanizeOutcomeReason', () => {
     expect(humanizeOutcomeReason(raw)).toBe('Bills: Interaction requires a utility that is shut off.');
   });
 
+  it('never leaves emptied slots in the memory (P-9)', () => {
+    // Playtest DB: "Missing relationship bit () between and ." x4, "Sim [] either has
+    // no household funds manager, or doesn't have enough funds.:" x1
+    expect(humanizeOutcomeReason('Missing relationship bit <Bit> between <Sim 1> and <Sim 2>.')).toBe(
+      'Missing relationship bit between the two of them.',
+    );
+    expect(
+      humanizeOutcomeReason("Sim [] either has no household funds manager, or doesn't have enough funds.:"),
+    ).toBe("the sim either has no household funds manager, or doesn't have enough funds.");
+  });
+
   it('leaves a plain reason untouched', () => {
     expect(humanizeOutcomeReason('Object failed state check: toilet is broken')).toBe(
       'Object failed state check: toilet is broken',

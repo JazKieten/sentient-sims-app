@@ -146,7 +146,16 @@ export function parseActorPerformance(rawText: string, speakerNames: string[]): 
 // Per-character verdicts from the scores stage: how memorable the scene was for them and
 // how strongly it leaves them wanting to change course (the Action Score that, over
 // threshold, will promote them into an Action Scene).
-export type SceneScore = { memory: number; action: number; action_reason?: string };
+export type SceneScore = {
+  memory: number;
+  action: number;
+  action_reason?: string;
+  // V-5a: the scene's own continue signal rides the scorer (structured JSON, runs on both
+  // dialogue and solo paths, fails soft) — never the reviewer, which is the stage that
+  // already misbehaved by continuing on its own
+  unfinished?: boolean;
+  continue?: number;
+};
 
 // The scores stage answers with one JSON object mapping character names to their scores.
 // Tolerant of prose around the JSON, string numbers, and out-of-range values (clamped 1-10);
@@ -178,16 +187,30 @@ export function parseSceneScores(rawText: string, names: string[]): Map<string, 
     if (!name || !value || typeof value !== 'object') {
       return;
     }
-    const verdict = value as { memory?: unknown; action?: unknown; action_reason?: unknown };
+    const verdict = value as {
+      memory?: unknown;
+      action?: unknown;
+      action_reason?: unknown;
+      unfinished?: unknown;
+      continue?: unknown;
+    };
     const memory = clamp(verdict.memory);
     const action = clamp(verdict.action);
     if (memory === undefined && action === undefined) {
       return;
     }
+    const unfinished =
+      typeof verdict.unfinished === 'boolean'
+        ? verdict.unfinished
+        : typeof verdict.unfinished === 'string'
+          ? verdict.unfinished.trim().toLowerCase() === 'true'
+          : undefined;
     scores.set(name, {
       memory: memory ?? 3,
       action: action ?? 1,
       action_reason: typeof verdict.action_reason === 'string' ? verdict.action_reason : undefined,
+      unfinished,
+      continue: clamp(verdict.continue),
     });
   });
   return scores;
@@ -197,7 +220,8 @@ export function parseSceneScores(rawText: string, names: string[]): Map<string, 
 // speaker (commentary, headers) are discarded
 function parseReviewedLines(rawText: string, speakerNames: string[]): DialogueLine[] {
   const lines: DialogueLine[] = [];
-  cleanupAIOutput(rawText)
+  // V-5b: delivered lines are numbered for the reviewer; the numbers may come back
+  cleanupAIOutput(rawText.replace(/^\s*\d+[.)]\s+/gm, ''))
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
@@ -220,6 +244,11 @@ function toTranscript(lines: DialogueLine[]): string {
 export type DirectedGenerationOptions = {
   action?: string;
   continueScene?: boolean;
+  // V-5a: which round of a self-continuing scene this is (1 = the opening beat) and the
+  // lines the previous rounds already aired, so the continuation sees them before the
+  // mod's POST /memories lands the transcript
+  round?: number;
+  carriedLines?: DialogueLine[];
   // A chat beat opens with a line the player already typed: it drives the scene and seeds the
   // transcript the actors reply to, the sim who said it takes no actor turn, and it stays out
   // of the aired scene (the mod already showed it, and it rides along as the memory's action)
@@ -1233,7 +1262,8 @@ If the scene is already good, return it unchanged.`;
       .join('\n');
 
     const recentMemories = promptRequest.memories.slice(-6);
-    const previously = formatPreviouslyInScene(recentMemories);
+    const carried = (options.carriedLines ?? []).length > 0 ? toTranscript(options.carriedLines ?? []) : '';
+    const previously = [formatPreviouslyInScene(recentMemories), carried].filter(Boolean).join('\n');
     const previouslyBlock = previously ? `Previously in this scene:\n${previously}\n\n` : '';
 
     // Continuing a scene re-uses the same event; driving it with the original action again
@@ -1260,6 +1290,12 @@ If the scene is already good, return it unchanged.`;
       }
     } else {
       sceneAction = promptRequest.action ?? options.action;
+      // V-5b: a fresh scene OPENS — the actors are just starting this conversation.
+      // Without it they launched mid-thought ("That reminds me of a joke:" before the
+      // joke) because nothing told them this was the first exchange.
+      if (sceneAction && !previously) {
+        sceneAction = `${sceneAction} Open the scene: the characters are just starting this conversation — the first line begins it, nothing was said before.`;
+      }
       // N-1: the interaction's own valence frames the beat. Without it the model read
       // 'YellAT' as a friendly chat (playtest 08-04..08-14) — the pre_action text alone
       // was not enough once the director chose a warm genre.
@@ -1314,6 +1350,7 @@ Rules:
 - Smooth over wrinkles: if the context is awkward, contradictory, or overloaded, resolve it into a clean, playable scene.
 - If the user message contains "Previously in this scene", the conversation is already underway: tell each actor to pick up mid-flow and build on what has already been said — no greetings, no introductions, no re-describing the setting.
 - Direct them to be BRIEF: real conversation is quick short lines, not speeches. An actor who needs more than one short sentence is overacting.
+- Give every scene bit a SHAPE — a beginning (what starts it), a middle (where it turns), and an end (where it lands) — even inside two to four lines. If this is the opening beat, direct the first line to actually open the conversation; if the scene is already underway, direct where this round should land.
 - Do not write any dialogue or inner-monologue lines, and do not tell the actors specific lines to say or think.
 
 Respond in exactly this format, nothing else:
@@ -1482,6 +1519,7 @@ When you do rewrite, change only what is broken and keep the actor's intent and 
 
 Respond with the final scene as one line per row in exactly this format, nothing else:
 <character name>: <the words they say>
+(You may keep the leading numbers or drop them; the count and order must match the delivered lines.)
 
 - Every line is a bare subtitle: no quotation marks, no parentheses, no stage directions, no commentary
 ${
@@ -1497,12 +1535,20 @@ ${
       log.error('Directed scene ran out of time before the director review, airing the lines as performed');
     } else {
       try {
+        // V-5b: the reviewer's contract is STRUCTURAL now — the delivered lines are numbered
+        // and it returns those numbers' lines; the continuation instruction is summarised,
+        // never passed verbatim (passing "The scene continues... move it forward" verbatim
+        // is what made it write new lines — a2ef601 truncated the symptom, this fixes it)
+        const numbered = performedLines.map((line, index) => `${index + 1}. ${line.speaker}: ${line.text}`).join('\n');
+        const directionSummary = continuingScene
+          ? 'a continuation beat of a conversation already underway'
+          : sceneAction.split(' Open the scene:')[0];
         const compiled = await this.runOneShot(
           'Director Review',
           compileSystemPrompt,
-          `${previouslyBlock}The direction the actors were given: ${sceneAction}\n\n${
+          `${previouslyBlock}What the actors were directed to play: ${directionSummary}\n\n${
             playerLine ? `The line being replied to:\n${toTranscript([playerLine])}\n\n` : ''
-          }The actors' delivered lines to review � return these lines kept or repaired, do not reply to them:\n${toTranscript(performedLines)}`,
+          }The ${performedLines.length} delivered line(s) to review, numbered — return exactly these ${performedLines.length} lines (same numbers, same order), kept or repaired, and nothing after them:\n${numbered}`,
           400,
           options.directorModel,
           AIActionType.DIRECTED_SCENE_REVIEWER,
@@ -1563,6 +1609,25 @@ ${
       log.info(`[Pipeline] Scene scores — ${summary}`);
     }
     this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
+
+    // V-5a: multi-round conversations. The scorer says whether the exchange is still open
+    // and how strongly the scene wants another round; capped by sceneMaxRounds and the
+    // remaining scene budget. Applies to dialogue AND voice replies (a sim's answer to the
+    // player can take 2-3 beats to finish). The next round is kicked off from play() so
+    // it appends to the same paced scene stream, after this round has started airing.
+    const round = options.round ?? 1;
+    const wantsMore = [...sceneScores.scores.values()].some(
+      (score) => score.unfinished === true || (score.continue ?? 0) >= 7,
+    );
+    const roundsAllowed = round < this.ctx.settings.sceneMaxRounds;
+    const continueNext = wantsMore && roundsAllowed && !overBudget() && !monologueOnly && !options.saveMemory;
+    if (wantsMore && !continueNext) {
+      log.info(
+        `[Pipeline] Scene wants another round but ${
+          !roundsAllowed ? `round cap ${this.ctx.settings.sceneMaxRounds} reached` : overBudget() ? 'the scene budget is spent' : 'this path does not continue'
+        }`,
+      );
+    }
 
     // The scene's driving action is shown above the dialogue in the in-game memories window,
     // but it is never spoken: TTS streams finalLines, which stay pure dialogue, and the paced
@@ -1630,6 +1695,18 @@ ${
         preamble: preActionLine ? `(${preActionLine})` : undefined,
         pacedText: finalText,
       });
+      if (continueNext) {
+        log.info(`[Pipeline] Scene round ${round + 1}/${this.ctx.settings.sceneMaxRounds}: continuing the conversation`);
+        const carriedLines = [...(options.carriedLines ?? []), ...(playerLine ? [playerLine] : []), ...finalLines];
+        // Fire-and-forget: the continuation is its own generation with its own memory row
+        void this.runDirectedGeneration(
+          event,
+          { ...options, continueScene: true, playerLine: undefined, round: round + 1, carriedLines },
+          { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
+        ).catch((error: unknown) => {
+          log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);
+        });
+      }
     });
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);
@@ -1769,9 +1846,11 @@ Give every character two integer ratings from 1 to 10:
 - "memory": how memorable this scene is for that character. 1 means mundane and forgettable (routine chores, small talk), 10 means life-changing (a breakup, a birth, a betrayal).
 - "action": how strongly this scene leaves that character wanting to CHANGE what they are doing right now — do something more, something less, or something different from their current course. 1-3 means content to carry on as they are, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now.
 - "action_reason": one short line, in that character's voice, naming what they want to do or change (or why they are content).
+- "unfinished": true if, for that character, the exchange is clearly still open — a question they were asked hangs unanswered, they were cut off mid-thought, or the last line plainly invites a reply; false when the beat landed and could end here.
+- "continue": 1-10, how strongly the scene itself wants ANOTHER round of dialogue right now (not later). 1-3: it can end here; 7+: stopping now would leave the audience hanging.
 Judge each character from their own point of view; their private thoughts are the strongest signal.
 Respond with ONLY a JSON object in exactly this shape, covering every character, nothing else:
-{${names.map((name) => `"${name}": {"memory": <1-10>, "action": <1-10>, "action_reason": "..."}`).join(', ')}}`;
+{${names.map((name) => `"${name}": {"memory": <1-10>, "action": <1-10>, "action_reason": "...", "unfinished": <true|false>, "continue": <1-10>}`).join(', ')}}`;
 
     const thoughts = performances
       .filter((performance) => performance.think)

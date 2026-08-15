@@ -25,6 +25,10 @@ export enum AIActionType {
   ACTION_SCENE = 'action_scene',
   // Nightly (or lazy mid-day) daily plan: goals from the game pool, persona, loadout
   DAILY_PLAN = 'daily_plan',
+  // V-8: map the player's spoken order onto the sim's offered vocabulary
+  VOICE_COMMAND = 'voice_command',
+  // V-6: fill a missing sim/location description from live facts
+  DESCRIPTION_DEFAULT = 'description_default',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -46,6 +50,8 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.COGNITION,
   AIActionType.ACTION_SCENE,
   AIActionType.DAILY_PLAN,
+  AIActionType.VOICE_COMMAND,
+  AIActionType.DESCRIPTION_DEFAULT,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -89,6 +95,10 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Action Scene';
     case AIActionType.DAILY_PLAN:
       return 'Daily Plan';
+    case AIActionType.VOICE_COMMAND:
+      return 'Voice Command';
+    case AIActionType.DESCRIPTION_DEFAULT:
+      return 'Default Description';
     default:
       return actionType;
   }
@@ -132,6 +142,10 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Choose-your-own-adventure action beats when a sim wants a change of course';
     case AIActionType.DAILY_PLAN:
       return 'Nightly goals, persona and action loadout per sim';
+    case AIActionType.VOICE_COMMAND:
+      return 'Maps a spoken order onto the sim\'s offered actions (cheap model recommended)';
+    case AIActionType.DESCRIPTION_DEFAULT:
+      return 'Writes a first description for sims and locations that have none';
     default:
       return '';
   }

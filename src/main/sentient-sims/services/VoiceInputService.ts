@@ -1,5 +1,6 @@
 import log from 'electron-log';
 import { correctNames } from '../util/nameCorrection';
+import { playerSpeakerLabel } from '../models/PlayerVoicePersona';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
 import { SettingsEnum } from '../models/SettingsEnum';
@@ -58,7 +59,8 @@ export class VoiceInputService {
     if (
       key === (SettingsEnum.VOICE_INPUT_ENABLED as string) ||
       key === (SettingsEnum.VOICE_INPUT_HOTKEY as string) ||
-      key === (SettingsEnum.VOICE_INPUT_HOTKEY_MODE as string)
+      key === (SettingsEnum.VOICE_INPUT_HOTKEY_MODE as string) ||
+      key === (SettingsEnum.VOICE_COMMAND_HOTKEY as string)
     ) {
       this.armHotkey();
     }
@@ -85,19 +87,42 @@ export class VoiceInputService {
         }
       },
     });
+    // V-8: the second chord — same capture, but the transcript is an order
+    this.hotkey.armCommand(this.ctx.settings.voiceCommandHotkey, {
+      onDown: () => {
+        this.startListening('command');
+      },
+      onUp: () => {
+        this.stopListening();
+      },
+      onToggle: () => {
+        if (this.state === 'listening') {
+          this.stopListening();
+        } else {
+          this.startListening('command');
+        }
+      },
+    });
   }
 
-  startListening() {
+  // V-8: what the current capture IS — talk to the sim, or an order for the sim
+  private captureMode: 'chat' | 'command' = 'chat';
+
+  startListening(mode: 'chat' | 'command' = 'chat') {
     if (!this.ctx.settings.voiceInputEnabled || this.state !== 'idle') {
       return;
     }
+    this.captureMode = mode;
     if (!isWebSocketConnected('mod')) {
       sendPopUpNotification('Voice input: the game is not connected');
       return;
     }
     this.state = 'listening';
     notifyAllWindows('voice-record-start');
-    sendPlayerVoiceStatusToMod('listening');
+    sendPlayerVoiceStatusToMod('listening', undefined, {
+      speaker: playerSpeakerLabel(this.ctx.settings.playerVoicePersona),
+      mode: this.captureMode,
+    });
     // Backstop for a lost keyup (alt-tab mid-hold): never leave the mic hot
     this.forceStopTimer = setTimeout(() => {
       this.stopListening();
@@ -136,9 +161,15 @@ export class VoiceInputService {
       if (text !== raw) {
         log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }
-      log.info(`Voice input transcript: ${text}`);
-      sendPlayerVoiceMessageToMod(text);
+      log.info(`Voice input transcript${this.captureMode === 'command' ? ' (command)' : ''}: ${text}`);
       notifyAllWindows('voice-transcript', text);
+      if (this.captureMode === 'command') {
+        // V-8: an order, not talk — mapped to an offered action and dispatched; the
+        // chat event is skipped entirely
+        await this.ctx.voiceCommand.handleCommand(text);
+        return text;
+      }
+      sendPlayerVoiceMessageToMod(text);
       return text;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

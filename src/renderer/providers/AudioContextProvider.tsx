@@ -179,13 +179,23 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
 
   useEffect(() => {
     const removeListener = window.electron.onVoice(
-      (_event: any, lines: DialogueLine[], options?: { paced?: boolean; preamble?: string; pacedText?: string }) => {
+      (
+        _event: any,
+        lines: DialogueLine[],
+        options?: { paced?: boolean; preamble?: string; pacedText?: string; priority?: boolean },
+      ) => {
         const scene = {
           lines,
           paced: options?.paced ?? false,
           preamble: options?.preamble,
           pacedText: options?.pacedText,
         };
+        if (options?.priority) {
+          // V-2: the reply to the player's own words plays next, never fourth
+          sceneQueueRef.current.unshift(scene);
+          void drainSceneQueue();
+          return;
+        }
         if (sceneQueueRef.current.length >= maxQueuedScenes) {
           log.debug(`TTS scene queue full (${sceneQueueRef.current.length} waiting) — dropping incoming scene`);
           reportDroppedScene(scene);
@@ -199,6 +209,19 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       removeListener();
     };
   }, [drainSceneQueue, reportDroppedScene]);
+
+  // V-2: the player pressing the talk hotkey pre-empts everything — the current line
+  // stops and the waiting scenes are flushed (dropped scenes report back so the mod
+  // closes their subtitles). The reply then plays first by construction.
+  useEffect(() => {
+    const removeListener = window.electron.onVoiceRecordStart(() => {
+      log.info('[TTS] player voice pre-empts playback: stopping current line, flushing the scene queue');
+      stop();
+    });
+    return () => {
+      removeListener();
+    };
+  }, [stop]);
 
   const contextValue = useMemo(() => {
     return {

@@ -41,7 +41,11 @@ export class AIController {
 
     log.debug(`Interaction event: ${JSON.stringify(req.body)}`);
 
-    const result = await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event));
+    // V-2: the player's spoken line rides the speech lane (drained before everything else)
+    const isPlayerVoice = (event as { source?: string }).source === 'player_voice';
+    const result = isPlayerVoice
+      ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event))
+      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event));
     result.input = event;
     // Leading newline so each generation stands apart from the previous one in the game window;
     // memories, TTS, and the app chat UI keep the untouched text. Classic mode sends it verbatim.

@@ -17,6 +17,7 @@ import log from 'electron-log';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { defaultVoiceInputHotkey, defaultVoiceInputModel, openaiDefaultEndpoint } from 'main/sentient-sims/constants';
 import useSetting from 'renderer/hooks/useSetting';
+import { PLAYER_VOICE_PERSONAS, PLAYER_VOICE_PERSONA_LABELS } from 'main/sentient-sims/models/PlayerVoicePersona';
 import HelpButton from 'renderer/components/HelpButton';
 
 // Single keys must be ones The Sims 4 leaves unbound — the hook observes without
@@ -43,6 +44,10 @@ export default function VoiceInputSettingsComponent() {
   const hotkeyMode = useSetting<string>(SettingsEnum.VOICE_INPUT_HOTKEY_MODE, 'hold');
   const language = useSetting<string>(SettingsEnum.VOICE_INPUT_LANGUAGE, '');
   const deviceId = useSetting<string>(SettingsEnum.VOICE_INPUT_DEVICE_ID, '');
+  const persona = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA, 'voice');
+  const personaBio = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_BIO, '');
+  const commandHotkey = useSetting<string>(SettingsEnum.VOICE_COMMAND_HOTKEY, '');
+  const followsClock = useSetting<boolean>(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK, true);
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [testState, setTestState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
@@ -151,6 +156,55 @@ export default function VoiceInputSettingsComponent() {
               <MenuItem value="toggle">Press to start/stop</MenuItem>
             </Select>
           </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>Command key:</Typography>
+            <Select
+              size="small"
+              displayEmpty
+              value={commandHotkey.value}
+              onChange={(change) => void commandHotkey.setSetting(change.target.value)}
+            >
+              <MenuItem value="">Off</MenuItem>
+              {hotkeyPresets
+                .filter((preset) => preset.value !== hotkey.value)
+                .map((preset) => (
+                  <MenuItem key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </MenuItem>
+                ))}
+            </Select>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+              Hold this one and what you say is an ORDER the sim carries out, not talk.
+            </Typography>
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 110 }}>You are:</Typography>
+            <Select size="small" value={persona.value} onChange={(change) => void persona.setSetting(change.target.value)}>
+              {PLAYER_VOICE_PERSONAS.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {PLAYER_VOICE_PERSONA_LABELS[option]}
+                </MenuItem>
+              ))}
+            </Select>
+            {persona.value === 'player' ? (
+              <TextField
+                size="small"
+                fullWidth
+                value={personaBio.value}
+                placeholder="A line or two about who you are to them"
+                onChange={(change) => void personaBio.setSetting(change.target.value)}
+              />
+            ) : null}
+          </Stack>
+          <FormControlLabel
+            label="Voices and subtitles follow the game clock (pause with the game, faster on speed 2/3)"
+            control={
+              <Checkbox
+                checked={followsClock.value}
+                onChange={(change) => void followsClock.setSetting(change.target.checked)}
+              />
+            }
+          />
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
             <Typography sx={{ minWidth: 110 }}>Endpoint:</Typography>
             <TextField

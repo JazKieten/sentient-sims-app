@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { PLAYER_VOICE_PERSONA_FLAVOR, playerSpeakerLabel } from '../models/PlayerVoicePersona';
 import {
   ChatContinueInteractionEvent,
   ChatInteractionEvent,
@@ -247,6 +248,9 @@ type PlaybackOptions = {
   // playback) instead of suppressing it with the unpaced memory block — for solo
   // player-directed generations that should still show on screen.
   pacedSubtitles?: boolean;
+  // V-2: play this scene next (front of the renderer's scene queue) — the reply to
+  // something the player just said
+  priority?: boolean;
 };
 
 export type ResolvedInteractionPreAction =
@@ -875,9 +879,15 @@ ${diaryRules}`;
       // sim as The Voice. The non-sim speaker keeps the directed pipeline in dialogue
       // mode (a playerLine suppresses monologue-only), the sim answers aloud, and the
       // exchange persists only as the sim's memory — no game social is staged.
-      return this.runDirectedGeneration(primaryEvent, {
-        playerLine: { speaker: playerVoiceSpeaker, text: spoken },
-      });
+      // V-3: the persona decides who is speaking (label must match the mod's speaker —
+      // pushed via update_setting), and V-2 replies to the player play next, not fourth
+      return this.runDirectedGeneration(
+        primaryEvent,
+        {
+          playerLine: { speaker: playerSpeakerLabel(this.ctx.settings.playerVoicePersona), text: spoken },
+        },
+        { priority: true },
+      );
     }
     return this.runGeneration(chatEvent, {
       action: chatEvent.action,
@@ -1242,6 +1252,12 @@ If the scene is already good, return it unchanged.`;
     } else if (playerLine) {
       const audience = performerNames.length > 0 ? ` to ${formatListToString(performerNames)}` : '';
       sceneAction = `${playerLine.speaker} just said${audience}: "${playerLine.text}" — play the reply. Answer what was actually said, in the flow of the conversation already underway.`;
+      // V-3: the one semantic spot where the sim learns WHAT is speaking to them
+      const persona = this.ctx.settings.playerVoicePersona;
+      if (playerLine.speaker === playerSpeakerLabel(persona)) {
+        const bio = persona === 'player' ? this.ctx.settings.playerVoicePersonaBio : '';
+        sceneAction += ` ${playerLine.speaker} is ${PLAYER_VOICE_PERSONA_FLAVOR[persona]}${bio ? ` — ${bio}` : ''}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
+      }
     } else {
       sceneAction = promptRequest.action ?? options.action;
       // N-1: the interaction's own valence frames the beat. Without it the model read
@@ -1610,6 +1626,7 @@ ${
       }
       this.playTtsLines(finalLines, event.sentient_sims, {
         paced: true,
+        priority: playbackOptions.priority,
         preamble: preActionLine ? `(${preActionLine})` : undefined,
         pacedText: finalText,
       });
@@ -2014,7 +2031,7 @@ Write me a buff description based on the conversation so that ${buffRequest.name
   playTtsLines(
     lines: DialogueLine[],
     sims?: SentientSim[],
-    options?: { paced?: boolean; preamble?: string; pacedText?: string },
+    options?: { paced?: boolean; preamble?: string; pacedText?: string; priority?: boolean },
   ) {
     playTTSLines(lines, sims, { ...options, voiceOverrides: this.simVoiceOverrides(sims) });
   }

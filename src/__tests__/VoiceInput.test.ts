@@ -248,7 +248,7 @@ describe('VoiceInputService', () => {
 
     service.startListening();
     expect(windowSend).toHaveBeenCalledWith('voice-record-start');
-    expect(notifyMocks.sendPlayerVoiceStatusToMod).toHaveBeenCalledWith('listening');
+    expect(notifyMocks.sendPlayerVoiceStatusToMod).toHaveBeenCalledWith('listening', undefined, expect.objectContaining({ mode: 'chat' }));
 
     service.stopListening();
     expect(windowSend).toHaveBeenCalledWith('voice-record-stop');

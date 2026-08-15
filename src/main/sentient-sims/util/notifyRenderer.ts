@@ -5,7 +5,7 @@ import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
 import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
-import { ModWebsocketMessageType, ModWebsocketNotification, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
+import { ModPlayerVoiceStatus, ModWebsocketMessageType, ModWebsocketNotification, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
 import { CaughtError } from '../models/CaughtError';
 import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
@@ -125,6 +125,8 @@ export function playTTSLines(
     paced?: boolean;
     preamble?: string;
     pacedText?: string;
+    // V-2: front of the renderer's scene queue
+    priority?: boolean;
     // Voice ids the user pinned to specific sims, keyed by sim id
     voiceOverrides?: Map<string, string>;
   },
@@ -138,6 +140,7 @@ export function playTTSLines(
     paced: options?.paced ?? false,
     preamble: options?.preamble,
     pacedText: options?.pacedText,
+    priority: options?.priority ?? false,
   });
 }
 
@@ -161,12 +164,21 @@ export function sendPlayerVoiceMessageToMod(text: string) {
   });
 }
 
-export function sendPlayerVoiceStatusToMod(status: 'listening' | 'transcribing' | 'error', detail?: string) {
+// `speaker` (V-3) is the player's persona label; the mod echoes the heard line under it,
+// so it MUST equal the speaker the reply is generated with (playerSpeakerLabel).
+// `mode` (V-8): 'chat' = talk to the sim, 'command' = an order the sim will act on.
+export function sendPlayerVoiceStatusToMod(
+  status: 'listening' | 'transcribing' | 'error',
+  detail?: string,
+  extra?: { speaker?: string; mode?: 'chat' | 'command' },
+) {
   sendModNotification({
     type: ModWebsocketMessageType.PLAYER_VOICE_STATUS,
     status,
     detail,
-  });
+    speaker: extra?.speaker,
+    mode: extra?.mode,
+  } as ModPlayerVoiceStatus);
 }
 
 export function playTTS(text: string, sims?: SentientSim[], voiceOverrides?: Map<string, string>) {

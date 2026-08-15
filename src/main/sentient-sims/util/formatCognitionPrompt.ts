@@ -115,7 +115,7 @@ function clampScore(value: unknown): number | undefined {
   return Math.min(10, Math.max(1, Math.round(num)));
 }
 
-function firstJsonBlock(raw: string): unknown {
+export function firstJsonBlock(raw: string): unknown {
   const match = /\{[\s\S]*\}/.exec(raw);
   if (!match) {
     return undefined;

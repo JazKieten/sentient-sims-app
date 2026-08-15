@@ -128,6 +128,8 @@ export type SimStateEntry = PerceptionSnapshot & {
   // False for on-lot NPCs riding the report so scene-armed desires can fire; absent
   // (older mod builds) means household
   is_household?: boolean;
+  // V-8: the player's currently selected sim (the one a voice command is for)
+  is_active?: boolean;
 };
 
 export type KnownSim = {

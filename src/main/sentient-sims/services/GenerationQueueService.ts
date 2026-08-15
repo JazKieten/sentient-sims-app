@@ -67,6 +67,10 @@ export class GenerationQueueService {
 
   private readonly jobs: Array<() => Promise<void>> = [];
 
+  // V-2: the player's own voice. Drained BEFORE jobs — the reply to something the
+  // player just said out loud must not queue behind autonomous scenes and prefetches.
+  private readonly speechJobs: Array<() => Promise<void>> = [];
+
   private readonly cognitionJobs: Array<() => Promise<void>> = [];
 
   private readonly backgroundJobs: Array<() => Promise<void>> = [];
@@ -199,6 +203,20 @@ export class GenerationQueueService {
   // top of a prefetched one.
   runExclusive<T>(task: () => Promise<T>): Promise<T> {
     return this.enqueue(task);
+  }
+
+  // V-2: speech-lane variant of runExclusive
+  runSpeech<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.speechJobs.push(async () => {
+        try {
+          resolve(await task());
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+      this.drain();
+    });
   }
 
   // Cognition lane (Block 9 deliberations): below foreground speech/interaction work,
@@ -368,6 +386,18 @@ export class GenerationQueueService {
 
   private drain() {
     const concurrency = Math.max(1, this.ctx.settings.generationConcurrency);
+    // V-2: speech first, always
+    while (this.activeCount < concurrency && this.speechJobs.length > 0) {
+      const job = this.speechJobs.shift();
+      if (!job) {
+        return;
+      }
+      this.activeCount += 1;
+      void job().finally(() => {
+        this.activeCount -= 1;
+        this.drain();
+      });
+    }
     while (this.activeCount < concurrency && this.jobs.length > 0) {
       const job = this.jobs.shift();
       if (!job) {

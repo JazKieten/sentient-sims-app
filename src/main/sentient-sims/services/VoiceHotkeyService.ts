@@ -77,6 +77,15 @@ export type HotkeyCallbacks = {
 export class VoiceHotkeyService {
   private binding?: HotkeyBinding;
 
+  // V-8: the command binding (speech = an order). Same hook, second chord.
+  private commandBinding?: HotkeyBinding;
+
+  private commandCallbacks?: HotkeyCallbacks;
+
+  private commandHeld = false;
+
+  private commandFallbackAccelerator?: string;
+
   private mode: 'hold' | 'toggle' = 'hold';
 
   private callbacks?: HotkeyCallbacks;
@@ -119,10 +128,62 @@ export class VoiceHotkeyService {
     this.armFallback(hotkey);
   }
 
+  // V-8: arm the command chord (call after arm(); disarm() clears both)
+  armCommand(hotkey: string, callbacks: HotkeyCallbacks) {
+    this.commandBinding = undefined;
+    this.commandCallbacks = undefined;
+    this.commandHeld = false;
+    if (this.commandFallbackAccelerator) {
+      try {
+        globalShortcut.unregister(this.commandFallbackAccelerator);
+      } catch (err) {
+        log.error('Unable to unregister voice command hotkey', err);
+      }
+      this.commandFallbackAccelerator = undefined;
+    }
+    if (!hotkey) {
+      return;
+    }
+    this.commandCallbacks = callbacks;
+    const uiohook = loadUiohook();
+    if (uiohook) {
+      const binding = parseHotkey(hotkey, uiohook.UiohookKey);
+      if (binding && this.installHook(uiohook)) {
+        this.commandBinding = binding;
+        log.info(`Voice command hotkey armed: ${hotkey}`);
+        return;
+      }
+    }
+    try {
+      const registered = globalShortcut.register(hotkey, () => {
+        this.commandCallbacks?.onToggle();
+      });
+      if (registered) {
+        this.commandFallbackAccelerator = hotkey;
+        log.info(`Voice command hotkey armed via globalShortcut toggle fallback: ${hotkey}`);
+      } else {
+        log.error(`Voice command hotkey "${hotkey}" registration failed (already in use?)`);
+      }
+    } catch (err) {
+      log.error(`Voice command hotkey "${hotkey}" is not a valid accelerator`, err);
+    }
+  }
+
   disarm() {
     this.binding = undefined;
     this.callbacks = undefined;
     this.held = false;
+    this.commandBinding = undefined;
+    this.commandCallbacks = undefined;
+    this.commandHeld = false;
+    if (this.commandFallbackAccelerator) {
+      try {
+        globalShortcut.unregister(this.commandFallbackAccelerator);
+      } catch (err) {
+        log.error('Unable to unregister voice command hotkey', err);
+      }
+      this.commandFallbackAccelerator = undefined;
+    }
     if (this.fallbackAccelerator) {
       try {
         globalShortcut.unregister(this.fallbackAccelerator);
@@ -217,7 +278,30 @@ export class VoiceHotkeyService {
     );
   }
 
+  private matchesCommand(event: { keycode: number; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
+    const binding = this.commandBinding;
+    return (
+      binding !== undefined &&
+      event.keycode === binding.keycode &&
+      event.ctrlKey === binding.ctrl &&
+      event.altKey === binding.alt &&
+      event.shiftKey === binding.shift
+    );
+  }
+
   private handleKeydown(event: { keycode: number; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) {
+    if (this.matchesCommand(event)) {
+      if (this.commandHeld) {
+        return;
+      }
+      this.commandHeld = true;
+      if (this.mode === 'hold') {
+        this.commandCallbacks?.onDown();
+      } else {
+        this.commandCallbacks?.onToggle();
+      }
+      return;
+    }
     if (!this.matches(event) || this.held) {
       return;
     }
@@ -230,6 +314,13 @@ export class VoiceHotkeyService {
   }
 
   private handleKeyup(event: { keycode: number }) {
+    if (this.commandBinding !== undefined && event.keycode === this.commandBinding.keycode && this.commandHeld) {
+      this.commandHeld = false;
+      if (this.mode === 'hold') {
+        this.commandCallbacks?.onUp();
+      }
+      return;
+    }
     // Modifier state is not checked on release: letting go of Ctrl before Space must
     // still end the hold
     if (this.binding === undefined || event.keycode !== this.binding.keycode || !this.held) {

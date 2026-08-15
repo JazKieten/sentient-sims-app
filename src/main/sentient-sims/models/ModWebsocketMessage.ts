@@ -78,7 +78,7 @@ export type ModEnqueueInteraction = ModWebsocketMessage & {
   action: string;
   target_sim_id?: string;
   target_object_id?: string;
-  priority?: 'high' | 'low';
+  priority?: 'high' | 'low' | 'critical';
   insert_strategy?: 'next' | 'last';
   clear_queue?: boolean;
   source: string;
@@ -104,6 +104,10 @@ export type ModPlayerVoiceMessage = ModWebsocketMessage & {
 export type ModPlayerVoiceStatus = ModWebsocketMessage & {
   status: 'listening' | 'transcribing' | 'error';
   detail?: string;
+  // V-3: the persona label the player speaks as (byte-identical to the reply's speaker)
+  speaker?: string;
+  // V-8: 'command' = the utterance is an order the sim will act on, not talk
+  mode?: 'chat' | 'command';
 };
 
 export type WebsocketNotification =

@@ -31,6 +31,7 @@ import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { ActionDispatcherService } from './ActionDispatcherService';
+import { VoiceCommandService } from './VoiceCommandService';
 import { DailyPlanService } from './DailyPlanService';
 import { SimStateCache } from './SimStateCache';
 import { CognitionService } from './CognitionService';
@@ -225,6 +226,8 @@ export class ApiContext {
   private readonly _mappingService: MappingService;
   private readonly _sceneService: SceneService;
   private readonly _actionDispatcherService: ActionDispatcherService;
+
+  private _voiceCommandService?: VoiceCommandService;
   private readonly _simStateCache: SimStateCache;
   private readonly _cognitionService: CognitionService;
   private readonly _dailyPlanService: DailyPlanService;
@@ -407,6 +410,14 @@ export class ApiContext {
 
   get sceneService(): SceneService {
     return this._sceneService;
+  }
+
+  // V-8: lazily built (needs ai + simStateCache + actionDispatcher, all on this context)
+  get voiceCommand(): VoiceCommandService {
+    if (!this._voiceCommandService) {
+      this._voiceCommandService = new VoiceCommandService(this);
+    }
+    return this._voiceCommandService;
   }
 
   get actionDispatcher(): ActionDispatcherService {

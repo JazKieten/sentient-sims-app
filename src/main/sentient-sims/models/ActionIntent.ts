@@ -6,7 +6,7 @@ export type ActionIntent = {
   action: string;
   target_sim_id?: string;
   target_object_id?: string;
-  priority?: 'high' | 'low';
+  priority?: 'high' | 'low' | 'critical';
   insert_strategy?: 'next' | 'last';
   clear_queue?: boolean;
   source?: string;

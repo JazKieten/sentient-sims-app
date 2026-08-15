@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { DailyPlanService, parsePlannerJson } from 'main/sentient-sims/services/DailyPlanService';
+import { DailyPlanService, extractDiaryProse, parsePlannerJson } from 'main/sentient-sims/services/DailyPlanService';
 import { DailyPlan, sleepPlanDays } from 'main/sentient-sims/models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from 'main/sentient-sims/models/SimStateReport';
 import {
@@ -333,6 +333,59 @@ describe('parsePlannerJson', () => {
     expect(parsePlannerJson('```json\n{"diary": "a day"}\n```')).toEqual({ diary: 'a day' });
     expect(parsePlannerJson('no json here')).toBeUndefined();
     expect(parsePlannerJson('{broken')).toBeUndefined();
+  });
+
+  it('repairs a goals array written as bare "id" pairs', () => {
+    const parsed = parsePlannerJson('{"goals": ["id": "want_MakeFriend", "id": "want_GoForJog"], "diary": "a day"}');
+    expect(parsed).toEqual({ goals: ['want_MakeFriend', 'want_GoForJog'], diary: 'a day' });
+  });
+
+  it('leaves a well-formed goals array alone and still fails on real garbage', () => {
+    expect(parsePlannerJson('{"goals": ["want_MakeFriend"]}')).toEqual({
+      goals: ['want_MakeFriend'],
+    });
+    expect(parsePlannerJson('{"goals": [not json at all}')).toBeUndefined();
+  });
+});
+
+// Live 2026-08-15: a sleep-plan completion that broke the schema twice (free prose before
+// the object, goals written as bare "id" pairs) was stored WHOLE as the diary memory —
+// prose plus raw JSON — and recalled into 216 later prompts.
+describe('extractDiaryProse', () => {
+  const LEAKED =
+    "I spent the day recovering from a low-energy slump, and I'm looking forward to a more " +
+    'energetic tomorrow. \n{"diary": "I spent the day recovering with my household.", ' +
+    '"goal_review": [], "goals": ["id": "want_MakeFriend", "id": "want_GoForJog"], ' +
+    '"persona": "I am upbeat today."}';
+
+  it('never lets raw JSON reach the stored diary', () => {
+    const diary = extractDiaryProse(LEAKED);
+    expect(diary).not.toContain('{');
+    expect(diary).not.toContain('goal_review');
+    expect(diary).toBe('I spent the day recovering with my household.');
+  });
+
+  it('salvages the diary out of a completion truncated at the token cap', () => {
+    // Both rows actually poisoned in the live DB (2026-08-13) were cut off mid-object, so
+    // there is no closing brace for parsePlannerJson to find at all
+    const truncated =
+      '{"diary": "Today was a bit of a rollercoaster.", "goal_review": [{"id": "want_ReadBook", ' +
+      '"verdict": "ignored"}], "goals": ["id": "want_ReadBook"], "persona": "I want to be conf';
+    expect(extractDiaryProse(truncated)).toBe('Today was a bit of a rollercoaster.');
+  });
+
+  it('salvages the diary field when the object cannot be parsed at all', () => {
+    const diary = extractDiaryProse('Some prose first.\n{"diary": "The bit I actually wrote.", "goals": [<<<]}');
+    expect(diary).toBe('The bit I actually wrote.');
+  });
+
+  it('falls back to the prose before the object when there is no usable diary field', () => {
+    expect(extractDiaryProse('A quiet day at home.\n{"goals": ["x"]}')).toBe('A quiet day at home.');
+  });
+
+  it('passes plain prose through untouched', () => {
+    expect(extractDiaryProse('  A quiet day at home.  ')).toBe('A quiet day at home.');
+    expect(extractDiaryProse('')).toBe('');
   });
 });
 

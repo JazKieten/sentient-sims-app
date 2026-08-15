@@ -73,7 +73,7 @@ import { ModAddBuff, ModWebsocketMessageType } from '../models/ModWebsocketMessa
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
-import { parsePlannerJson, DailyPlanService } from './DailyPlanService';
+import { parsePlannerJson, extractDiaryProse, DailyPlanService } from './DailyPlanService';
 import { SceneState } from './SceneService';
 import { MemoryTrace } from '../models/MemoryTrace';
 
@@ -598,9 +598,14 @@ ${diaryRules}`;
             log.warn(`[DailyPlan] failed to accept sleep plan for ${pov.simName}`, err);
           }
         } else {
-          // The diary must never be lost to plan parsing — keep whatever came back as
-          // the entry and let the lazy planner cover tomorrow
-          log.warn(`[DailyPlan] sleep planner output unparseable for ${pov.simName}; lazy path will plan`);
+          // The diary must never be lost to plan parsing — nor may raw JSON reach
+          // permanent memory (live 2026-08-15). Keep the prose, drop the schema, and let
+          // the lazy planner cover tomorrow.
+          text = cleanupAIOutput(extractDiaryProse(reflection.text));
+          log.warn(
+            `[DailyPlan] sleep planner output unparseable for ${pov.simName}; lazy path will plan. ` +
+              `Received: ${JSON.stringify(reflection.text.slice(0, 120))}`,
+          );
         }
       }
       this.recordTrace([text], {

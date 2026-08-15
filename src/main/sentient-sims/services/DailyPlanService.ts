@@ -93,8 +93,70 @@ export function parsePlannerJson(raw: string): Record<string, unknown> | undefin
   try {
     return JSON.parse(match[0]) as Record<string, unknown>;
   } catch {
+    // Observed live 2026-08-15: the model wrote its goals array as bare pairs —
+    // "goals": ["id": "want_MakeFriend", "id": "want_GoForJog"] — which is invalid JSON
+    // and threw away an otherwise complete plan. Repair that one shape and retry once.
+    const repaired = match[0].replace(
+      /("(?:goals|loadout)"\s*:\s*\[)([^\]]*)\]/g,
+      (whole, head: string, body: string) => {
+        if (!/"\s*(?:id|key|action|action_key)"\s*:/.test(body)) {
+          return whole;
+        }
+        const found = [...body.matchAll(/"(?:id|key|action|action_key)"\s*:\s*"([^"]*)"/g)];
+        const ids = found.map((pair) => JSON.stringify(pair[1]));
+        return ids.length > 0 ? `${head}${ids.join(', ')}]` : whole;
+      },
+    );
+    if (repaired !== match[0]) {
+      try {
+        return JSON.parse(repaired) as Record<string, unknown>;
+      } catch {
+        return undefined;
+      }
+    }
     return undefined;
   }
+}
+
+// A diary entry must never carry raw JSON into permanent memory. Found live 2026-08-15:
+// one sleep-plan completion prefixed prose before its JSON object AND broke the goals
+// array, so parsing failed and the WHOLE raw completion — prose plus schema — was stored
+// as Summer Holiday's diary, then recalled into 216 later prompt blocks. Whatever the
+// model returns, only prose is allowed through.
+export function extractDiaryProse(raw: string): string {
+  const text = raw.trim();
+  if (!text) {
+    return '';
+  }
+  const parsed = parsePlannerJson(text);
+  if (parsed && typeof parsed.diary === 'string' && parsed.diary.trim().length > 1) {
+    return parsed.diary.trim();
+  }
+  // Salvage the diary field out of a JSON object too broken to parse
+  const field = /"diary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (field) {
+    try {
+      const unescaped = JSON.parse(`"${field[1]}"`) as string;
+      if (unescaped.trim().length > 1) {
+        return unescaped.trim();
+      }
+    } catch {
+      // fall through to the prose paths
+    }
+  }
+  // Prose the model wrote before opening its JSON object
+  const brace = text.indexOf('{');
+  if (brace > 0) {
+    const prose = text.slice(0, brace).trim();
+    if (prose.length > 1) {
+      return prose;
+    }
+  }
+  if (brace === -1) {
+    return text;
+  }
+  // Only JSON, and no usable diary in it — strip the object and keep whatever is left
+  return text.replace(/\{[\s\S]*\}/, '').trim();
 }
 
 export class DailyPlanService {

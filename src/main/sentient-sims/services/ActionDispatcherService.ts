@@ -19,6 +19,26 @@ export type PendingDispatch = {
 // pending dispatches are dropped after this long rather than accumulating forever
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
+// One greppable line per decision point on the dispatch path, mirroring the mod's
+// `PUSHDIAG rid=<id> stage=... k=v` lines (ss_interaction_push.pushdiag). Grep both logs
+// on the request id and the whole life of a push reads in order.
+// Stages here: dispatch | release | expire | timeout | outcome.
+export function pushdiag(requestId: string | undefined, stage: string, fields: Record<string, unknown> = {}) {
+  const parts = [`PUSHDIAG rid=${requestId ?? 'none'} stage=${stage}`];
+  Object.entries(fields).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+    let text = typeof value === 'string' ? value : JSON.stringify(value);
+    text = text.replace(/\n/g, ' ');
+    if (text.length > 200) {
+      text = `${text.slice(0, 200)}...`;
+    }
+    parts.push(`${key}=${text}`);
+  });
+  log.info(parts.join(' '));
+}
+
 export class ActionDispatcherService {
   private readonly pending = new Map<string, PendingDispatch>();
 
@@ -61,6 +81,14 @@ export class ActionDispatcherService {
     this.inFlightBySim.set(intent.sim_id, requestId);
     this.sendToMod(message);
     log.debug(`[ActionDispatcher] dispatched ${requestId}: sim ${intent.sim_id} -> ${intent.action}`);
+    pushdiag(requestId, 'dispatch', {
+      sim_id: intent.sim_id,
+      action: intent.action,
+      target_sim_id: intent.target_sim_id,
+      target_object_id: intent.target_object_id,
+      priority: intent.priority,
+      source: intent.source ?? 'cognition',
+    });
     return requestId;
   }
 
@@ -87,6 +115,12 @@ export class ActionDispatcherService {
     const entry = this.pending.get(requestId);
     if (entry) {
       log.debug(`[ActionDispatcher] releasing abandoned dispatch ${requestId} (${entry.intent.action})`);
+      pushdiag(requestId, 'release', {
+        sim_id: entry.intent.sim_id,
+        action: entry.intent.action,
+        age_s: Math.round((Date.now() - entry.dispatchedAt) / 1000),
+        cancel_sent: this.isModConnected(),
+      });
       if (this.isModConnected()) {
         const cancel: ModCancelInteraction = {
           type: ModWebsocketMessageType.CANCEL_INTERACTION,
@@ -124,6 +158,7 @@ export class ActionDispatcherService {
     this.pending.forEach((entry, id) => {
       if (entry.dispatchedAt < cutoff) {
         log.debug(`[ActionDispatcher] expiring dispatch ${id} (${entry.intent.action}) with no outcome`);
+        pushdiag(id, 'expire', { sim_id: entry.intent.sim_id, action: entry.intent.action, ttl_s: PENDING_TTL_MS / 1000 });
         this.pending.delete(id);
         if (this.inFlightBySim.get(entry.intent.sim_id) === id) {
           this.inFlightBySim.delete(entry.intent.sim_id);

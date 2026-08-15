@@ -24,10 +24,20 @@ const PERSONA_MAX_CHARS = 200;
 // A broken provider must not be hammered at report cadence
 const PLAN_FAILURE_COOLDOWN_MS = 10 * 60_000;
 
+// What validate() threw away and why. Silent drops were the reason 6/6 sleep-planner
+// rows in the 08-04..08-14 playtest DB carried `goals: []` with nobody able to say
+// whether the model never named a goal or named one that failed to bind.
+export type PlannerReject = {
+  field: 'goals' | 'loadout';
+  value: string;
+  reason: string;
+};
+
 export type PlannerOutput = {
   goals: GoalPoolEntry[];
   persona?: string;
   loadout?: string[];
+  rejected?: PlannerReject[];
 };
 
 export function parsePlannerJson(raw: string): Record<string, unknown> | undefined {
@@ -104,19 +114,34 @@ export class DailyPlanService {
     pool: GoalPoolEntry[],
     age?: string,
     ageBlocked?: string[],
+    simLabel?: string,
   ): PlannerOutput {
+    const rejected: PlannerReject[] = [];
     const poolById = new Map(pool.map((entry) => [entry.id, entry]));
     const goals: GoalPoolEntry[] = [];
     if (Array.isArray(raw.goals)) {
       raw.goals.forEach((goalId) => {
-        if (goals.length >= MAX_GOALS || typeof goalId !== 'string') {
+        if (goals.length >= MAX_GOALS) {
+          rejected.push({ field: 'goals', value: String(goalId), reason: `more than ${MAX_GOALS} goals` });
+          return;
+        }
+        if (typeof goalId !== 'string') {
+          rejected.push({ field: 'goals', value: JSON.stringify(goalId), reason: 'goal id is not a string' });
           return;
         }
         const entry = poolById.get(goalId.trim());
-        if (entry && !goals.some((existing) => existing.id === entry.id)) {
-          goals.push(entry);
+        if (!entry) {
+          rejected.push({ field: 'goals', value: goalId, reason: 'id not in the offered goal pool' });
+          return;
         }
+        if (goals.some((existing) => existing.id === entry.id)) {
+          rejected.push({ field: 'goals', value: goalId, reason: 'duplicate goal id' });
+          return;
+        }
+        goals.push(entry);
       });
+    } else if (raw.goals !== undefined) {
+      rejected.push({ field: 'goals', value: JSON.stringify(raw.goals), reason: 'goals is not an array' });
     }
 
     const persona =
@@ -126,23 +151,66 @@ export class DailyPlanService {
 
     let loadout: string[] | undefined;
     if (Array.isArray(raw.loadout)) {
-      const keys = raw.loadout
-        .filter((key): key is string => typeof key === 'string')
-        .map((key) =>
-          key
-            .trim()
-            .toLowerCase()
-            .replace(/[\s-]+/g, '_'),
-        )
-        .filter((key) => DISCRETIONARY_ACTIONS.has(key))
-        .filter((key) => !ROMANCE_ACTIONS.has(key) || isRomanceAge(age))
+      const keys: string[] = [];
+      raw.loadout.forEach((rawKey) => {
+        if (typeof rawKey !== 'string') {
+          rejected.push({ field: 'loadout', value: JSON.stringify(rawKey), reason: 'key is not a string' });
+          return;
+        }
+        const key = rawKey
+          .trim()
+          .toLowerCase()
+          .replace(/[\s-]+/g, '_');
+        if (!DISCRETIONARY_ACTIONS.has(key)) {
+          rejected.push({ field: 'loadout', value: rawKey, reason: 'not a discretionary action key' });
+          return;
+        }
+        if (ROMANCE_ACTIONS.has(key) && !isRomanceAge(age)) {
+          rejected.push({ field: 'loadout', value: rawKey, reason: `romance key for age ${age ?? 'unknown'}` });
+          return;
+        }
         // A prepped verb the sim's age cannot run is a wasted loadout slot for the day
-        .filter((key) => !(ageBlocked ?? []).includes(key));
-      const deduped = [...new Set(keys)].slice(0, this.ctx.settings.dailyLoadoutSize);
-      loadout = deduped.length >= MIN_LOADOUT ? deduped : undefined;
+        if ((ageBlocked ?? []).includes(key)) {
+          rejected.push({ field: 'loadout', value: rawKey, reason: `the game blocks it for age ${age ?? 'unknown'}` });
+          return;
+        }
+        if (keys.includes(key)) {
+          rejected.push({ field: 'loadout', value: rawKey, reason: 'duplicate key' });
+          return;
+        }
+        keys.push(key);
+      });
+      const size = this.ctx.settings.dailyLoadoutSize;
+      keys.slice(size).forEach((key) => {
+        rejected.push({ field: 'loadout', value: key, reason: `over the loadout size of ${size}` });
+      });
+      const deduped = keys.slice(0, size);
+      if (deduped.length >= MIN_LOADOUT) {
+        loadout = deduped;
+      } else if (deduped.length > 0) {
+        deduped.forEach((key) => {
+          rejected.push({ field: 'loadout', value: key, reason: `only ${deduped.length} keys survived (< ${MIN_LOADOUT}); loadout dropped` });
+        });
+      }
+    } else if (raw.loadout !== undefined) {
+      rejected.push({ field: 'loadout', value: JSON.stringify(raw.loadout), reason: 'loadout is not an array' });
     }
 
-    return { goals, persona, loadout };
+    if (rejected.length > 0) {
+      log.info(
+        `[DailyPlan] validate rejected for ${simLabel ?? 'sim'}: ${rejected
+          .map((entry) => `${entry.field}:"${entry.value}" (${entry.reason})`)
+          .join('; ')} — offered goal ids [${pool.map((entry) => entry.id).join(', ')}]`,
+      );
+    }
+    if (Array.isArray(raw.goals) && raw.goals.length === 0) {
+      log.info(`[DailyPlan] validate: ${simLabel ?? 'sim'} planner returned an EMPTY goals array (pool had ${pool.length} ids)`);
+    }
+    if (raw.goals === undefined) {
+      log.info(`[DailyPlan] validate: ${simLabel ?? 'sim'} planner output had NO goals field (pool had ${pool.length} ids)`);
+    }
+
+    return { goals, persona, loadout, rejected: rejected.length > 0 ? rejected : undefined };
   }
 
   // Persist + cache a validated plan. Idempotent per (sim, day): an existing row wins —
@@ -322,7 +390,7 @@ Reply with ONLY a JSON object:
         );
         const parsed = parsePlannerJson(shot.text);
         if (parsed) {
-          const validated = this.validate(parsed, pool, age, ageBlocked);
+          const validated = this.validate(parsed, pool, age, ageBlocked, simLabel);
           if (validated.goals.length > 0 || validated.persona || validated.loadout) {
             output = validated;
           }

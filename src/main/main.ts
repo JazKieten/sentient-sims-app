@@ -9,6 +9,7 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
+import fs from 'fs';
 import { install as installSourceMapSupport } from 'source-map-support';
 import { app, BrowserWindow, shell, session, WebRequestFilter, dialog } from 'electron';
 import log from 'electron-log';
@@ -35,6 +36,36 @@ import { version as releaseAppVersion } from '../../release/app/package.json';
 log.initialize({ preload: true });
 // Get uncaught main-process errors into main.log so they show up in player log bundles.
 log.errorHandler.startCatching({ showDialog: false });
+
+// Log archiving. electron-log's default rotation is 1MB -> a single main.old.log, which
+// destroyed evidence mid-incident during the 08-04..08-14 playtest (a busy hour of cognition
+// overwrites the archive twice). Rotate at 25MB into timestamped archives and keep the
+// newest ARCHIVED_LOG_COUNT so a full night survives in the player's log bundle.
+const ARCHIVED_LOG_COUNT = 10;
+log.transports.file.maxSize = 25 * 1024 * 1024;
+log.transports.file.archiveLogFn = (oldLogFile) => {
+  const file = oldLogFile.toString();
+  const dir = path.dirname(file);
+  const ext = path.extname(file);
+  const base = path.basename(file, ext);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  try {
+    fs.renameSync(file, path.join(dir, `${base}.${stamp}${ext}`));
+    const archives = fs
+      .readdirSync(dir)
+      .filter((name) => name.startsWith(`${base}.`) && name.endsWith(ext) && name !== `${base}${ext}`)
+      .sort();
+    archives.slice(0, Math.max(0, archives.length - ARCHIVED_LOG_COUNT)).forEach((name) => {
+      try {
+        fs.unlinkSync(path.join(dir, name));
+      } catch (err) {
+        console.warn(`Could not prune archived log ${name}`, err);
+      }
+    });
+  } catch (err) {
+    console.warn('Could not archive log file', err);
+  }
+};
 
 let mainWindow: BrowserWindow | null = null;
 let voiceInputService: VoiceInputService | null = null;

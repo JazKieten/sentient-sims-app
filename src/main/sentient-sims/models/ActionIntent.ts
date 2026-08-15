@@ -31,5 +31,9 @@ export type InteractionOutcomeEvent = {
   // "Object is not in an active zone") — this is what teaches cognition not to retry
   // impossible actions
   reason?: string;
+  // Classified by the mod's ss_failure_reasons from the raw reason (e.g. 'target_left',
+  // 'object_broken', 'mixer_timeout'); recovery_action is the whitelist verb that clears it
+  cause?: string;
+  recovery_action?: string;
   location_id?: number;
 };

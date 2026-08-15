@@ -247,7 +247,9 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.COGNITION_MAX_CONCURRENT.toString()]: {
         type: 'number',
-        default: 1,
+        // 2 not 1: with a single slot one slow chain (retries inside a held slot) stalled
+        // a whole household 4m48s in the 08-04..08-14 playtest. Clamped to [1, 4] in the getter.
+        default: 2,
       },
       [SettingsEnum.COGNITION_PER_SIM_HOURLY_BUDGET.toString()]: {
         type: 'number',
@@ -899,7 +901,8 @@ export class SettingsService {
   }
 
   get cognitionMaxConcurrent(): number {
-    return Math.max(1, this.get(SettingsEnum.COGNITION_MAX_CONCURRENT) as number);
+    const raw = Number(this.get(SettingsEnum.COGNITION_MAX_CONCURRENT));
+    return Math.min(4, Math.max(1, Number.isFinite(raw) ? raw : 2));
   }
 
   get cognitionPerSimHourlyBudget(): number {

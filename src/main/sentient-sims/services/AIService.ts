@@ -524,7 +524,13 @@ ${diaryRules}`;
           text = cleanupAIOutput(parsed.diary);
           try {
             this.ctx.dailyPlan.recordReview(pov.simId, planContext.reviewDay, parsed.goal_review);
-            const validated = this.ctx.dailyPlan.validate(parsed, planContext.pool, planContext.age, planContext.ageBlocked);
+            const validated = this.ctx.dailyPlan.validate(
+              parsed,
+              planContext.pool,
+              planContext.age,
+              planContext.ageBlocked,
+              pov.simName,
+            );
             this.ctx.dailyPlan.acceptPlan(pov.simId, planContext.targetDay, validated, 'sleep');
           } catch (err) {
             log.warn(`[DailyPlan] failed to accept sleep plan for ${pov.simName}`, err);

@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
@@ -292,8 +293,14 @@ export class CognitionService {
       .filter((entry) => this.isEligible(entry, report, now))
       .sort((a, b) => this.urgencyScore(b, report) - this.urgencyScore(a, report));
 
-    for (const entry of candidates) {
+    for (const [index, entry] of candidates.entries()) {
       if (deliberating >= maxConcurrent) {
+        // Slot starvation was invisible in the playtest logs: a sim could sit eligible
+        // for minutes behind one slow chain with no line saying so
+        const skipped = candidates.slice(index).map((waiting) => waiting.sim_name ?? waiting.sim_id);
+        log.info(
+          `[Cognition] ${maxConcurrent} slot(s) busy; skipping ${skipped.length} eligible sim(s) this tick: ${skipped.join(', ')}`,
+        );
         break;
       }
       deliberating += 1;
@@ -315,6 +322,15 @@ export class CognitionService {
       return;
     }
     if (runtime.phase !== 'PENDING_OUTCOME') {
+      pushdiag(event.request_id, 'outcome', {
+        sim_id: event.sim_id,
+        action: event.action,
+        outcome: event.outcome,
+        late: true,
+        phase: runtime.phase,
+        cause: event.cause,
+        reason: event.reason,
+      });
       // The outcome landed after the 90s release already gave up on it. The release
       // suppressed the verb on the assumption the world never answered — but for a long
       // action the mod answers late with "still running when the app timed out; left it
@@ -347,6 +363,14 @@ export class CognitionService {
     this.clearPending(runtime);
     this.toCooldown(event.sim_id);
     log.info(`[Cognition] sim ${event.sim_id} '${event.action ?? ''}' closed: ${event.outcome}`);
+    pushdiag(event.request_id, 'outcome', {
+      sim_id: event.sim_id,
+      action: event.action,
+      outcome: event.outcome,
+      interaction: event.interaction_name,
+      cause: event.cause,
+      reason: event.reason,
+    });
   }
 
   private runtime(simId: string): SimRuntime {
@@ -1101,6 +1125,12 @@ export class CognitionService {
       log.warn(
         `[Cognition] sim ${simId} '${runtime.pendingAction}' produced no outcome in ${Math.round(timeoutMs / 1000)}s; releasing`,
       );
+      pushdiag(runtime.pendingRequestId, 'timeout', {
+        sim_id: simId,
+        action: runtime.pendingAction,
+        waited_s: Math.round(timeoutMs / 1000),
+        distance_m: distance,
+      });
       // A timed-out action gets the BENIGN window: the world never answered, which is
       // churn, not proof it can't work — but it still sits out long enough that the
       // model can't re-pick it immediately (observed live: sit -> timeout -> sit again

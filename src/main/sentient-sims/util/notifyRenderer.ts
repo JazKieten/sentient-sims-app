@@ -5,7 +5,7 @@ import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
 import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
-import { ModWebsocketMessageType } from '../models/ModWebsocketMessage';
+import { ModWebsocketMessageType, ModWebsocketNotification, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
 import { CaughtError } from '../models/CaughtError';
 import { OnlineMappingType } from '../models/MappingSource';
 import { getAllBrowserWindows } from './browserWindows';
@@ -20,6 +20,24 @@ function notifyAllWindows(message: string, ...args: unknown[]) {
       wnd.webContents.send(message, ...args);
     }
   });
+}
+
+// O-6: dead-pipeline health signal. The renderer shows a badge; the game gets ONE
+// non-pausing toast (message, never error — an error notification pauses the clock)
+export function notifyProviderHealth(health: { down: boolean; failures: number; lastError?: string }) {
+  notifyAllWindows('provider-health', health);
+  if (health.down) {
+    sendModNotification({
+      type: ModWebsocketMessageType.NOTIFICATION,
+      notification: {
+        title: 'Sentient Sims',
+        message: `The AI provider has failed ${health.failures} times in a row${
+          health.lastError ? ` (${health.lastError})` : ''
+        }. Sims will keep playing on their own until it recovers.`,
+        message_type: ModWebsocketNotificationType.MESSAGE,
+      },
+    } as ModWebsocketNotification);
+  }
 }
 
 export function notifySettingChanged(setting: string, value: unknown) {

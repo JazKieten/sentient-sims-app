@@ -146,6 +146,11 @@ const electronHandler = {
   notifySceneDropped: (pacedText: string) => {
     ipcRenderer.send('scene-dropped', pacedText);
   },
+  onProviderHealth: (callback: IpcCallback) => {
+    ipcRenderer.on('provider-health', callback);
+
+    return () => ipcRenderer.removeListener('provider-health', callback);
+  },
   onWebsocketStatusChange: (callback: IpcCallback) => {
     ipcRenderer.on('websocket-status-change', callback);
 

@@ -2,11 +2,16 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { AIActionType } from '../models/AIActionType';
 import { AIExchangeDetail, AIExchangeSummary } from '../models/AIExchangeLog';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
+import { notifyProviderHealth } from '../util/notifyRenderer';
 
 // Prompts run tens of kilobytes each, so the log is a bounded ring: enough history to
 // follow a play session, small enough to never matter for memory.
 const MAX_ENTRIES = 200;
 const PREVIEW_CHARS = 160;
+// O-6: this many consecutive provider failures = the pipeline is dead (3h of 429s went
+// unnoticed in the 08-04..08-14 playtest). One renderer badge + ONE non-pausing game
+// toast; cleared on the next success.
+const DEAD_PIPELINE_FAILURES = 3;
 
 type LabelContext = { label: string; actionType?: AIActionType };
 
@@ -30,6 +35,30 @@ export class AIExchangeLogService {
 
   private readonly labelContext = new AsyncLocalStorage<LabelContext>();
 
+  private consecutiveFailures = 0;
+
+  private pipelineDown = false;
+
+  getProviderHealth(): { down: boolean; consecutiveFailures: number } {
+    return { down: this.pipelineDown, consecutiveFailures: this.consecutiveFailures };
+  }
+
+  private trackHealth(error: string | undefined) {
+    if (error) {
+      this.consecutiveFailures += 1;
+      if (!this.pipelineDown && this.consecutiveFailures >= DEAD_PIPELINE_FAILURES) {
+        this.pipelineDown = true;
+        notifyProviderHealth({ down: true, failures: this.consecutiveFailures, lastError: error.slice(0, 200) });
+      }
+      return;
+    }
+    if (this.pipelineDown) {
+      this.pipelineDown = false;
+      notifyProviderHealth({ down: false, failures: 0 });
+    }
+    this.consecutiveFailures = 0;
+  }
+
   // Runs fn with a label attached to every provider call made inside it
   runLabeled<T>(label: string, actionType: AIActionType | undefined, fn: () => Promise<T>): Promise<T> {
     return this.labelContext.run({ label, actionType }, fn);
@@ -44,6 +73,7 @@ export class AIExchangeLogService {
     const context = this.labelContext.getStore();
     const id = this.nextId;
     this.nextId += 1;
+    this.trackHealth(params.error);
 
     const promptChars = params.request.messages.reduce((total, message) => total + message.content.length, 0);
     const responsePreview = params.responseText.replace(/\s+/g, ' ').trim().slice(0, PREVIEW_CHARS);

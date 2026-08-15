@@ -1,5 +1,5 @@
 import log from 'electron-log';
-import { MemoryEntity, neutralizeMarkup, withDisplayContent } from '../db/entities/MemoryEntity';
+import { MemoryEntity, neutralizeMarkup, toModMemory, withDisplayContent } from '../db/entities/MemoryEntity';
 import { InteractionMappingEvent, WWInteractionEvent } from '../models/InteractionEvents';
 import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
@@ -7,6 +7,7 @@ import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
 import { ModWebsocketMessageType, ModWebsocketNotification, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
 import { CaughtError } from '../models/CaughtError';
+import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
 import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
@@ -40,6 +41,11 @@ export function notifyProviderHealth(health: { down: boolean; failures: number; 
   }
 }
 
+// V-1: game clock -> renderer playback clock
+export function notifyClockState(state: ClockState) {
+  notifyAllWindows('clock-state', state);
+}
+
 export function notifySettingChanged(setting: string, value: unknown) {
   notifyAllWindows('setting-changed', setting, value);
 }
@@ -55,8 +61,9 @@ export function notifyNewMemoryAdded(memory: MemoryEntity, options?: { notifyMod
   sendModNotification({
     type: ModWebsocketMessageType.MEMORY_CREATED,
     // The Flash memories window can't render a null content, and one bad row in its
-    // list blanks the whole window on every redraw (see withDisplayContent)
-    memory: withDisplayContent(memory),
+    // list blanks the whole window on every redraw (see withDisplayContent). The name
+    // tags are renderer-only (V-4).
+    memory: withDisplayContent(toModMemory(memory)),
     paced: consumePacedScene(memory.content),
   });
 }

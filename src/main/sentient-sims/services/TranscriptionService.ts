@@ -3,6 +3,7 @@ import OpenAI, { toFile } from 'openai';
 import { ApiContext } from './ApiContext';
 import { AIHealthCheckResponse } from '../models/AIHealthCheckResponse';
 import { openaiDefaultEndpoint } from '../constants';
+import { buildTranscriptionPrompt } from '../util/nameCorrection';
 
 export class TranscriptionError extends Error {
   constructor(message: string) {
@@ -59,17 +60,49 @@ export class TranscriptionService {
     return this.client;
   }
 
-  async transcribe(audio: ArrayBuffer, mimeType = 'audio/webm'): Promise<string> {
+  // V-7: the names in play, tightest scope first (on-lot sims, then everyone the
+  // household knows, then the current location), as a soft transcription bias
+  namePrompt(): string | undefined {
+    try {
+      const report = this.ctx.simStateCache?.getReport?.();
+      const onLot = (report?.sims ?? []).map((entry) => entry.sim_name ?? '').filter(Boolean);
+      const known = (report?.known_sims ?? []).map((sim) => sim.name ?? '').filter(Boolean);
+      const perceived = (report?.sims ?? []).flatMap((entry) => (entry.sims ?? []).map((sim) => sim.name ?? '')).filter(Boolean);
+      let participants: string[] = [];
+      try {
+        participants = this.ctx.participantRepository.getAllParticipants().map((participant) => participant.name ?? '');
+      } catch {
+        participants = [];
+      }
+      let locations: string[] = [];
+      try {
+        const lotId = report?.lot?.zone_id;
+        locations = this.ctx.locationRepository
+          .getAllLocations()
+          .filter((location) => lotId === undefined || String(location.id) === String(lotId))
+          .map((location) => location.name ?? '');
+      } catch {
+        locations = [];
+      }
+      return buildTranscriptionPrompt([onLot, perceived, known, participants, locations]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async transcribe(audio: ArrayBuffer, mimeType = 'audio/webm', options: { namePrompt?: boolean } = {}): Promise<string> {
     const client = this.getClient();
     const language = this.ctx.settings.voiceInputLanguage.trim();
     // The filename extension is how whisper servers detect the container format
     const file = await toFile(Buffer.from(audio), 'speech.webm', { type: mimeType });
+    const prompt = options.namePrompt === false ? undefined : this.namePrompt();
 
     try {
       const response = await client.audio.transcriptions.create({
         file,
         model: this.ctx.settings.voiceInputModel,
         ...(language ? { language } : {}),
+        ...(prompt ? { prompt } : {}),
       });
       return response.text.trim();
     } catch (error) {

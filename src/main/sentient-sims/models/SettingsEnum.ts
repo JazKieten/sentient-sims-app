@@ -72,6 +72,15 @@ export enum SettingsEnum {
   VOICE_INPUT_HOTKEY_MODE = 'voiceInputHotkeyMode', // hold | toggle
   VOICE_INPUT_LANGUAGE = 'voiceInputLanguage', // ISO-639-1 hint, empty = auto-detect
   VOICE_INPUT_DEVICE_ID = 'voiceInputDeviceId', // empty = system default mic
+  // V-1: voice/subtitle playback pauses with a user pause and paces with speed 2/3
+  PLAYBACK_FOLLOWS_GAME_CLOCK = 'playbackFollowsGameClock',
+  // V-3: who the player IS when they speak into the game (The Voice, guardian angel, ...)
+  PLAYER_VOICE_PERSONA = 'playerVoicePersona',
+  PLAYER_VOICE_PERSONA_BIO = 'playerVoicePersonaBio',
+  // V-8: a second hotkey where speech is an ORDER to the sim, not talk
+  VOICE_COMMAND_HOTKEY = 'voiceCommandHotkey',
+  // V-5a: how many rounds a directed scene may continue itself
+  SCENE_MAX_ROUNDS = 'sceneMaxRounds',
 }
 
 export enum DeprecatedSettingsEnum {

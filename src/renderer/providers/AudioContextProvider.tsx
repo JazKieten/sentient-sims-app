@@ -6,6 +6,7 @@ import { sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/const
 import { useElevenLabsTTS } from 'renderer/voice/useElevenLabsTTS';
 import { useSentientSimsTTS } from 'renderer/voice/useSentientSimsTTS';
 import { useAISettings } from './AISettingsProvider';
+import { pacedDelay, setClockState, waitWhileUserPaused } from 'renderer/voice/playbackClock';
 
 interface TTSAudioContextType {
   // voiceId pins a specific cast voice (currently an ElevenLabs voice id) instead
@@ -64,6 +65,17 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
     }
 
     void checkSupport();
+  }, []);
+
+  // V-1: the game clock drives playback (user pause holds audio + the scene queue;
+  // speed 2/3 paces faster). Mod-initiated pauses are filtered out in setClockState.
+  useEffect(() => {
+    const remove = window.electron.onClockState((_event: unknown, state: { speed: string; paused: boolean; paused_by?: 'user' | 'mod' | null }) => {
+      setClockState(state);
+    });
+    return () => {
+      remove();
+    };
   }, []);
 
   const speak = useCallback(
@@ -134,18 +146,15 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       // in-game subtitles still arrive one line at a time, each held for its audio's
       // duration or, with TTS off, long enough to read
       for (let i = 0; i < lines.length; i += 1) {
+        await waitWhileUserPaused();
         notifyLineShown(lines[i]);
         if (aiSettings.ttsEnabled) {
           await speak(lines[i].text);
         } else {
-          await new Promise((resolve) => {
-            setTimeout(resolve, sceneLineReadingHoldMs(lines[i].text));
-          });
+          await pacedDelay(sceneLineReadingHoldMs(lines[i].text));
         }
         if (i < lines.length - 1) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, sceneLineGapMs);
-          });
+          await pacedDelay(sceneLineGapMs);
         }
       }
     },
@@ -157,6 +166,8 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
     drainingRef.current = true;
     try {
       while (sceneQueueRef.current.length > 0) {
+        // V-1: a user pause holds the whole queue, not just the current line
+        await waitWhileUserPaused();
         const scene = sceneQueueRef.current.shift();
         if (!scene) continue;
         await speakDialogueLines(scene.lines, scene.paced, scene.preamble);

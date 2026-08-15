@@ -1,9 +1,31 @@
 import log from 'electron-log';
+import { currentRate, isUserPaused, onPauseChange, onRateChange, waitWhileUserPaused } from './playbackClock';
 
 export type AudioPlaybackHandle = {
   finished: Promise<void>;
   stop: () => void;
+  // V-1: driven by the playback clock (user pause / game speed); playAudio* wire them
+  pause?: () => void;
+  resume?: () => void;
+  setRate?: (rate: number) => void;
 };
+
+// V-1: a user pause suspends the shared context (every line, WebAudio and media
+// element alike); resume brings it back. Registered once, survives every line.
+let clockWired = false;
+function wirePlaybackClock(context: AudioContext) {
+  if (clockWired) {
+    return;
+  }
+  clockWired = true;
+  onPauseChange((paused) => {
+    if (paused && context.state === 'running') {
+      void context.suspend();
+    } else if (!paused && context.state === 'suspended') {
+      void context.resume();
+    }
+  });
+}
 
 // One AudioContext shared by all TTS playback. Spinning up a fresh HTMLAudioElement per
 // line lets the output device go idle between lines, and the first fraction of a second
@@ -27,7 +49,10 @@ const playbackLeadInSeconds = 0.1;
  */
 export async function playAudioUrl(audioUrl: string, volume: number): Promise<AudioPlaybackHandle> {
   const context = getAudioContext();
-  if (context.state === 'suspended') {
+  wirePlaybackClock(context);
+  // A user pause holds the line before it starts (never resume the context over a pause)
+  await waitWhileUserPaused();
+  if (context.state === 'suspended' && !isUserPaused()) {
     await context.resume();
   }
 
@@ -41,10 +66,20 @@ export async function playAudioUrl(audioUrl: string, volume: number): Promise<Au
 
   const source = context.createBufferSource();
   source.buffer = audioBuffer;
+  source.playbackRate.value = currentRate();
   source.connect(gain);
+
+  const offRate = onRateChange((rate) => {
+    try {
+      source.playbackRate.value = rate;
+    } catch (err) {
+      log.debug('Could not change playback rate', err);
+    }
+  });
 
   const finished = new Promise<void>((resolve) => {
     source.onended = () => {
+      offRate();
       source.disconnect();
       gain.disconnect();
       resolve();
@@ -62,6 +97,9 @@ export async function playAudioUrl(audioUrl: string, volume: number): Promise<Au
         log.debug('Audio source already stopped', err);
       }
     },
+    setRate: (rate: number) => {
+      source.playbackRate.value = rate;
+    },
   };
 }
 
@@ -76,7 +114,9 @@ export async function playAudioStream(
   volume: number,
 ): Promise<AudioPlaybackHandle> {
   const context = getAudioContext();
-  if (context.state === 'suspended') {
+  wirePlaybackClock(context);
+  await waitWhileUserPaused();
+  if (context.state === 'suspended' && !isUserPaused()) {
     await context.resume();
   }
   if (context.state !== 'running') {
@@ -86,6 +126,18 @@ export async function playAudioStream(
   const mediaSource = new MediaSource();
   const audio = new Audio();
   audio.src = URL.createObjectURL(mediaSource);
+  audio.playbackRate = currentRate();
+  const offRate = onRateChange((rate) => {
+    audio.playbackRate = rate;
+  });
+  // The element keeps its own transport: pause/resume it with the user pause too
+  const offPause = onPauseChange((paused) => {
+    if (paused) {
+      audio.pause();
+    } else {
+      void audio.play().catch((err: unknown) => log.debug('resume after user pause failed', err));
+    }
+  });
 
   const element = context.createMediaElementSource(audio);
   const gain = context.createGain();
@@ -97,6 +149,8 @@ export async function playAudioStream(
   // inside the pump loop without TS narrowing it to its initial value
   const stopState = { current: false };
   const cleanup = () => {
+    offRate();
+    offPause();
     element.disconnect();
     gain.disconnect();
     URL.revokeObjectURL(audio.src);
@@ -206,6 +260,13 @@ export async function playAudioStream(
       });
       audio.pause();
       cleanup();
+    },
+    pause: () => audio.pause(),
+    resume: () => {
+      void audio.play();
+    },
+    setRate: (rate: number) => {
+      audio.playbackRate = rate;
     },
   };
 }

@@ -23,6 +23,39 @@ type SelectedMemory = {
 
 const client = new SentientSimsAppClient();
 
+// V-4: "Milo (thought):" style tag from the row's owner + event_type. Skipped when the
+// content already leads with the name (older rows carry "Name (thinking):", "Name (diary):",
+// or "Name: line" transcripts) so nothing renders twice.
+export function memoryNameTag(
+  memory: { owner_name?: string; participant_names?: string[]; event_type?: string },
+  body: string,
+): string | undefined {
+  const name = memory.owner_name ?? (memory.participant_names?.length === 1 ? memory.participant_names[0] : undefined);
+  const kind = (memory.event_type ?? '').toLowerCase();
+  const first = (memory.participant_names ?? [])[0];
+  const leadName = name ?? first;
+  if (!leadName || !body) {
+    return undefined;
+  }
+  const opening = body.trimStart().toLowerCase();
+  const alreadyTagged = (memory.participant_names ?? [])
+    .concat(name ? [name] : [])
+    .some((candidate) => candidate && opening.startsWith(candidate.toLowerCase()));
+  if (alreadyTagged) {
+    return undefined;
+  }
+  if (kind === 'thought' || kind === 'monologue') {
+    return `${leadName} (thought):`;
+  }
+  if (kind === 'reflection') {
+    return `${leadName} (diary):`;
+  }
+  if (kind === 'outcome') {
+    return undefined;
+  }
+  return `${leadName}:`;
+}
+
 export default function MemoriesPage() {
   const textareaRef = useRef<HTMLDivElement>(null);
   const [memories, setMemories] = useState<MemoryEntity[]>([]);
@@ -245,6 +278,10 @@ export default function MemoriesPage() {
     const renderText: any[] = [];
 
     memories.forEach((memory, index) => {
+      const body = [memory.observation, memory.action, memory.content]
+        .filter((m, i, all) => m && all.indexOf(m) === i)
+        .join('\n');
+      const tag = memoryNameTag(memory, body);
       renderText.push(
         <Typography
           variant="body2"
@@ -255,9 +292,12 @@ export default function MemoriesPage() {
         >
           {/* A content-less memory is served with its observation/pre_action as content so the
               in-game window can render it, so drop the repeat instead of printing it twice */}
-          {[memory.observation, memory.action, memory.content]
-            .filter((m, i, all) => m && all.indexOf(m) === i)
-            .join('\n')}
+          {tag ? (
+            <Typography component="span" variant="body2" sx={{ color: 'text.secondary', marginRight: 0.5 }}>
+              {tag}
+            </Typography>
+          ) : null}
+          {body}
         </Typography>,
       );
       renderText.push(<Typography> </Typography>);

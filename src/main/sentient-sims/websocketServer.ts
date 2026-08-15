@@ -1,6 +1,7 @@
 /* eslint-disable promise/always-return */
 import { WebSocketServer, WebSocket, RawData } from 'ws';
 import log from 'electron-log';
+import { notifyClockState } from './util/notifyRenderer';
 import { ModLogWebsocketMessage } from './models/ModLogWebsocketMessage';
 import { formatLog } from './util/format';
 import { RendererWebsocketMessage } from './models/RendererWebsocketMessage';
@@ -113,6 +114,16 @@ export const startWebSocketServer = (ctx: ApiContext) => {
 
     ws.on('message', function message(data) {
       const parsedData = JSON.parse(rawDataToString(data)) as ModLogWebsocketMessage;
+
+      if (parsedData.clock_state) {
+        // V-1: forwarded to the renderer's playback clock; when the feature is off the
+        // renderer is told the clock runs normally so nothing ever holds playback
+        const state = ctx.settings.playbackFollowsGameClock
+          ? parsedData.clock_state
+          : { speed: 'NORMAL', paused: false, paused_by: null };
+        notifyClockState(state);
+        return;
+      }
 
       if (!parsedData.log) {
         return;

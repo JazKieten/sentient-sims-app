@@ -88,7 +88,70 @@ export class MemoryRepository extends Repository {
       )
       .all() as MemoryEntity[];
 
-    return memories.map((memory) => withDisplayContent(memory));
+    return this.withNameTags(memories).map((memory) => withDisplayContent(memory));
+  }
+
+  // V-4: owner (memory_index) + participant names for the renderer's "Milo (thought):"
+  // tags. One batched pass per list; a missing index/participant just leaves the tag off.
+  withNameTags(memories: MemoryEntity[]): MemoryEntity[] {
+    const ids = memories.map((memory) => memory.id).filter((id): id is number => typeof id === 'number');
+    if (ids.length === 0) {
+      return memories;
+    }
+    try {
+      const placeholders = ids.map(() => '?').join(', ');
+      const owners = this.dbService
+        .getDb()
+        .prepare(`SELECT memory_id, owner_participant_id FROM memory_index WHERE memory_id IN (${placeholders})`)
+        .safeIntegers()
+        .all(ids) as { memory_id: bigint | number; owner_participant_id: bigint | number | null }[];
+      const ownerByMemory = new Map<number, string>();
+      owners.forEach((row) => {
+        if (row.owner_participant_id !== null && row.owner_participant_id !== undefined) {
+          ownerByMemory.set(Number(row.memory_id), String(row.owner_participant_id));
+        }
+      });
+      const links = this.dbService
+        .getDb()
+        .prepare(
+          `SELECT mp.memory_id AS memory_id, mp.participant_id AS participant_id, p.name AS name
+           FROM memory_participants mp
+           LEFT JOIN participant p ON p.id = mp.participant_id
+           WHERE mp.memory_id IN (${placeholders})
+           ORDER BY mp.id ASC`,
+        )
+        .safeIntegers()
+        .all(ids) as { memory_id: bigint | number; participant_id: bigint | number; name: string | null }[];
+      const namesByMemory = new Map<number, string[]>();
+      const nameById = new Map<string, string>();
+      links.forEach((row) => {
+        const memoryId = Number(row.memory_id);
+        const participantId = String(row.participant_id);
+        if (row.name) {
+          nameById.set(participantId, row.name);
+          const list = namesByMemory.get(memoryId) ?? [];
+          if (!list.includes(row.name)) {
+            list.push(row.name);
+          }
+          namesByMemory.set(memoryId, list);
+        }
+      });
+      return memories.map((memory) => {
+        if (memory.id === undefined) {
+          return memory;
+        }
+        const owner = ownerByMemory.get(memory.id);
+        return {
+          ...memory,
+          owner_participant_id: owner,
+          owner_name: owner ? nameById.get(owner) : undefined,
+          participant_names: namesByMemory.get(memory.id),
+        };
+      });
+    } catch (error) {
+      log.debug(`memory name tags skipped: ${String(error)}`);
+      return memories;
+    }
   }
 
   // The raw, non-reflection memories of a single scene, oldest first. A scene is identified by
@@ -365,7 +428,7 @@ export class MemoryRepository extends Repository {
 
     const createdMemoryId = createMemoryTransaction();
 
-    const memory = this.getMemory({ id: Number(createdMemoryId) });
+    const memory = this.withNameTags([this.getMemory({ id: Number(createdMemoryId) })])[0];
 
     notifyNewMemoryAdded(memory, options);
 

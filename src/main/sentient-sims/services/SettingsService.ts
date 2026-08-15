@@ -2,6 +2,7 @@ import log from 'electron-log';
 import Store from 'electron-store';
 import path from 'path';
 import { DeprecatedSettingsEnum, SettingsEnum } from '../models/SettingsEnum';
+import { PLAYER_VOICE_PERSONAS, PlayerVoicePersona } from '../models/PlayerVoicePersona';
 import { defaultOpenAITTSSettings, OpenAITTSSettings } from '../models/OpenAITTSSettings';
 import { ApiType, ApiTypeFromValue } from '../models/ApiType';
 import { AIProviderConfig, autoConfigId, newAutoConfig, sanitizeProviderConfigs } from '../models/AIProviderConfig';
@@ -281,6 +282,26 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.VOICE_INPUT_ENABLED.toString()]: {
         type: 'boolean',
         default: false,
+      },
+      [SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
+      [SettingsEnum.PLAYER_VOICE_PERSONA.toString()]: {
+        type: 'string',
+        default: 'voice',
+      },
+      [SettingsEnum.PLAYER_VOICE_PERSONA_BIO.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.VOICE_COMMAND_HOTKEY.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.SCENE_MAX_ROUNDS.toString()]: {
+        type: 'number',
+        default: 3,
       },
       [SettingsEnum.VOICE_INPUT_ENDPOINT.toString()]: {
         type: 'string',
@@ -929,6 +950,28 @@ export class SettingsService {
 
   get voiceInputEnabled(): boolean {
     return this.get(SettingsEnum.VOICE_INPUT_ENABLED) as boolean;
+  }
+
+  get playbackFollowsGameClock(): boolean {
+    return this.get(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK) !== false;
+  }
+
+  get playerVoicePersona(): PlayerVoicePersona {
+    const raw = String(this.get(SettingsEnum.PLAYER_VOICE_PERSONA) ?? 'voice');
+    return (PLAYER_VOICE_PERSONAS as readonly string[]).includes(raw) ? (raw as PlayerVoicePersona) : 'voice';
+  }
+
+  get playerVoicePersonaBio(): string {
+    return String(this.get(SettingsEnum.PLAYER_VOICE_PERSONA_BIO) ?? '').trim();
+  }
+
+  get voiceCommandHotkey(): string {
+    return String(this.get(SettingsEnum.VOICE_COMMAND_HOTKEY) ?? '').trim();
+  }
+
+  get sceneMaxRounds(): number {
+    const raw = Number(this.get(SettingsEnum.SCENE_MAX_ROUNDS));
+    return Math.min(5, Math.max(1, Number.isFinite(raw) ? raw : 3));
   }
 
   get voiceInputEndpoint(): string {

@@ -8,7 +8,18 @@ export type MemoryEntity = {
   action?: string;
   event_type?: string;
   interaction_name?: string;
+  // V-4: renderer-only name tags (the mod's SentientMemory ctor takes explicit kwargs, so
+  // the mod-bound copy is stripped in notifyNewMemoryAdded via toModMemory)
+  owner_participant_id?: string;
+  owner_name?: string;
+  participant_names?: string[];
 };
+
+// The row shape the mod's SentientMemory(**memory) accepts: nothing beyond its kwargs
+export function toModMemory(memory: MemoryEntity): MemoryEntity {
+  const { owner_participant_id: _owner, owner_name: _ownerName, participant_names: _names, ...modRow } = memory;
+  return modRow;
+}
 
 // The mod's Flash memories window concatenates the whole list into one htmlText string, so a
 // raw '<' in any memory (e.g. a game repr like "<EnqueueResult: ...>" in a cancel reason) opens

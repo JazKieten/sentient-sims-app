@@ -9,6 +9,7 @@ import { buildElevenLabsSpeechRequest, elevenLabsLineText } from 'main/sentient-
 import { elevenLabsErrorMessage } from 'main/sentient-sims/clients/ElevenLabsError';
 import { DialogueLine } from 'main/sentient-sims/formatter/PromptFormatter';
 import { AudioPlaybackHandle, playAudioStream, playAudioUrl } from './audioPlayback';
+import { pacedDelay } from './playbackClock';
 import { TTSHook } from './TTSHook';
 
 export function useElevenLabsTTS(): TTSHook {
@@ -199,16 +200,12 @@ export function useElevenLabsTTS(): TTSHook {
             }
           } else {
             // No audio to time the subtitle — hold for its reading time instead
-            await new Promise((resolve) => {
-              setTimeout(resolve, sceneLineReadingHoldMs(speakable[i].text));
-            });
+            await pacedDelay(sceneLineReadingHoldMs(speakable[i].text));
           }
         }
 
         if (i < speakable.length - 1 && playSessionRef.current === session) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, sceneLineGapMs);
-          });
+          await pacedDelay(sceneLineGapMs);
         }
       }
 

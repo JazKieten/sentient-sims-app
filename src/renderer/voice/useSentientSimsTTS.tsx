@@ -16,6 +16,7 @@ import { SentenceTokenizeRequest } from 'main/sentient-sims/models/SentenceToken
 import { DialogueLine } from 'main/sentient-sims/formatter/PromptFormatter';
 import { assignVoicesToSpeakers } from 'main/sentient-sims/formatter/VoiceAssignment';
 import { AudioPlaybackHandle, playAudioUrl } from './audioPlayback';
+import { pacedDelay } from './playbackClock';
 import { TTSHook } from './TTSHook';
 
 type QueuedSpeech = { text: string; voice: string[] };
@@ -298,15 +299,12 @@ export function useSentientSimsTTS(): TTSHook {
             }
           } else {
             // No audio to time the subtitle — hold for its reading time instead
-            await new Promise((resolve) => {
-              setTimeout(resolve, sceneLineReadingHoldMs(lines[i].text));
-            });
+            // (paced: scales with game speed, freezes on a user pause — V-1)
+            await pacedDelay(sceneLineReadingHoldMs(lines[i].text));
           }
 
           if (i < lines.length - 1 && speakSessionRef.current === session) {
-            await new Promise((resolve) => {
-              setTimeout(resolve, sceneLineGapMs);
-            });
+            await pacedDelay(sceneLineGapMs);
           }
         }
       } finally {

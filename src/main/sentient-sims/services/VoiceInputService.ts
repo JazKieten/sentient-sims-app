@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { correctNames } from '../util/nameCorrection';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
 import { SettingsEnum } from '../models/SettingsEnum';
@@ -124,10 +125,16 @@ export class VoiceInputService {
       if (audio.byteLength < voiceInputMinAudioBytes) {
         return '';
       }
-      const text = await this.ctx.transcription.transcribe(audio, mimeType);
-      if (!text) {
+      const raw = await this.ctx.transcription.transcribe(audio, mimeType);
+      if (!raw) {
         sendPlayerVoiceStatusToMod('error', 'Heard nothing');
         return '';
+      }
+      // V-7 post-pass: snap near-miss names to the sims actually in play. The settings
+      // Test button goes through transcribe() directly and stays raw on purpose.
+      const text = correctNames(raw, this.knownNames());
+      if (text !== raw) {
+        log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }
       log.info(`Voice input transcript: ${text}`);
       sendPlayerVoiceMessageToMod(text);
@@ -140,6 +147,40 @@ export class VoiceInputService {
       return '';
     } finally {
       this.reset();
+    }
+  }
+
+  private knownNames(): string[] {
+    try {
+      const report = this.ctx.simStateCache?.getReport?.();
+      const names = new Set<string>();
+      (report?.sims ?? []).forEach((entry) => {
+        if (entry.sim_name) {
+          names.add(entry.sim_name);
+        }
+        (entry.sims ?? []).forEach((sim) => {
+          if (sim.name) {
+            names.add(sim.name);
+          }
+        });
+      });
+      (report?.known_sims ?? []).forEach((sim) => {
+        if (sim.name) {
+          names.add(sim.name);
+        }
+      });
+      try {
+        this.ctx.participantRepository.getAllParticipants().forEach((participant) => {
+          if (participant.name) {
+            names.add(participant.name);
+          }
+        });
+      } catch {
+        // no DB loaded: the report names still apply
+      }
+      return [...names];
+    } catch {
+      return [];
     }
   }
 

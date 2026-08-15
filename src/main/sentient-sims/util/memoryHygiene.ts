@@ -17,9 +17,11 @@ export const REFUSAL_PATTERNS: RegExp[] = [
   /^i'?ll review the scene/i,
 ];
 
-// Models emit curly apostrophes ("I can’t help") that dodge ASCII patterns
+// Models emit curly apostrophes ("I can’t help") that dodge ASCII patterns; a curly
+// apostrophe that went through a wrong-codepage hop arrives as U+FFFD ("I can�t help",
+// playtest DB id 3275) and must normalize the same way
 export function normalizeApostrophes(text: string): string {
-  return text.replace(/[‘’]/g, "'");
+  return text.replace(/[‘’\uFFFD]/g, "'");
 }
 
 export const SCAFFOLD_SENTINELS: string[] = [
@@ -29,6 +31,8 @@ export const SCAFFOLD_SENTINELS: string[] = [
   '<PAST_REFLECTIONS>',
   'Each speaker gets their OWN separate line',
   "complete another speaker's sentence",
+  // Scene-director instruction leaked verbatim into a stored line (playtest 08-04..08-14)
+  'PLEASE SKIP describing',
 ];
 
 // Bare "article" token the formatter leaks ahead of real prose — sometimes fused

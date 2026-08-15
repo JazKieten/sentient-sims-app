@@ -25,9 +25,21 @@ describe('isDegeneratePreAction', () => {
     expect(isDegeneratePreAction('Marisol waves')).toBe(true);
   });
 
+  it('rejects empty-slot shapes from a blank actor name', () => {
+    // A sim whose name rendered as '' leaves the verb leading, a double space, or an
+    // orphaned possessive/object — the "scene about nobody" class from the playtest log
+    expect(isDegeneratePreAction(' is telling Milo Calder a joke')).toBe(true);
+    expect(isDegeneratePreAction('Milo Calder  is telling a joke to Tessa')).toBe(true);
+    expect(isDegeneratePreAction("Milo Calder is taking 's hand and leading them away")).toBe(true);
+    expect(isDegeneratePreAction('Milo Calder is talking to .')).toBe(true);
+    expect(isDegeneratePreAction('and Milo Calder are chatting about the weather')).toBe(true);
+  });
+
   it('accepts normal rendered pre_actions', () => {
     expect(isDegeneratePreAction('Marisol Vega tells a joke to Nancy Landgraab')).toBe(false);
     expect(isDegeneratePreAction('Alexander Goth grabs a snack from the fridge.')).toBe(false);
     expect(isDegeneratePreAction('Olivia Kim-Lewis flirts with Marisol Vega')).toBe(false);
+    expect(isDegeneratePreAction("Marisol Vega is taking Nancy Landgraab's hand and leading them to the bedroom.")).toBe(false);
+    expect(isDegeneratePreAction('Marisol Vega and Nancy Landgraab are chatting, and it is going well.')).toBe(false);
   });
 });

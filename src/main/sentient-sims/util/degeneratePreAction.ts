@@ -40,6 +40,23 @@ export function isDegeneratePreAction(rendered: string | undefined): boolean {
   if (/\{[^}]*\}/.test(trimmed)) {
     return true;
   }
+  // Empty-slot shapes: an actor name that rendered as '' leaves the sentence starting
+  // on its verb (" is telling Milo a joke"), a double space mid-sentence ("Milo  is"),
+  // a possessive with no owner ("'s hand"), or a dangling object before punctuation
+  // ("is talking to ."). Ten such preambles reached the model in the 08-04..08-14
+  // playtest log and each became a scene about nobody.
+  if (/^(is|are|am|was|were|and|with|to|'s)\b/i.test(trimmed)) {
+    return true;
+  }
+  if (/\S  +\S/.test(trimmed)) {
+    return true;
+  }
+  if (/\s's\b/.test(trimmed)) {
+    return true;
+  }
+  if (/\b(to|with|at|and|for|of|on|by)\s*[.,;!?]/i.test(trimmed)) {
+    return true;
+  }
   const words = trimmed.split(/\s+/);
   if (words.length < MIN_WORDS) {
     return true;

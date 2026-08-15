@@ -107,7 +107,10 @@ export class MemoriesController {
 
       const memory = this.ctx.memoryRepository.createMemory(createMemoryRequest);
       if (!memory) {
-        return res.json({ error: 'Memory rejected by hygiene gate (empty, refusal, or scaffolding)' });
+        // A hygiene rejection (empty, refusal, scaffolding) is a NORMAL outcome, not a
+        // fault: the mod treats `error` as fatal and pauses the game (5 UI pauses in the
+        // 08-04..08-14 playtest came from this line). `rejected` is the non-fatal shape.
+        return res.json({ rejected: true, reason: 'Memory rejected by hygiene gate (empty, refusal, or scaffolding)' });
       }
       return res.json(memory);
     } catch (err) {

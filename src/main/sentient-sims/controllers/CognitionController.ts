@@ -167,18 +167,23 @@ export class CognitionController {
         sim_id: simId,
         sim_name: simName,
         clock,
+        passed_out: passedOut,
       } = req.body as {
         sim_id?: string;
         sim_name?: string;
         // Game clock at the moment of falling asleep (newer mods) — keys the overnight
         // daily plan to the day the sim wakes into
         clock?: { hour?: number; absolute_day?: number };
+        // The mod also fires the boundary when a sim passes out from exhaustion
+        passed_out?: boolean;
       };
       if (!simId) {
         return res.status(400).json({ error: 'sim_id is required' });
       }
       const who = simName || this.lookupParticipantName(simId) || `Sim ${simId}`;
-      const previousScene = this.ctx.sceneService.endCurrentScene(`${who} fell asleep`);
+      const previousScene = this.ctx.sceneService.endCurrentScene(
+        passedOut ? `${who} passed out from exhaustion` : `${who} fell asleep`,
+      );
       if (!previousScene) {
         return res.json({ ok: true, reflected: false, reason: 'no active scene' });
       }

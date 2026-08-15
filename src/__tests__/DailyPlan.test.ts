@@ -401,3 +401,14 @@ describe('goal -> action connection (Phase 3)', () => {
     );
   });
 });
+
+describe('persona wording (N-5)', () => {
+  it('strips a leading "Tomorrow," so the persona reads in the present', () => {
+    const { service } = buildService();
+    expect(service.validate({ persona: 'Tomorrow, I will be the calm one in the room.' }, []).persona).toBe(
+      'I will be the calm one in the room.',
+    );
+    expect(service.validate({ persona: "Tomorrow I'm bold." }, []).persona).toBe("I'm bold.");
+    expect(service.validate({ persona: 'I am the calm one.' }, []).persona).toBe('I am the calm one.');
+  });
+});

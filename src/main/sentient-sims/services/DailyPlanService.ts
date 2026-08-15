@@ -188,9 +188,17 @@ export class DailyPlanService {
       rejected.push({ field: 'goals', value: JSON.stringify(raw.goals), reason: 'goals is not an array' });
     }
 
+    // N-5: the persona is read DURING the day it describes; a nightly "Tomorrow, I..."
+    // reads as a plan for the day after (observed in every sleep row of the playtest DB)
     const persona =
       typeof raw.persona === 'string' && raw.persona.trim().length > 1
-        ? raw.persona.trim().slice(0, PERSONA_MAX_CHARS)
+        ? raw.persona
+            .trim()
+            .replace(/^tomorrow[,:]?\s+(i'll|i'm|i)(?=\s|$)/i, (_match, pronoun: string) => pronoun.charAt(0).toUpperCase() + pronoun.slice(1))
+            .replace(/^tomorrow[,:]?\s+/i, '')
+            .replace(/^\s+/, '')
+            .replace(/^[a-z]/, (letter) => letter.toUpperCase())
+            .slice(0, PERSONA_MAX_CHARS)
         : undefined;
 
     let loadout: string[] | undefined;

@@ -11,7 +11,7 @@ import { MemoryEntity, withDisplayContent } from './entities/MemoryEntity';
 import { MemoryParticipantEntity } from './entities/MemoryParticipantEntity';
 import { notifyMemoryDeleted, notifyMemoryEdited, notifyNewMemoryAdded } from '../util/notifyRenderer';
 import { MemoryParticipantDTO } from './dto/MemoryParticipantDTO';
-import { stripArtifacts, validateMemoryContent } from '../util/memoryHygiene';
+import { stripArtifacts, validateMemoryContent, NEAR_DUP_EVENT_TYPES, NEAR_DUP_JACCARD, trigramJaccard } from '../util/memoryHygiene';
 
 export class MemoryRepository extends Repository {
   // The db layer can't depend on services, so annotation (importance/embedding into
@@ -217,6 +217,38 @@ export class MemoryRepository extends Repository {
       .run([memoryParticipant.id, BigInt(memoryParticipant.participant_id), memoryParticipant.memory_id]);
   }
 
+  private findRecentEcho(owner: string, content: string): { id: number; score: number } | undefined {
+    try {
+      const rows = this.dbService
+        .getDb()
+        .prepare(
+          `SELECT m.id AS id, m.content AS content
+           FROM memory m
+           LEFT JOIN memory_index mi ON mi.memory_id = m.id
+           LEFT JOIN memory_participants mp ON mp.memory_id = m.id
+           WHERE m.event_type IN ('thought', 'monologue', 'reflection')
+             AND m.timestamp >= datetime('now', '-30 minutes')
+             AND (mi.owner_participant_id = ? OR mp.participant_id = ?)
+           GROUP BY m.id
+           ORDER BY m.id DESC LIMIT 8`,
+        )
+        .safeIntegers()
+        .all([BigInt(owner), BigInt(owner)]) as { id: bigint | number; content: string | null }[];
+      for (const row of rows) {
+        if (!row.content) {
+          continue;
+        }
+        const score = trigramJaccard(row.content, content);
+        if (score >= NEAR_DUP_JACCARD) {
+          return { id: Number(row.id), score };
+        }
+      }
+    } catch (error) {
+      log.debug(`near-duplicate check skipped: ${String(error)}`);
+    }
+    return undefined;
+  }
+
   createMemory(createMemoryRequest: CreateMemoryRequest, options?: { notifyMod?: boolean }): MemoryEntity | undefined {
     // Refuse-to-persist gate: refusals, leaked prompt scaffolding, and no-text rows are
     // permanent retrieval poison once written (~8% of the playtest DB). Outcome rows
@@ -262,6 +294,29 @@ export class MemoryRepository extends Repository {
       if (duplicate) {
         log.info(`Memory create skipped: identical recent content already stored as memory ${duplicate.id}`);
         return this.getMemory({ id: duplicate.id });
+      }
+    }
+
+    // N-6: store-time echo suppression for a mind's own inner rows. Same owner (index
+    // owner, else the sole participant), last 8 thought/monologue/reflection rows within
+    // 30 minutes, trigram Jaccard >= 0.85 -> skip. Dialogue/outcome rows are untouched
+    // (the private/shared split and the diaries depend on them landing).
+    if (
+      createMemoryRequest.memory.id === undefined &&
+      createMemoryRequest.memory.content &&
+      NEAR_DUP_EVENT_TYPES.has(createMemoryRequest.memory.event_type ?? '')
+    ) {
+      const owner =
+        createMemoryRequest.index?.owner ??
+        (createMemoryRequest.participants.length === 1 ? createMemoryRequest.participants[0].id : undefined);
+      if (owner) {
+        const echo = this.findRecentEcho(owner, createMemoryRequest.memory.content);
+        if (echo) {
+          log.info(
+            `Memory create skipped: near-duplicate of memory ${echo.id} (jaccard ${echo.score.toFixed(2)}) for owner ${owner}`,
+          );
+          return this.getMemory({ id: echo.id });
+        }
       }
     }
 

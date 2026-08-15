@@ -15,6 +15,7 @@ import {
 } from '../models/InteractionEvents';
 import { getRandomItem } from '../util/getRandomItem';
 import { isDegeneratePreAction } from '../util/degeneratePreAction';
+import { synthesizeInteractionDescription } from '../util/synthesizePreAction';
 import { InteractionEventResult, InteractionEventStatus, LLMExchange } from '../models/InteractionEventResult';
 import {
   notifyMapAnimation,
@@ -316,6 +317,21 @@ function getInputFormatters(apiType: ApiType): InputFormatter[] {
   return [new DefaultFormatter()];
 }
 
+// N-1: one clause per valence, appended to the scene action so the director and the
+// actors play the beat in the register the game meant
+export function valenceFraming(valence: string | undefined): string | undefined {
+  switch (valence) {
+    case 'negative':
+      return 'This is a HOSTILE beat: it lands as genuinely unfriendly, hurtful or angry — never warm, never a joke between friends.';
+    case 'romance':
+      return 'This is a ROMANTIC beat: play the attraction and the charge between them.';
+    case 'positive':
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
 export class AIService {
   private readonly ctx: ApiContext;
 
@@ -515,7 +531,7 @@ Reply with ONLY a JSON object, fields in this order:
 {"goal_review": [{"id": "<goal id>", "verdict": "met|partial|ignored"}], "goals": ["<goal id>"], "loadout": ["<action key>"], "persona": "one sentence", "diary": "the diary entry"}${reviewInstruction}
 - "goals": 1 or 2 ids for TOMORROW, chosen ONLY from GOAL OPTIONS (copy the id exactly). Prefer goals that list [serve it with] verbs.
 - "loadout": exactly ${this.ctx.settings.dailyLoadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating you'll reach for tomorrow. It MUST include the verbs that serve the chosen goals.
-- "persona": one short first-person sentence — who you want to be tomorrow (your character for the day, not a task).
+- "persona": one short first-person sentence in the PRESENT tense (it is read during that day, so never start with "Tomorrow") — who you want to be (your character for the day, not a task).
 - "diary": ${diaryRules.replace(/\n/g, ' ')}`
         : `${identity}${framing}
 ${diaryRules}`;
@@ -635,7 +651,20 @@ ${diaryRules}`;
     }
 
     if (!description) {
-      return { result: { status: InteractionEventStatus.UNMAPPED_INTERACTION } };
+      // N-3: a weak-but-true line beats a contentless scene (the "popup/code glitch"
+      // hallucination class). Junk tunings come back ignored; the name is logged so
+      // the mapping browser work stays greppable.
+      const synthesized = synthesizeInteractionDescription(event.interaction_name, event.sentient_sims.length);
+      if (synthesized?.ignored) {
+        log.debug(`[PreAction] unmapped '${event.interaction_name}' looks like scaffolding; ignored`);
+        return { result: { status: InteractionEventStatus.IGNORED } };
+      }
+      if (synthesized?.pre_actions) {
+        log.info(`[PreAction] UNMAPPED '${event.interaction_name}' -> synthesized "${synthesized.pre_actions[0]}"`);
+        description = synthesized;
+      } else {
+        return { result: { status: InteractionEventStatus.UNMAPPED_INTERACTION } };
+      }
     }
 
     if (description.pre_actions) {
@@ -1215,6 +1244,13 @@ If the scene is already good, return it unchanged.`;
       sceneAction = `${playerLine.speaker} just said${audience}: "${playerLine.text}" — play the reply. Answer what was actually said, in the flow of the conversation already underway.`;
     } else {
       sceneAction = promptRequest.action ?? options.action;
+      // N-1: the interaction's own valence frames the beat. Without it the model read
+      // 'YellAT' as a friendly chat (playtest 08-04..08-14) — the pre_action text alone
+      // was not enough once the director chose a warm genre.
+      const valenceClause = valenceFraming((event as { valence?: string }).valence);
+      if (sceneAction && valenceClause) {
+        sceneAction = `${sceneAction} ${valenceClause}`;
+      }
     }
 
     if (!sceneAction || performers.length === 0) {

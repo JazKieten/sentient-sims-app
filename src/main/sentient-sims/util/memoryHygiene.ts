@@ -63,3 +63,39 @@ export function validateMemoryContent(text: string | null | undefined): MemoryVa
   }
   return { ok: true };
 }
+
+// N-6: near-duplicate detection for the echo chamber. Character trigrams over the
+// lowercased, punctuation-stripped text; Jaccard >= NEAR_DUP_JACCARD means the same
+// thought re-stored. Fixed twice at retrieval and back twice from new sources — so it is
+// caught at STORE time now, for thought/monologue/reflection rows only.
+export const NEAR_DUP_JACCARD = 0.85;
+export const NEAR_DUP_EVENT_TYPES = new Set(['thought', 'monologue', 'reflection']);
+
+export function trigrams(text: string): Set<string> {
+  const normalized = normalizeApostrophes(text)
+    .toLowerCase()
+    .replace(/^[^:]{1,40}\((?:thinking|diary|thought|to self)\):\s*/i, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const grams = new Set<string>();
+  for (let index = 0; index + 3 <= normalized.length; index += 1) {
+    grams.add(normalized.slice(index, index + 3));
+  }
+  return grams;
+}
+
+export function trigramJaccard(a: string, b: string): number {
+  const left = trigrams(a);
+  const right = trigrams(b);
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let shared = 0;
+  left.forEach((gram) => {
+    if (right.has(gram)) {
+      shared += 1;
+    }
+  });
+  return shared / (left.size + right.size - shared);
+}

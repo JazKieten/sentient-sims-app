@@ -112,3 +112,15 @@ describe('MemoryRepository hygiene gate', () => {
     expect(result?.content).toBe('Adrian nailed the transition.');
   });
 });
+
+describe('near-duplicate detection (N-6)', () => {
+  it('scores a re-stored thought as an echo and a different thought as fresh', async () => {
+    const { trigramJaccard, NEAR_DUP_JACCARD } = await import('../main/sentient-sims/util/memoryHygiene');
+    const a = "Milo (thinking): I should really call Tessa before she thinks I've forgotten her.";
+    const b = "Milo (thinking): I should really call Tessa before she thinks I've forgotten her!";
+    const c = 'Milo (thinking): The fridge is empty again and the bills are due.';
+    expect(trigramJaccard(a, b)).toBeGreaterThanOrEqual(NEAR_DUP_JACCARD);
+    expect(trigramJaccard(a, c)).toBeLessThan(NEAR_DUP_JACCARD);
+    expect(trigramJaccard('', c)).toBe(0);
+  });
+});

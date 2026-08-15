@@ -19,11 +19,23 @@ function objectLabel(object: PerceivedObject): string {
   return cleaned ? pretty(cleaned) : 'an object';
 }
 
+// N-4: ages that change how a person is talked to are rendered; adults are the default
+const AGE_LABELS: Record<string, string> = {
+  BABY: 'a baby',
+  INFANT: 'an infant',
+  TODDLER: 'a toddler',
+  CHILD: 'a child',
+  TEEN: 'a teenager',
+  ELDER: 'an elder',
+};
+
 function describeSim(sim: PerceivedSim): string {
   const name = sim.name ?? 'someone';
   const activity = sim.doing ? pretty(sim.doing) : 'nearby';
   const distance = sim.distance !== undefined ? `, ${Math.round(sim.distance)}m away` : '';
-  return `${name} (${activity}${distance})`;
+  const ageLabel = sim.age ? AGE_LABELS[sim.age.trim().toUpperCase()] : undefined;
+  const age = ageLabel ? `${ageLabel}, ` : '';
+  return `${name} (${age}${activity}${distance})`;
 }
 
 function describeObject(object: PerceivedObject): string {

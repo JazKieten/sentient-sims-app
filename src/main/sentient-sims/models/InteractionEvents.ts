@@ -122,6 +122,10 @@ export type ChatContinueInteractionEvent = SSEvent;
 export type InteractionEvent = SSEvent & {
   interaction_name: string;
   testing_action?: string;
+  // N-1 (mod 2026-08-15+): whitelist/heuristic category and valence of the interaction,
+  // so a yell is framed as a yell before a word is generated. Absent on older mods.
+  interaction_category?: string;
+  valence?: 'positive' | 'negative' | 'romance' | 'neutral';
 };
 
 export type InteractionMappingEvent = InteractionEvent & {

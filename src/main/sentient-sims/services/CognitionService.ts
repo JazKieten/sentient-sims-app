@@ -741,17 +741,30 @@ export class CognitionService {
         : { ...report, lot: { ...report.lot, action_keys: lotActionKeys.length > 0 ? lotActionKeys : undefined } };
 
     const memoriesBlock = await this.relevantMemoriesBlock(entryView);
-    const situationPrompt = buildCognitionUserPrompt(
-      entryView,
-      reportView,
-      memoriesBlock,
-      [...suppressed],
+    const planBlock =
       plan && (plan.goals.length > 0 || plan.persona)
         ? {
             goals: plan.goals.map((goal) => ({ label: goal.label, action_keys: goal.action_keys, reachable: goal.reachable })),
             persona: plan.persona,
           }
-        : undefined,
+        : undefined;
+    // Whether the tick prompt actually carried TODAYS_PLAN is otherwise invisible:
+    // cognition prompts are not logged, so a playtest cannot tell "no plan block" from
+    // "not logged" (owed verification, live 2026-08-15).
+    if (planBlock) {
+      const planGoals = planBlock.goals.map((goal) => goal.label).join(', ');
+      const withPersona = planBlock.persona ? ' + persona' : '';
+      log.info(
+        `[DailyPlan] tick prompt carries TODAYS_PLAN for ${entry.sim_name ?? simId}: ` +
+          `${planBlock.goals.length} goal(s) [${planGoals}]${withPersona}`,
+      );
+    }
+    const situationPrompt = buildCognitionUserPrompt(
+      entryView,
+      reportView,
+      memoriesBlock,
+      [...suppressed],
+      planBlock,
       hiddenActions,
     );
 

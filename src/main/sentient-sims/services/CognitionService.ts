@@ -74,6 +74,41 @@ const RETRY_DELAY_MS = 4_000;
 const PENDING_BASE_MS = 90_000;
 const MS_PER_METER = 1_000;
 
+// Duration-heavy verbs: the base allowance is a ROUTING budget, and it was being spent
+// as an EXECUTION one. Measured live 2026-08-16 over the last 10 pushes of a session:
+// normal verbs closed in 0.6-3.3s, long ones in 39-49s, and 3 of 10 sat at exactly the
+// 90.3s ceiling and came back 'success late=true ... still running when the app timed
+// out'. The work completed every time; only the bookkeeping was wrong — and each of
+// those cost a 90s pending window plus a suppression on a verb that WORKS. The hint
+// keys off how long the verb runs, not (as the old watch-list entry guessed) whether it
+// is an aggregate: clean_up itself finished in 38s that day.
+const LONG_RUNNING_ACTIONS = new Set([
+  'sleep',
+  'nap',
+  'watch_tv',
+  'read_book',
+  'write',
+  'write_book',
+  'program',
+  'browse_web',
+  'paint',
+  'workout',
+  'jog',
+  'fish',
+  'garden',
+  'play_piano',
+  'play_guitar',
+  'practice_speech',
+  'cook_meal',
+  'clean_up',
+  'listen_to_music',
+  'stargaze',
+  'play_chess',
+  'deep_conversation',
+  'chat',
+]);
+const LONG_RUNNING_PENDING_MS = 240_000;
+
 // How long an action that just failed/was ineligible stays out of a sim's offered
 // vocabulary. The world state that made it fail rarely changes within a few ticks, so
 // re-offering it immediately produces an identical failure in a loop (observed live: a
@@ -1185,7 +1220,9 @@ export class CognitionService {
 
   private armPendingTimeout(simId: string, runtime: SimRuntime, entry: SimStateEntry, intent: CognitionIntent) {
     const distance = this.targetDistance(entry, intent) ?? 10;
-    const timeoutMs = Math.max(PENDING_BASE_MS, 2 * distance * MS_PER_METER + PENDING_BASE_MS / 2);
+    const baseMs =
+      intent.action && LONG_RUNNING_ACTIONS.has(intent.action) ? LONG_RUNNING_PENDING_MS : PENDING_BASE_MS;
+    const timeoutMs = Math.max(baseMs, 2 * distance * MS_PER_METER + PENDING_BASE_MS / 2);
     runtime.pendingTimer = setTimeout(() => {
       if (runtime.phase !== 'PENDING_OUTCOME') {
         return;

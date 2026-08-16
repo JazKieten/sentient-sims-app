@@ -15,6 +15,10 @@ export type PerceivedSim = {
   // this lets the app skip offering them as a cost optimisation. Absent on older mods.
   target_age_blocked?: string[];
   doing?: string;
+  // Same_room only. A sleeping sim cannot be socialised with at all — every mixer dies
+  // at execution with INTERACTION_INCOMPATIBILITY (live 2026-08-16: three 'chat' pushes
+  // at a napping sim in a row). Absent on older mod builds, which reads as awake.
+  asleep?: boolean;
   // Observer -> perceived relationship: the has_met gate plus the lore layer
   social?: {
     has_met?: boolean;

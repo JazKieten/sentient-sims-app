@@ -212,6 +212,37 @@ describe('cognition routes', () => {
     expect(await post('/cognition/sleep-boundary', {})).toMatchObject({ error: 'sim_id is required' });
   });
 
+  it('sleep boundary leaves a scene the sleeper was never in alone', async () => {
+    // Live 2026-08-16 (FINDING G): Ariel slept at home while the app's active scene was
+    // still the bar Mackenzie had travelled to. The boundary ended THEIR scene and wrote
+    // Ariel a first-person diary of an evening she never attended.
+    const reflected: unknown[] = [];
+    vi.spyOn(ctx.ai, 'runSceneReflection').mockImplementation((scene) => {
+      reflected.push(scene);
+      return Promise.resolve();
+    });
+    const participants = vi
+      .spyOn(ctx.memoryRepository, 'getSceneParticipantIds')
+      .mockReturnValue(['555', '777']);
+
+    ctx.sceneService.checkSceneBoundary({ environment: { location_id: 99 } } as never);
+    const barScene = ctx.sceneService.getCurrentScene();
+
+    const result = await post('/cognition/sleep-boundary', { sim_id: '123', sim_name: 'Ariel Scott' });
+
+    expect(result).toMatchObject({ ok: true, reflected: false });
+    expect(reflected).toHaveLength(0);
+    // The scene belongs to the sims who are in it and is still running
+    expect(ctx.sceneService.getCurrentScene()?.sceneId).toBe(barScene?.sceneId);
+
+    // A sim who IS in the scene still closes it as before
+    participants.mockReturnValue(['123']);
+    const own = await post('/cognition/sleep-boundary', { sim_id: '123', sim_name: 'Ariel Scott' });
+    expect(own).toMatchObject({ ok: true, reflected: true });
+    expect(reflected).toHaveLength(1);
+    participants.mockRestore();
+  });
+
   it('ingests state reports into the SimStateCache', async () => {
     const result = await post('/cognition/state', {
       type: 'state_report',

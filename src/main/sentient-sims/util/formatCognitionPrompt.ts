@@ -328,14 +328,18 @@ export function buildCognitionUserPrompt(
 
   const offered = offeredActions(entry, report?.lot?.action_keys);
   const objectList = [...offered.objectActions.keys()].map(pretty).join(', ') || '(none)';
-  const simList =
-    [...offered.simTargets.entries()].map(([simId, target]) => describeTarget(simId, target)).join('; ') || '(no one)';
+  // A sleeping sim is present (perception says so, plainly) but is not someone you can
+  // talk to: every social toward them dies at execution. The model cannot pick what it
+  // was never shown — validateIntent is the backstop, this stops the tick being spent.
+  // Live 2026-08-16: three 'chat' pushes at a napping sim, all INTERACTION_INCOMPATIBILITY.
+  const awakeTargets = [...offered.simTargets.entries()].filter(([, target]) => !target.asleep);
+  const simList = awakeTargets.map(([simId, target]) => describeTarget(simId, target)).join('; ') || '(no one)';
   sections.push(`OFFERED object actions: ${objectList}`);
   if (offered.lotActions.size > 0) {
     sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
   }
   sections.push(`OFFERED people to talk to: ${simList}`);
-  if (offered.simTargets.size > 0) {
+  if (awakeTargets.length > 0) {
     // The model can't name a social it was never shown — before this line existed every
     // conversation degraded to plain 'chat' (the vocabulary was validation-only).
     // Off-loadout socials are simply not shown ('chat' is always available).

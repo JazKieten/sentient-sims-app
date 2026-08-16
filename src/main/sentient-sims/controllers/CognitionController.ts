@@ -5,6 +5,7 @@ import { ApiContext } from '../services/ApiContext';
 import { ActionIntent, InteractionOutcomeEvent } from '../models/ActionIntent';
 import { ModRequestPerception, ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PerceptionSnapshot } from '../models/PerceptionSnapshot';
+import { SceneState } from '../services/SceneService';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
@@ -43,7 +44,15 @@ export function humanizeOutcomeReason(reason: string): string {
   // exposes (ExecuteResult bodies like "False: (None)" carry no reason)
   text = text
     .replace(/<[^<>]*>/g, '')
+    // An UNTERMINATED shell: the mod truncates long reasons, so "<EnqueueResult: True
+    // <ExecuteResult: Interaction finished during app..." arrives with no closing '>'
+    // and neither unwrap above can match it. That exact shape reached permanent memory
+    // rows (live 2026-08-16, memories 2036 and 2124, stored with the leading guillemet).
+    // The mod strips reprs before truncating now; this catches older and other shapes.
+    .replace(/<\w+:\s*/g, '')
+    .replace(/[<>]/g, '')
     .replace(/\b(?:True|False|None)\b:?\s*\(None\)/g, '')
+    .replace(/\(None\)/g, '')
     .replace(/\(\s*\)/g, '');
   // Final guard against slots the unwrap emptied (P-9): "between and ." / "Sim []" /
   // dangling ':' — the mod fills names it knows; this keeps whatever slips through
@@ -167,6 +176,20 @@ export class CognitionController {
     }
   };
 
+  // Did this sim actually take part in the scene? Judged by memory ownership, which is
+  // what the reflection's transcript is built from. An empty scene (no memories yet)
+  // counts as theirs — there is nothing to misattribute.
+  private simIsInScene(simId: string, scene: SceneState): boolean {
+    try {
+      const participantIds = this.ctx.memoryRepository.getSceneParticipantIds(scene.locationId, scene.startedAt);
+      return participantIds.length === 0 || participantIds.includes(simId);
+    } catch {
+      // No DB loaded / query failed: fall back to the old behaviour rather than
+      // silently dropping every sleep boundary
+      return true;
+    }
+  }
+
   // The mod reports a household sim falling asleep. Sleep closes out the sim's stretch of
   // activity the way travel does: reflect on the current scene, then start a fresh scene at
   // the same location so the next boundary only covers what happens after the nap.
@@ -190,6 +213,19 @@ export class CognitionController {
         return res.status(400).json({ error: 'sim_id is required' });
       }
       const who = simName || this.lookupParticipantName(simId) || `Sim ${simId}`;
+      // A sleeper who took no part in the active scene must not end it: the scene belongs
+      // to the sims who are in it, and closing it here both loses THEIR reflection and
+      // hands the sleeper a first-person diary of an evening they never attended (live
+      // 2026-08-16 — Ariel slept at home while the app's active scene was still the bar
+      // Mackenzie had travelled to). The sleeper's own next boundary writes their diary.
+      const activeScene = this.ctx.sceneService.getCurrentScene();
+      if (activeScene && !this.simIsInScene(simId, activeScene)) {
+        log.info(
+          `[Cognition] sleep boundary for ${who}: not a participant of scene ${activeScene.sceneId} ` +
+            `(location ${activeScene.locationId}); leaving the scene running`,
+        );
+        return res.json({ ok: true, reflected: false, reason: 'sleeper was not in the active scene' });
+      }
       const previousScene = this.ctx.sceneService.endCurrentScene(
         passedOut ? `${who} passed out from exhaustion` : `${who} fell asleep`,
       );

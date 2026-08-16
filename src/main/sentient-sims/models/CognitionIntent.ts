@@ -60,6 +60,8 @@ export type SimTargetInfo = {
   age?: string;
   // Verbs the game refuses toward this target's age (mod-reported); see PerceivedSim
   targetAgeBlocked?: string[];
+  // Asleep: no social can execute toward them right now
+  asleep?: boolean;
   friendship?: number;
   romance?: number;
   bits?: string[];
@@ -146,6 +148,7 @@ export function offeredActions(
       hasMet: perceived.social?.has_met !== false,
       age: perceived.age,
       targetAgeBlocked: perceived.target_age_blocked,
+      asleep: perceived.asleep === true,
       friendship: perceived.social?.friendship,
       romance: perceived.social?.romance,
       bits: perceived.social?.bits,
@@ -215,6 +218,17 @@ export function validateIntent(
       return {
         ok: false,
         reason: `social target ${candidate.target_sim_id} is not in the snapshot`,
+        fallback: fallbackContinue(thought),
+      };
+    }
+    // A sleeping target can't be talked to at all. The mod refuses these at resolve time
+    // with cause 'target_asleep', but a dispatch that never happens is a tick saved and a
+    // failure memory not written (live 2026-08-16: Travis re-formed 'chat' at a napping
+    // Mackenzie three ticks running because nothing told him she was asleep).
+    if (target.asleep) {
+      return {
+        ok: false,
+        reason: `social target ${candidate.target_sim_id} is asleep`,
         fallback: fallbackContinue(thought),
       };
     }

@@ -31,7 +31,9 @@ const AGE_LABELS: Record<string, string> = {
 
 function describeSim(sim: PerceivedSim): string {
   const name = sim.name ?? 'someone';
-  const activity = sim.doing ? pretty(sim.doing) : 'nearby';
+  // Asleep is stated outright: it is the one state that makes every social impossible,
+  // and 'doing: sleep' read to the model as an activity to interrupt rather than a wall
+  const activity = sim.asleep ? 'asleep' : sim.doing ? pretty(sim.doing) : 'nearby';
   const distance = sim.distance !== undefined ? `, ${Math.round(sim.distance)}m away` : '';
   const ageLabel = sim.age ? AGE_LABELS[sim.age.trim().toUpperCase()] : undefined;
   const age = ageLabel ? `${ageLabel}, ` : '';

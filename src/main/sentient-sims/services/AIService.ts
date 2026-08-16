@@ -510,6 +510,21 @@ export class AIService {
         previousScene.locationId,
         previousScene.startedAt,
       );
+      // The diary is first-person: writing one in the name of a sim who was not in the
+      // scene puts a durable memory of an evening they never attended in their head, and
+      // it WILL be retrieved as context on their next tick. Live 2026-08-16: Ariel, at
+      // home and not even instanced, was handed a diary of Mackenzie's night at the bar
+      // ("Talking with Jalen was easy...") because her sleep boundary fired while the
+      // app's active scene was still the bar's. A pov who owns no memory in the scene is
+      // not the reflecting mind — drop the reflection rather than misattribute it (the
+      // sim's next boundary writes a real one; the lazy planner covers the plan side).
+      if (pov && !participantIds.includes(pov.simId)) {
+        log.warn(
+          `[Reflection] ${pov.simName} was not in scene ${previousScene.sceneId} at ` +
+            `location ${previousScene.locationId}; skipping the diary rather than attributing it to them`,
+        );
+        return;
+      }
       const names = this.ctx.participantRepository.getParticipantNames(participantIds);
       // The reflecting sim doesn't get a sentence about "interacting with" themself
       const others = pov ? names.filter((name) => name !== pov.simName) : names;
@@ -1281,6 +1296,13 @@ If the scene is already good, return it unchanged.`;
     const performerNames = performers.map((sim) => sim.name);
 
     let sceneAction: string | undefined;
+    // The beat as it HAPPENED, with none of the prompt scaffolding the actors are given
+    // (the "Open the scene:" opener, the valence clause). Live 2026-08-16: memory rows
+    // stored `<interaction> + <director instruction> + <dialogue>`, so sims recalled
+    // stage directions as events — one row even remembered being told "never a joke
+    // between friends". Anything a sim can read back uses this; only the model sees
+    // sceneAction.
+    let displayAction: string | undefined;
     if (continuingScene) {
       sceneAction =
         'The scene continues. Pick up the conversation exactly where it left off and move it forward — do not repeat or rephrase anything already said.';
@@ -1295,6 +1317,7 @@ If the scene is already good, return it unchanged.`;
       }
     } else {
       sceneAction = promptRequest.action ?? options.action;
+      displayAction = sceneAction;
       // V-5b: a fresh scene OPENS — the actors are just starting this conversation.
       // Without it they launched mid-thought ("That reminds me of a joke:" before the
       // joke) because nothing told them this was the first exchange.
@@ -1499,6 +1522,7 @@ Rules for THINK:
         think: monologueBySim.get(performers[0].name),
         sharedScene,
         sceneAction,
+        displayAction,
         directorDirection: briefingText,
         exchanges,
       });
@@ -1547,7 +1571,7 @@ ${
         const numbered = performedLines.map((line, index) => `${index + 1}. ${line.speaker}: ${line.text}`).join('\n');
         const directionSummary = continuingScene
           ? 'a continuation beat of a conversation already underway'
-          : sceneAction.split(' Open the scene:')[0];
+          : displayAction ?? sceneAction;
         const compiled = await this.runOneShot(
           'Director Review',
           compileSystemPrompt,
@@ -1640,7 +1664,7 @@ ${
     // instruction rather than a real action, so they show only the dialogue. A chat beat's
     // action is a direction written for the actors, and the player's line already showed in
     // the game's chat box — neither belongs above the reply.
-    const preActionLine = continuingScene || playerLine ? undefined : sceneAction;
+    const preActionLine = continuingScene || playerLine ? undefined : displayAction;
     const finalText = preActionLine ? `${preActionLine}\n${dialogueText}` : dialogueText;
 
     // The memory may be persisted here, or later by the mod posting back either the raw
@@ -1743,11 +1767,13 @@ ${
       think?: string;
       sharedScene: string;
       sceneAction: string;
+      // The beat without the actors' scaffolding — what the memory row may show
+      displayAction?: string;
       directorDirection: string;
       exchanges: LLMExchange[];
     },
   ): Promise<InteractionEventResult> {
-    const { performer, think, sharedScene, sceneAction, directorDirection, exchanges } = scene;
+    const { performer, think, sharedScene, sceneAction, displayAction, directorDirection, exchanges } = scene;
     if (!think || think.length <= 1) {
       log.error(`No inner monologue produced for ${performer.name}`);
       return { status: InteractionEventStatus.NOOP, exchanges };
@@ -1778,8 +1804,9 @@ ${
       content: finalText,
       location_id: event.environment.location_id,
       event_type: 'monologue',
-      // The beat that drove the thought heads the row in the memories window
-      action: sceneAction,
+      // The beat that drove the thought heads the row in the memories window — the bare
+      // beat, never the director's instructions to the actor
+      action: displayAction ?? sceneAction,
     };
     const interactionName = (event as Partial<InteractionEvent>).interaction_name;
     if (interactionName) {

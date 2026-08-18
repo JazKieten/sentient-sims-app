@@ -179,7 +179,7 @@ export class MemoryAnnotationService {
     return embedded;
   }
 
-  private async rateImportance(text: string, eventType?: string, memoryId?: number): Promise<number> {
+  private async rateImportance(text: string, eventType?: string, memoryId?: string): Promise<number> {
     try {
       const result = await this.ctx.ai.runOneShot('Memory Importance', IMPORTANCE_SYSTEM_PROMPT, text, 5);
       // The row already exists by the time this runs, so the stage attaches by id. Kept in

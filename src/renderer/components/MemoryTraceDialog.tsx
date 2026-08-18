@@ -31,7 +31,7 @@ const pipelineLabels: Record<MemoryTrace['pipeline'], string> = {
 
 export type MemoryTraceDialogProps = {
   open: boolean;
-  memoryId?: number;
+  memoryId?: string;
   onClose: () => void;
 };
 

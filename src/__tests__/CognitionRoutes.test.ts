@@ -30,7 +30,7 @@ describe('cognition routes', () => {
     vi.spyOn(ctx.actionDispatcher, 'isModConnected').mockReturnValue(true);
     vi.spyOn(ctx.memoryRepository, 'createMemory').mockImplementation((request) => {
       createdMemories.push(request);
-      return { ...request.memory, id: 7 };
+      return { ...request.memory, id: '7' };
     });
     server = runApi(ctx);
   });
@@ -79,7 +79,7 @@ describe('cognition routes', () => {
       location_id: 88,
     });
 
-    expect(outcome).toMatchObject({ ok: true, correlated: true, memory_id: 7 });
+    expect(outcome).toMatchObject({ ok: true, correlated: true, memory_id: '7' });
     expect(ctx.actionDispatcher.pendingCount).toBe(0);
     expect(createdMemories).toHaveLength(1);
     expect(createdMemories[0].memory).toMatchObject({

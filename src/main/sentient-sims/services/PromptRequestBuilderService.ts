@@ -227,7 +227,7 @@ export class PromptRequestBuilderService {
       ...this.ctx.memoryRepository.getRecentReflectionsForParticipants(participantIds, 2),
     ];
 
-    const byId = new Map<number, MemoryEntity>();
+    const byId = new Map<string, MemoryEntity>();
     collected.forEach((reflection) => {
       if (reflection.id !== undefined) {
         byId.set(reflection.id, reflection);
@@ -258,7 +258,7 @@ export class PromptRequestBuilderService {
   // Older memories that score as relevant to this moment (Block 5 retrieval). The current
   // scene's rows and the reflections already shown are excluded so this block only ever
   // adds information the prompt doesn't have yet.
-  async getRelevantMemories(event: SSEvent, queryText: string, excludeMemoryIds: number[]): Promise<MemoryEntity[]> {
+  async getRelevantMemories(event: SSEvent, queryText: string, excludeMemoryIds: string[]): Promise<MemoryEntity[]> {
     if (!this.ctx.settings.memoryRetrievalEnabled) {
       return [];
     }
@@ -561,7 +561,7 @@ export class PromptRequestBuilderService {
       .trim();
     const excludeMemoryIds = [...memories, ...reflections]
       .map((memory) => memory.id)
-      .filter((id): id is number => id !== undefined);
+      .filter((id): id is string => id !== undefined);
     const relevantMemories = await this.getRelevantMemories(event, queryText, excludeMemoryIds);
     const relevantMemoriesBlock = this.buildRelevantMemoriesBlock(relevantMemories);
     if (relevantMemoriesBlock) {

@@ -67,11 +67,11 @@ export class MemoryTraceService {
 
   // Adds one more stage to a memory's trace after the fact — the importance rating runs in
   // the background once the row exists, so it can be attached by id directly.
-  appendExchange(memoryId: number, exchange: LLMExchange | undefined, pipeline: MemoryTrace['pipeline'] = 'other') {
+  appendExchange(memoryId: string, exchange: LLMExchange | undefined, pipeline: MemoryTrace['pipeline'] = 'other') {
     if (!exchange) {
       return;
     }
-    const existing = this.byMemoryId.get(String(memoryId));
+    const existing = this.byMemoryId.get(memoryId);
     if (existing) {
       existing.exchanges.push(exchange);
       this.exchangeLog?.linkRequestsToMemory([exchange.request], memoryId);
@@ -80,8 +80,8 @@ export class MemoryTraceService {
     this.store(memoryId, { pipeline, exchanges: [exchange] });
   }
 
-  private store(memoryId: number, trace: MemoryTrace) {
-    this.byMemoryId.set(String(memoryId), trace);
+  private store(memoryId: string, trace: MemoryTrace) {
+    this.byMemoryId.set(memoryId, trace);
     this.exchangeLog?.linkRequestsToMemory(
       trace.exchanges.map((exchange) => exchange.request),
       memoryId,

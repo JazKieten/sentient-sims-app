@@ -1,5 +1,7 @@
+// Memory ids are 64-bit game handles — bigger than float64 holds, so like participant ids
+// they cross every JSON/IPC boundary as strings and only become BigInt at a sqlite bind.
 export type MemoryEntity = {
-  id?: number;
+  id?: string;
   pre_action?: string;
   observation?: string;
   content?: string;
@@ -14,6 +16,16 @@ export type MemoryEntity = {
   owner_name?: string;
   participant_names?: string[];
 };
+
+// Raw memory row as read with safeIntegers() (all INTEGER columns arrive as bigint).
+export type MemoryRow = Omit<MemoryEntity, 'id' | 'location_id'> & {
+  id: bigint;
+  location_id: bigint;
+};
+
+export function toMemoryEntity(row: MemoryRow): MemoryEntity {
+  return { ...row, id: row.id.toString(), location_id: Number(row.location_id) };
+}
 
 // The row shape the mod's SentientMemory(**memory) accepts: nothing beyond its kwargs
 export function toModMemory(memory: MemoryEntity): MemoryEntity {

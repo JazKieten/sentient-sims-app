@@ -24,7 +24,7 @@ export type RetrieveRequest = {
   participantIds: string[];
   queryText: string;
   k: number;
-  excludeMemoryIds?: number[];
+  excludeMemoryIds?: string[];
   // Participant ids whose PRIVATE memories (inner monologue rows) may surface — the sim
   // retrieving for itself, or every sim present in the scene being staged (the director
   // is omniscient; actors only ever see what it puts in their briefings). Omitted =
@@ -37,6 +37,16 @@ export type RetrieveRequest = {
   // the diary is the identity thread that SHOULD compound. Omitted = old behavior.
   maxSelfAuthored?: number;
 };
+
+// Ids are decimal strings of 64-bit ints — too big for float64, so ties compare as BigInt.
+function newerIdFirst(a: string | undefined, b: string | undefined): number {
+  const aId = a === undefined ? 0n : BigInt(a);
+  const bId = b === undefined ? 0n : BigInt(b);
+  if (aId === bId) {
+    return 0;
+  }
+  return bId > aId ? 1 : -1;
+}
 
 // The rumination row types maxSelfAuthored counts against
 const SELF_AUTHORED_EVENT_TYPES = new Set(['thought', 'monologue']);
@@ -106,7 +116,7 @@ export class MemoryRetrievalService {
     const now = new Date();
     const scored = scoreable.map((candidate) => scoreCandidate(candidate, queryVector, now));
     // Ties (same score, e.g. no embeddings and equal importance) break toward newer memories
-    scored.sort((a, b) => b.score - a.score || (b.memory.id ?? 0) - (a.memory.id ?? 0));
+    scored.sort((a, b) => b.score - a.score || newerIdFirst(a.memory.id, b.memory.id));
     if (request.maxSelfAuthored === undefined) {
       return scored.slice(0, request.k);
     }

@@ -110,6 +110,8 @@ describe('prefetch prompt formatting', () => {
       participantRepository: {
         getParticipants: () => [],
       },
+      // V-6: formatSims offers every undescribed sim to the default-description generator
+      defaultDescriptions: { considerSim: () => undefined },
       settings: { directedScenesEnabled: true },
     } as unknown as ApiContext;
     const builder = new PromptRequestBuilderService(ctx);

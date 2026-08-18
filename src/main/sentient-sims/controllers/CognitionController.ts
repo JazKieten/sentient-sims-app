@@ -66,6 +66,24 @@ export function humanizeOutcomeReason(reason: string): string {
   return text.replace(/\s{2,}/g, ' ').trim();
 }
 
+// The sentence that becomes the 'outcome' memory row. recovery_action is the whitelist
+// verb the mod says clears the blocker (ss_failure_reasons / object_broken ->
+// hire_repair_service); until night watch 2026-08-18 it reached the model type and
+// nothing else, so four sims sat at hygiene <= -94 beside a broken shower while
+// cognition only ever *thought* about the repair service. Naming the fix in the memory
+// is how retrieval and the next tick learn it.
+export function outcomeObservation(
+  attempt: string,
+  outcome: InteractionOutcomeEvent['outcome'],
+  reason?: string,
+  recoveryAction?: string,
+): string {
+  const because = reason ? ` (${humanizeOutcomeReason(reason)})` : '';
+  const fix =
+    recoveryAction && outcome !== 'success' ? ` Doing '${recoveryAction}' first would clear this.` : '';
+  return `${attempt} and it ${outcomeVerb(outcome)}${because}.${fix}`;
+}
+
 export class CognitionController {
   private readonly ctx: ApiContext;
 
@@ -131,9 +149,7 @@ export class CognitionController {
         this.lookupParticipantName(event.target_sim_id) ||
         (event.target_sim_id ? `Sim ${event.target_sim_id}` : undefined);
       const attempt = target ? `${actor} tried '${action}' with ${target}` : `${actor} tried '${action}'`;
-      const reason = event.reason ? humanizeOutcomeReason(event.reason) : '';
-      const because = reason ? ` (${reason})` : '';
-      const observation = `${attempt} and it ${outcomeVerb(event.outcome)}${because}.`;
+      const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action);
 
       const participants: ParticipantDTO[] = [{ id: event.sim_id }];
       if (event.target_sim_id) {

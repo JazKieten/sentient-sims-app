@@ -28,7 +28,7 @@ const DANGLING_ENDINGS = new Set([
 
 const MIN_WORDS = 3;
 
-export function isDegeneratePreAction(rendered: string | undefined): boolean {
+export function isDegeneratePreAction(rendered: string | undefined, template?: string): boolean {
   if (!rendered) {
     return true;
   }
@@ -48,7 +48,9 @@ export function isDegeneratePreAction(rendered: string | undefined): boolean {
   if (/^(is|are|am|was|were|and|with|to|'s)\b/i.test(trimmed)) {
     return true;
   }
-  if (/\S  +\S/.test(trimmed)) {
+  // A double space is only evidence of a blank name if the template did not already
+  // carry it — community mappings author '],  traits' and rendered fine (2026-08-18).
+  if (/\S  +\S/.test(trimmed) && !(template && /\S  +\S/.test(template))) {
     return true;
   }
   if (/\s's\b/.test(trimmed)) {

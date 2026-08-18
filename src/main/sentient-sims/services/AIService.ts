@@ -724,7 +724,7 @@ ${diaryRules}`;
       const preAction = getRandomItem(description.pre_actions);
       const location = this.ctx.locationRepository.getLocation({ id: event.environment.location_id });
       const rendered = formatAction(preAction, event.sentient_sims, location);
-      if (isDegeneratePreAction(rendered)) {
+      if (isDegeneratePreAction(rendered, preAction)) {
         // A truncated fragment as the user turn makes the model improvise ("looks like
         // your message got cut off") and that improvisation becomes a permanent memory —
         // safer to skip generation entirely and surface the broken mapping in the log

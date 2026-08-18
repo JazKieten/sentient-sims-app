@@ -103,7 +103,7 @@ export class AIExchangeLogService {
   // Stamps the memory a set of calls produced onto their log rows. Matching is by request
   // object identity — the exact objects the pipeline passed to the provider — so no text
   // comparison can mislabel a row.
-  linkRequestsToMemory(requests: OpenAICompatibleRequest[], memoryId: number) {
+  linkRequestsToMemory(requests: OpenAICompatibleRequest[], memoryId: string) {
     if (requests.length === 0) {
       return;
     }

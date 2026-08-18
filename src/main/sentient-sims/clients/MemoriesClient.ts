@@ -18,7 +18,7 @@ export class MemoriesClient extends ApiClient {
    * GET /memories/:memoryId
    * Retrieves a specific memory by ID.
    */
-  async getMemory(memoryId: number): Promise<MemoryEntity> {
+  async getMemory(memoryId: string): Promise<MemoryEntity> {
     const response = await axiosClient.get<MemoryEntity>(`${this.apiUrl}/memories/${memoryId}`);
     return response.data;
   }
@@ -28,7 +28,7 @@ export class MemoriesClient extends ApiClient {
    * The LLM pipeline that produced this memory (dev mode). Returns undefined when the
    * memory predates this app session or wasn't produced by a traced pipeline.
    */
-  async getMemoryTrace(memoryId: number): Promise<MemoryTrace | undefined> {
+  async getMemoryTrace(memoryId: string): Promise<MemoryTrace | undefined> {
     try {
       const response = await axiosClient.get<MemoryTrace>(`${this.apiUrl}/memories/${memoryId}/trace`);
       return response.data;
@@ -62,7 +62,7 @@ export class MemoriesClient extends ApiClient {
    * DELETE /memories/:memoryId
    * Deletes a specific memory by ID.
    */
-  async deleteMemory(memoryId: number): Promise<{ text: string }> {
+  async deleteMemory(memoryId: string): Promise<{ text: string }> {
     const response = await axiosClient.delete<{ text: string }>(`${this.apiUrl}/memories/${memoryId}`);
     return response.data;
   }

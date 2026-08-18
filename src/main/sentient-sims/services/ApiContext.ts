@@ -42,6 +42,7 @@ import { DbService } from './DbService';
 import { DirectoryService } from './DirectoryService';
 import { ElevenLabsVoicesService } from './ElevenLabsVoicesService';
 import { EmbeddingService, NoopEmbeddingService, OpenAIEmbeddingService } from './EmbeddingService';
+import { GameSigningService } from './GameSigningService';
 import { GeminiService } from './GeminiService';
 import { GenerationQueueService } from './GenerationQueueService';
 import { GenerationService } from './GenerationService';
@@ -244,6 +245,7 @@ export class ApiContext {
   // hand back the same object instead of allocating a new proxy each time
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
   private readonly _interactionSemanticSearchService: InteractionSemanticSearchService;
+  private readonly _gameSigningService: GameSigningService;
   private readonly _elevenLabsVoicesService: ElevenLabsVoicesService;
 
   // --- Repositories ---
@@ -325,6 +327,7 @@ export class ApiContext {
     this._memoryAnnotationService = new MemoryAnnotationService(this);
     this._memoryRetrievalService = new MemoryRetrievalService(this);
     this._interactionSemanticSearchService = new InteractionSemanticSearchService(this);
+    this._gameSigningService = new GameSigningService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
@@ -446,8 +449,12 @@ export class ApiContext {
     return this._dailyPlanService;
   }
 
-  // Evaluated per access so setting an OpenAI key at runtime upgrades from Noop
+  // Evaluated per access so setting an OpenAI key at runtime upgrades from Noop.
+  // Gated behind memoryRetrievalEnabled; off by default.
   get embedding(): EmbeddingService {
+    if (!this._settings.memoryRetrievalEnabled) {
+      return this._noopEmbeddingService;
+    }
     return this._openAIEmbeddingService.isAvailable() ? this._openAIEmbeddingService : this._noopEmbeddingService;
   }
 
@@ -473,6 +480,10 @@ export class ApiContext {
 
   get interactionSemanticSearch(): InteractionSemanticSearchService {
     return this._interactionSemanticSearchService;
+  }
+
+  get gameSigning(): GameSigningService {
+    return this._gameSigningService;
   }
 
   get elevenLabsVoices(): ElevenLabsVoicesService {

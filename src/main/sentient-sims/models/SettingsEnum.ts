@@ -83,6 +83,7 @@ export enum SettingsEnum {
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
   // V-6: write a first description for undescribed sims/lots instead of the stock default
   GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
+  GAME_APP_PATH = 'gameAppPath',
 }
 
 export enum DeprecatedSettingsEnum {

@@ -72,9 +72,9 @@ describe('AIExchangeLogService', () => {
     log.record({ request, responseText: '', durationMs: 1 });
     log.record({ request: { messages: [], maxResponseTokens: 1 }, responseText: '', durationMs: 1 });
 
-    log.linkRequestsToMemory([request], 77);
+    log.linkRequestsToMemory([request], '77');
 
-    const linked = log.list().filter((entry) => entry.memoryId === 77);
+    const linked = log.list().filter((entry) => entry.memoryId === '77');
     expect(linked).toHaveLength(1);
   });
 });

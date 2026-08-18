@@ -15,7 +15,7 @@ export type AIExchangeSummary = {
   promptChars: number;
   responsePreview: string;
   // Set once the memory this call produced has been written
-  memoryId?: number;
+  memoryId?: string;
   error?: string;
 };
 

@@ -92,7 +92,7 @@ describe('private memory ownership', () => {
       { notifyMod: false },
     );
 
-    const row = ctx.memoryIndexRepository.getIndex(Number(created?.id));
+    const row = ctx.memoryIndexRepository.getIndex(String(created?.id));
     expect(row?.importance).toEqual(9);
     expect(Number(row?.owner_participant_id)).toEqual(300);
   });
@@ -119,7 +119,7 @@ describe('private memory ownership', () => {
     await ctx.memoryAnnotation.annotate(created);
 
     expect(rateSpy).not.toHaveBeenCalled();
-    const row = ctx.memoryIndexRepository.getIndex(Number(created.id));
+    const row = ctx.memoryIndexRepository.getIndex(String(created.id));
     expect(row?.importance).toEqual(8);
     expect(Number(row?.owner_participant_id)).toEqual(300);
   });
@@ -149,7 +149,7 @@ describe('private memory ownership', () => {
       { notifyMod: false },
     );
 
-    const ids = (rows: { id?: number }[]) => rows.map((row) => row.id).sort();
+    const ids = (rows: { id?: string }[]) => rows.map((row) => row.id).sort();
 
     // No scope: shared only — another sim's head is never a default
     expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10))).toEqual([shared?.id]);

@@ -13,6 +13,7 @@ import MemoryRetrievalSettingsComponent from './settings/MemoryRetrievalSettings
 import DirectedScenesSettingsComponent from './settings/DirectedScenesSettingsComponent';
 import { AnimationMappingSettingsComponent } from './settings/AnimationMappingSettingsComponent';
 import { ModsDirectoryComponent } from './ModsDirectoryComponent';
+import { GameAppPathComponent } from './GameAppPathComponent';
 import { useAISettings } from './providers/AISettingsProvider';
 import VoiceSettingsComponent from './settings/VoiceSettingsComponent';
 import { useSetupWizard } from './providers/SetupWizardProvider';
@@ -80,6 +81,7 @@ export default function SettingsPage() {
           </Box>
           <TabPanel value={SettingsTabSelectionValue.Settings}>
             <ModsDirectoryComponent />
+            <GameAppPathComponent />
             <DirectedScenesSettingsComponent />
             <DebugLogsSettingsComponent />
             <MemoryRetrievalSettingsComponent />

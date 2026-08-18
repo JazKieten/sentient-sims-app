@@ -11,7 +11,7 @@ describe('MemoryTraceService', () => {
     const service = new MemoryTraceService();
     service.recordPending(['Alice: Hey.\nBob: Hey yourself.'], trace('scene one'));
 
-    service.attach({ id: 7, content: 'Alice: Hey.\nBob: Hey yourself.', location_id: 1 });
+    service.attach({ id: '7', content: 'Alice: Hey.\nBob: Hey yourself.', location_id: 1 });
 
     expect(service.getTrace('7')?.directorDirection).toBe('scene one');
   });
@@ -21,7 +21,7 @@ describe('MemoryTraceService', () => {
     service.recordPending(['Alice: Hey.\nBob: Hey yourself.'], trace('scene one'));
 
     // formatSceneForChatWindow double-spaces lines, and the mod prefixes a newline
-    service.attach({ id: 9, content: '\nAlice: Hey.\n\nBob: Hey yourself.', location_id: 1 });
+    service.attach({ id: '9', content: '\nAlice: Hey.\n\nBob: Hey yourself.', location_id: 1 });
 
     expect(service.getTrace('9')?.directorDirection).toBe('scene one');
   });
@@ -31,8 +31,8 @@ describe('MemoryTraceService', () => {
     service.recordPending(['Same line.'], trace('older'));
     service.recordPending(['Same line.'], trace('newer'));
 
-    service.attach({ id: 1, content: 'Same line.', location_id: 1 });
-    service.attach({ id: 2, content: 'Same line.', location_id: 1 });
+    service.attach({ id: '1', content: 'Same line.', location_id: 1 });
+    service.attach({ id: '2', content: 'Same line.', location_id: 1 });
 
     expect(service.getTrace('1')?.directorDirection).toBe('newer');
     expect(service.getTrace('2')?.directorDirection).toBe('older');
@@ -43,11 +43,11 @@ describe('MemoryTraceService', () => {
     service.recordPending(['Alice: Hey.'], trace('scene one'));
 
     service.attach({ content: 'Alice: Hey.', location_id: 1 });
-    service.attach({ id: 3, location_id: 1 });
+    service.attach({ id: '3', location_id: 1 });
 
     expect(service.getTrace('3')).toBeUndefined();
     // The trace is still pending, so the real row can still claim it
-    service.attach({ id: 4, content: 'Alice: Hey.', location_id: 1 });
+    service.attach({ id: '4', content: 'Alice: Hey.', location_id: 1 });
     expect(service.getTrace('4')?.directorDirection).toBe('scene one');
   });
 });

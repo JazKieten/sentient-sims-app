@@ -53,7 +53,7 @@ function fakeEmbedder(vector: number[]): EmbeddingService {
 
 function indexMemory(ctx: ApiContext, memory: MemoryEntity, importance: number, embedding?: number[]) {
   ctx.memoryIndexRepository.upsertIndex({
-    memory_id: Number(memory.id),
+    memory_id: String(memory.id),
     importance,
     embedding: embedding ? embeddingToBuffer(Float32Array.from(embedding)) : undefined,
     embedding_model: embedding ? 'fake-model' : undefined,
@@ -76,7 +76,7 @@ describe('scoring', () => {
     const query = Float32Array.from([1, 0]);
     const scored = scoreCandidate(
       {
-        id: 1,
+        id: '1',
         location_id: 1,
         timestamp: '2026-07-22 12:00:00',
         importance: 7,
@@ -93,7 +93,7 @@ describe('scoring', () => {
 
     // Un-annotated rows fall back to the event-type heuristic and contribute no similarity
     const unannotated = scoreCandidate(
-      { id: 2, location_id: 1, timestamp: '2026-07-22 12:00:00', event_type: 'reflection' },
+      { id: '2', location_id: 1, timestamp: '2026-07-22 12:00:00', event_type: 'reflection' },
       query,
       now,
     );
@@ -116,7 +116,7 @@ describe('self-authored cap', () => {
   // ordinary memories, thoughts deliberately outscoring everything on importance
   const candidates: MemoryWithIndex[] = [
     {
-      id: 1,
+      id: '1',
       location_id: 1,
       content: 'blues again',
       event_type: 'thought',
@@ -124,7 +124,7 @@ describe('self-authored cap', () => {
       importance: 9,
     },
     {
-      id: 2,
+      id: '2',
       location_id: 1,
       content: 'more blues',
       event_type: 'thought',
@@ -132,7 +132,7 @@ describe('self-authored cap', () => {
       importance: 9,
     },
     {
-      id: 3,
+      id: '3',
       location_id: 1,
       content: 'still blues',
       event_type: 'thought',
@@ -140,16 +140,16 @@ describe('self-authored cap', () => {
       importance: 9,
     },
     {
-      id: 4,
+      id: '4',
       location_id: 1,
       content: 'always blues',
       event_type: 'monologue',
       timestamp: '2026-08-09 09:00:00',
       importance: 9,
     },
-    { id: 5, location_id: 1, content: 'cooked dinner with Frank', timestamp: '2026-08-09 08:00:00', importance: 3 },
+    { id: '5', location_id: 1, content: 'cooked dinner with Frank', timestamp: '2026-08-09 08:00:00', importance: 3 },
     {
-      id: 6,
+      id: '6',
       location_id: 1,
       content: 'wrote in my diary',
       event_type: 'reflection',
@@ -169,13 +169,13 @@ describe('self-authored cap', () => {
 
     // 1 thought + the two non-rumination rows; reflections are NOT capped (the diary is
     // the identity thread that should compound)
-    expect(capped.map((result) => result.memory.id)).toEqual([1, 5, 6]);
+    expect(capped.map((result) => result.memory.id)).toEqual(['1', '5', '6']);
   });
 
   it('leaves retrieval untouched when the cap is unset', async () => {
     const service = new MemoryRetrievalService(cappingContext(candidates));
     const uncapped = await service.retrieve({ participantIds: ['100'], queryText: 'anything', k: 4 });
-    expect(uncapped.map((result) => result.memory.id)).toEqual([1, 2, 3, 4]);
+    expect(uncapped.map((result) => result.memory.id)).toEqual(['1', '2', '3', '4']);
   });
 });
 
@@ -203,7 +203,7 @@ describe('MemoryRetrievalService', () => {
       participantIds: ['100'],
       queryText: 'wedding plans',
       k: 3,
-      excludeMemoryIds: [Number(similar.id)],
+      excludeMemoryIds: [String(similar.id)],
     });
     expect(excluded.map((result) => result.memory.id)).not.toContain(similar.id);
     expect(excluded).toHaveLength(2);
@@ -258,7 +258,7 @@ describe('backfill', () => {
     expect(embed).toHaveBeenCalledTimes(1); // outcome excluded, one batch of 2
 
     expect(ctx.memoryIndexRepository.getUnindexedMemories(10)).toEqual([]);
-    const ratedRow = ctx.memoryIndexRepository.getIndex(Number(rated.id));
+    const ratedRow = ctx.memoryIndexRepository.getIndex(String(rated.id));
     expect(ratedRow?.importance).toEqual(9);
     expect(ratedRow?.embedding_model).toEqual('fake-model');
 
@@ -274,7 +274,7 @@ describe('backfill', () => {
     const memory = createMemory(ctx, { content: 'left for later' });
 
     expect(await ctx.memoryAnnotation.backfill()).toEqual(0);
-    expect(ctx.memoryIndexRepository.getIndex(Number(memory.id))).toBeUndefined();
+    expect(ctx.memoryIndexRepository.getIndex(String(memory.id))).toBeUndefined();
   });
 });
 
@@ -345,6 +345,7 @@ describe('prompt wiring', () => {
 
   it('adds a <RELEVANT_MEMORIES> block and honors the settings toggle', async () => {
     const ctx = loadedContext('prompt-relevant-memories');
+    ctx.settings.memoryRetrievalEnabled = true;
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(new NoopEmbeddingService());
 
     const past = createMemory(ctx, { content: 'won the neighborhood chess tournament' });
@@ -361,6 +362,7 @@ describe('prompt wiring', () => {
 
   it('excludes current-scene memories from retrieval', async () => {
     const ctx = loadedContext('prompt-scene-exclusion');
+    ctx.settings.memoryRetrievalEnabled = true;
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(new NoopEmbeddingService());
 
     const older = createMemory(ctx, { content: 'burned the anniversary dinner', location_id: 2 });

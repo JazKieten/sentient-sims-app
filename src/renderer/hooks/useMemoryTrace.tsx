@@ -14,10 +14,10 @@ export type MemoryTraceHook = {
  * only for the current app session, so a memory from an earlier run simply has none — hence
  * `null` for "looked, found nothing" rather than an error state.
  */
-export function useMemoryTrace(memoryId?: number, enabled = true): MemoryTraceHook {
+export function useMemoryTrace(memoryId?: string, enabled = true): MemoryTraceHook {
   const { data, isLoading } = useQuery({
     queryKey: ['memoryTrace', memoryId],
-    queryFn: async () => (await client.memories.getMemoryTrace(memoryId as number)) ?? null,
+    queryFn: async () => (await client.memories.getMemoryTrace(memoryId as string)) ?? null,
     enabled: enabled && memoryId !== undefined,
     staleTime: Infinity,
   });

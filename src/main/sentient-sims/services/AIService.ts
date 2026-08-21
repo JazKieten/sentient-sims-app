@@ -809,9 +809,10 @@ ${diaryRules}`;
   private async tryDirectedGeneration(
     event: SSEvent,
     options: DirectedGenerationOptions,
+    playbackOptions: PlaybackOptions = {},
   ): Promise<InteractionEventResult | undefined> {
     try {
-      return await this.runDirectedGeneration(event, options);
+      return await this.runDirectedGeneration(event, options, playbackOptions);
     } catch (err) {
       log.error('Directed scene generation failed, falling back to classic generation', err);
       return undefined;
@@ -931,9 +932,14 @@ ${diaryRules}`;
     // the same assumption as '{actor.0}:' speaking and '{actor.1}:' replying
     const spoken = chatEvent.action.trim();
     if (this.ctx.settings.directedScenesEnabled && primaryEvent.sentient_sims.length >= 2 && spoken.length > 0) {
-      const directed = await this.tryDirectedGeneration(primaryEvent, {
-        playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken },
-      });
+      // V-2 applies here too: the player just spoke (as their sim) and is waiting on the
+      // answer — on a busy lot it otherwise queues behind autonomous scenes (live
+      // 2026-08-17: 15s from generated to voiced)
+      const directed = await this.tryDirectedGeneration(
+        primaryEvent,
+        { playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken } },
+        { priority: true },
+      );
       if (directed?.status === InteractionEventStatus.GENERATED) {
         return directed;
       }

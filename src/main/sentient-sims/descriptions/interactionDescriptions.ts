@@ -8346,8 +8346,12 @@ export const interactionDescriptions: Map<string, InteractionDescription> = new 
       ignored: true,
     },
     // ---- N-3 (2026-08-15): the top of the UNMAPPED tail from the 08-04..08-14 playtest log
+    // Night watch 2026-08-18: this is a picker SI and fires with the actor only (the target
+    // is chosen after the event), so the old '{actor.0} … chat with {actor.1}' line rendered
+    // degenerate 127/127 times. Ignored like every other picker; the picked chat's mixers
+    // carry the memory.
     'autonomousSimPicker_SocialObservation_FamiliarChat': {
-      pre_actions: ['{actor.0} is having a casual chat with {actor.1}, a familiar face.'],
+      ignored: true,
     },
     'super_Gardening_TalkToPlants_FromTrait': {
       pre_actions: ['{actor.0} is talking to the plants, tending them and murmuring to them.'],

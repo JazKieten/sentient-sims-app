@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { humanizeOutcomeReason } from 'main/sentient-sims/controllers/CognitionController';
+import { humanizeOutcomeReason, outcomeObservation } from 'main/sentient-sims/controllers/CognitionController';
 
 describe('humanizeOutcomeReason', () => {
   it('unwraps a whole-string repr shell', () => {
@@ -39,6 +39,27 @@ describe('humanizeOutcomeReason', () => {
   it('leaves a plain reason untouched', () => {
     expect(humanizeOutcomeReason('Object failed state check: toilet is broken')).toBe(
       'Object failed state check: toilet is broken',
+    );
+  });
+});
+
+describe('outcomeObservation', () => {
+  it('names the recovery verb the mod attached to a failure', () => {
+    // T5 (night watch 2026-08-18): a broken shower closed take_shower with no hint and
+    // the repair service was never dispatched
+    expect(
+      outcomeObservation("Travis tried 'take_shower'", 'ineligible', 'Object failed state check', 'hire_repair_service'),
+    ).toBe(
+      "Travis tried 'take_shower' and it was canceled (Object failed state check). Doing 'hire_repair_service' first would clear this.",
+    );
+  });
+
+  it('never appends a fix to a success or when the mod sent none', () => {
+    expect(outcomeObservation("Travis tried 'take_shower'", 'success', undefined, 'hire_repair_service')).toBe(
+      "Travis tried 'take_shower' and it succeeded.",
+    );
+    expect(outcomeObservation("Travis tried 'take_shower'", 'canceled', 'bumped')).toBe(
+      "Travis tried 'take_shower' and it was canceled (bumped).",
     );
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
-import { parseActorPerformance, parseSceneScores } from 'main/sentient-sims/services/AIService';
+import { isForeignSpeakerLine, parseActorPerformance, parseSceneScores } from 'main/sentient-sims/services/AIService';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { mockApiContext } from './util';
 
@@ -45,6 +45,25 @@ describe('parseActorPerformance', () => {
     const parsed = parseActorPerformance('SAY: First line.\nSAY: Second line.\nTHINK: One thought.', SPEAKERS);
     expect(parsed.say).toEqual('First line.');
     expect(parsed.think).toEqual('One thought.');
+  });
+});
+
+describe('isForeignSpeakerLine', () => {
+  it('flags a line the actor wrote for the player persona', () => {
+    expect(isForeignSpeakerLine("The Voice: Let's just say I've been watching.", 'Ricky Rickerson', SPEAKERS)).toBe(
+      true,
+    );
+    expect(isForeignSpeakerLine('"Guardian Angel: hush now"', 'Ricky Rickerson', SPEAKERS)).toBe(true);
+  });
+
+  it('flags a line the actor wrote for another sim, but not their own label', () => {
+    expect(isForeignSpeakerLine('Richy Richardson: I never said that.', 'Ricky Rickerson', SPEAKERS)).toBe(true);
+    expect(isForeignSpeakerLine('Ricky Rickerson: I never said that.', 'Ricky Rickerson', SPEAKERS)).toBe(false);
+  });
+
+  it('leaves ordinary lines alone, including ones that merely mention the voice', () => {
+    expect(isForeignSpeakerLine('Why is The Voice telling me this now?', 'Ricky Rickerson', SPEAKERS)).toBe(false);
+    expect(isForeignSpeakerLine('I hope it tells me something true for once', 'Ricky Rickerson', SPEAKERS)).toBe(false);
   });
 });
 

@@ -1,5 +1,9 @@
 import log from 'electron-log';
-import { PLAYER_VOICE_PERSONA_FLAVOR, playerSpeakerLabel } from '../models/PlayerVoicePersona';
+import {
+  PLAYER_VOICE_PERSONA_FLAVOR,
+  PLAYER_VOICE_PERSONA_LABELS,
+  playerSpeakerLabel,
+} from '../models/PlayerVoicePersona';
 import {
   ChatContinueInteractionEvent,
   ChatInteractionEvent,
@@ -95,6 +99,17 @@ function extractSubtitle(rawText: string, speakerNames: string[]): string {
     subtitle = quoted[1];
   }
   return subtitle.trim();
+}
+
+// A performance that opens with someone ELSE's speaker label is not this actor's line —
+// live 2026-08-17: in a continued voice scene the actor put "The Voice: Let's just say
+// I've been watching…" in THINK, and that invented line aired as the sim's own thought,
+// was voiced by TTS, and entered their memories as something the player said.
+export function isForeignSpeakerLine(text: string, actorName: string | undefined, speakerNames: string[]): boolean {
+  const others = [...Object.values(PLAYER_VOICE_PERSONA_LABELS), ...speakerNames].filter(
+    (name) => !actorName || name.toLowerCase() !== actorName.toLowerCase(),
+  );
+  return others.some((name) => new RegExp(`^["'(]*${escapeRegExp(name)}\\s*[:\\-—]`, 'i').test(text.trim()));
 }
 
 // Actors answer in a two-line SAY/THINK format. Models drift — labels missing, reordered,
@@ -1499,8 +1514,18 @@ Rules for THINK:
         const parsed = parseActorPerformance(performance.text, simNames);
         // In a solo beat everything the actor produced is thought — an untagged reply
         // (parsed as say) is still the monologue
-        const say = monologueOnly ? '' : parsed.say;
-        const think = parsed.think || (monologueOnly ? parsed.say : '');
+        let say = monologueOnly ? '' : parsed.say;
+        let think = parsed.think || (monologueOnly ? parsed.say : '');
+        // The actor wrote somebody else's line (typically the player's next line in a
+        // continued voice scene) — drop it rather than air it as this sim's own words
+        if (say && isForeignSpeakerLine(say, sim.name, simNames)) {
+          log.warn(`[Pipeline] Actor ${sim.name} spoke for another speaker — dropping say: ${say}`);
+          say = '';
+        }
+        if (think && isForeignSpeakerLine(think, sim.name, simNames)) {
+          log.warn(`[Pipeline] Actor ${sim.name} thought another speaker's line — dropping think: ${think}`);
+          think = '';
+        }
         log.info(`[Pipeline] Actor ${sim.name} — say: ${say || '(none)'} | think: ${think || '(none)'}`);
         if (say.length > 1) {
           const line = { speaker: sim.name, text: say };
@@ -1649,11 +1674,24 @@ ${
       (score) => score.unfinished === true || (score.continue ?? 0) >= 7,
     );
     const roundsAllowed = round < this.ctx.settings.sceneMaxRounds;
-    const continueNext = wantsMore && roundsAllowed && !overBudget() && !monologueOnly && !options.saveMemory;
+    // A lone sim answering the player has nobody to continue WITH: the next round would
+    // carry no player line, so it would run as a solo monologue told to "move the
+    // conversation forward" — and the actor obliged by writing the player's next line
+    // as their own thought (live 2026-08-17: "The Voice: Let's just say I've been
+    // watching…" aired as Ehren's inner monologue). The player speaks next, not the sim.
+    const partnerless = Boolean(playerLine) && performers.length === 1;
+    const continueNext =
+      wantsMore && roundsAllowed && !overBudget() && !monologueOnly && !partnerless && !options.saveMemory;
     if (wantsMore && !continueNext) {
       log.info(
         `[Pipeline] Scene wants another round but ${
-          !roundsAllowed ? `round cap ${this.ctx.settings.sceneMaxRounds} reached` : overBudget() ? 'the scene budget is spent' : 'this path does not continue'
+          !roundsAllowed
+            ? `round cap ${this.ctx.settings.sceneMaxRounds} reached`
+            : overBudget()
+              ? 'the scene budget is spent'
+              : partnerless
+                ? 'the only other speaker is the player — waiting for them'
+                : 'this path does not continue'
         }`,
       );
     }

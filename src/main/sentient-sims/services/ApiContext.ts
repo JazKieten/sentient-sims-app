@@ -12,6 +12,7 @@ import { MappingController } from '../controllers/MappingController';
 import { MemoriesController } from '../controllers/MemoriesController';
 import { NewsController } from '../controllers/NewsController';
 import { OptionsController } from '../controllers/OptionsController';
+import { PaintingsController } from '../controllers/PaintingsController';
 import { ParticipantsController } from '../controllers/ParticipantsController';
 import { PatreonController } from '../controllers/PatreonController';
 import { SettingsController } from '../controllers/SettingsController';
@@ -23,6 +24,7 @@ import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
 import { MemoryRepository } from '../db/MemoryRepository';
+import { PaintingRepository } from '../db/PaintingRepository';
 import { ParticipantRepository } from '../db/ParticipantRepository';
 import { ApiType } from '../models/ApiType';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
@@ -41,11 +43,16 @@ import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
 import { DirectoryService } from './DirectoryService';
 import { ElevenLabsVoicesService } from './ElevenLabsVoicesService';
+import { EmbeddingProviderConfigService } from './EmbeddingProviderConfigService';
 import { EmbeddingService, NoopEmbeddingService, OpenAIEmbeddingService } from './EmbeddingService';
 import { GameSigningService } from './GameSigningService';
+import { PaintingMountService } from './PaintingMountService';
+import { GeminiEmbeddingService } from './GeminiEmbeddingService';
 import { GeminiService } from './GeminiService';
 import { GenerationQueueService } from './GenerationQueueService';
 import { GenerationService } from './GenerationService';
+import { ImageGenerationService } from './ImageGenerationService';
+import { ImageProviderConfigService } from './ImageProviderConfigService';
 import { InteractionService } from './InteractionService';
 import { KoboldAIService } from './KoboldAIService';
 import { LastExceptionService } from './LastExceptionService';
@@ -59,6 +66,7 @@ import { AIExchangeLogService } from './AIExchangeLogService';
 import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
 import { NovelAIService } from './NovelAIService';
+import { OpenAIImageGenerationService } from './OpenAIImageGenerationService';
 import { OpenAIService } from './OpenAIService';
 import { OpenRouterService } from './OpenRouterService';
 import { PatreonService } from './PatreonService';
@@ -66,6 +74,7 @@ import { PromptRequestBuilderService } from './PromptRequestBuilderService';
 import { SceneService } from './SceneService';
 import { ProviderConfigService } from './ProviderConfigService';
 import { SentientSimsAIService } from './SentientSimsAIService';
+import { SentientSimsEmbeddingService } from './SentientSimsEmbeddingService';
 import { SettingsService } from './SettingsService';
 import { TranscriptionService } from './TranscriptionService';
 import { UpdateService } from './UpdateService';
@@ -101,6 +110,7 @@ class ControllerContext {
   private readonly _newsController: NewsController;
   private readonly _optionsController: OptionsController;
   private readonly _cognitionController: CognitionController;
+  private readonly _paintingsController: PaintingsController;
 
   constructor(ctx: ApiContext) {
     this._versionController = new VersionController(ctx);
@@ -123,6 +133,7 @@ class ControllerContext {
     this._newsController = new NewsController(ctx);
     this._optionsController = new OptionsController(ctx);
     this._cognitionController = new CognitionController(ctx);
+    this._paintingsController = new PaintingsController(ctx);
   }
 
   get version(): VersionController {
@@ -204,6 +215,10 @@ class ControllerContext {
   get cognition(): CognitionController {
     return this._cognitionController;
   }
+
+  get paintings(): PaintingsController {
+    return this._paintingsController;
+  }
 }
 
 export class ApiContext {
@@ -235,6 +250,8 @@ export class ApiContext {
   private readonly _cognitionService: CognitionService;
   private readonly _dailyPlanService: DailyPlanService;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
+  private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
+  private readonly _geminiEmbeddingService: GeminiEmbeddingService;
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
   private readonly _memoryRetrievalService: MemoryRetrievalService;
@@ -246,12 +263,14 @@ export class ApiContext {
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
   private readonly _interactionSemanticSearchService: InteractionSemanticSearchService;
   private readonly _gameSigningService: GameSigningService;
+  private readonly _paintingMountService: PaintingMountService;
   private readonly _elevenLabsVoicesService: ElevenLabsVoicesService;
 
   // --- Repositories ---
   private readonly _locationRepository: LocationRepository;
   private readonly _memoryRepository: MemoryRepository;
   private readonly _memoryIndexRepository: MemoryIndexRepository;
+  private readonly _paintingRepository: PaintingRepository;
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
   private readonly _dailyPlanRepository: DailyPlanRepository;
@@ -267,6 +286,9 @@ export class ApiContext {
   private readonly _openRouterService: OpenRouterService;
   private readonly _modelSettingsService: ModelSettingsService;
   private readonly _providerConfigService: ProviderConfigService;
+  private readonly _openAIImageService: OpenAIImageGenerationService;
+  private readonly _imageProviderConfigService: ImageProviderConfigService;
+  private readonly _embeddingProviderConfigService: EmbeddingProviderConfigService;
 
   private readonly _novelAITokenCounter: NovelAITokenCounter;
   private readonly _openAITokenCounter: OpenAITokenCounter;
@@ -287,6 +309,7 @@ export class ApiContext {
     this._vllmAIService = new VLLMAIService(this);
     this._openAIService = new OpenAIService(this);
     this._openRouterService = new OpenRouterService(this);
+    this._openAIImageService = new OpenAIImageGenerationService(this._openAIService);
 
     this._novelAITokenCounter = new NovelAITokenCounter();
     this._openAITokenCounter = new OpenAITokenCounter();
@@ -303,10 +326,13 @@ export class ApiContext {
     this._animationsService = new AnimationsService(this);
     this._modelSettingsService = new ModelSettingsService(this);
     this._providerConfigService = new ProviderConfigService(this);
+    this._imageProviderConfigService = new ImageProviderConfigService(this);
+    this._embeddingProviderConfigService = new EmbeddingProviderConfigService(this);
 
     this._locationRepository = new LocationRepository(this._db);
     this._memoryRepository = new MemoryRepository(this._db);
     this._memoryIndexRepository = new MemoryIndexRepository(this._db);
+    this._paintingRepository = new PaintingRepository(this._db);
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
     this._dailyPlanRepository = new DailyPlanRepository(this._db);
@@ -315,6 +341,8 @@ export class ApiContext {
     this._actionDispatcherService = new ActionDispatcherService();
     this._simStateCache = new SimStateCache();
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
+    this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
+    this._geminiEmbeddingService = new GeminiEmbeddingService(this);
     this._noopEmbeddingService = new NoopEmbeddingService();
 
     this._promptBuilder = new PromptRequestBuilderService(this);
@@ -328,6 +356,7 @@ export class ApiContext {
     this._memoryRetrievalService = new MemoryRetrievalService(this);
     this._interactionSemanticSearchService = new InteractionSemanticSearchService(this);
     this._gameSigningService = new GameSigningService(this);
+    this._paintingMountService = new PaintingMountService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
@@ -449,13 +478,22 @@ export class ApiContext {
     return this._dailyPlanService;
   }
 
-  // Evaluated per access so setting an OpenAI key at runtime upgrades from Noop.
-  // Gated behind memoryRetrievalEnabled; off by default.
+  // Evaluated per access so changing the embedding provider (or setting a key/token at
+  // runtime) takes effect immediately.
   get embedding(): EmbeddingService {
-    if (!this._settings.memoryRetrievalEnabled) {
-      return this._noopEmbeddingService;
+    const config = this._embeddingProviderConfigService.getResolvedConfig();
+    const service = this.getEmbeddingService(config.apiType);
+    return service.isAvailable() ? service : this._noopEmbeddingService;
+  }
+
+  getEmbeddingService(apiType: ApiType): EmbeddingService {
+    if (apiType === ApiType.SentientSimsAI || apiType === ApiType.CustomAI) {
+      return this._sentientSimsEmbeddingService;
     }
-    return this._openAIEmbeddingService.isAvailable() ? this._openAIEmbeddingService : this._noopEmbeddingService;
+    if (apiType === ApiType.Gemini) {
+      return this._geminiEmbeddingService;
+    }
+    return this._openAIEmbeddingService;
   }
 
   get memoryAnnotation(): MemoryAnnotationService {
@@ -486,6 +524,10 @@ export class ApiContext {
     return this._gameSigningService;
   }
 
+  get paintingMount(): PaintingMountService {
+    return this._paintingMountService;
+  }
+
   get elevenLabsVoices(): ElevenLabsVoicesService {
     return this._elevenLabsVoicesService;
   }
@@ -504,6 +546,10 @@ export class ApiContext {
 
   get memoryIndexRepository(): MemoryIndexRepository {
     return this._memoryIndexRepository;
+  }
+
+  get paintingRepository(): PaintingRepository {
+    return this._paintingRepository;
   }
 
   get participantRepository(): ParticipantRepository {
@@ -548,6 +594,30 @@ export class ApiContext {
 
   get providerConfigs(): ProviderConfigService {
     return this._providerConfigService;
+  }
+
+  get imageProviderConfigs(): ImageProviderConfigService {
+    return this._imageProviderConfigService;
+  }
+
+  get embeddingProviderConfigs(): EmbeddingProviderConfigService {
+    return this._embeddingProviderConfigService;
+  }
+
+  getImageGenerationService(aiType: ApiType): ImageGenerationService {
+    if (aiType === ApiType.OpenAI) {
+      return this._openAIImageService;
+    }
+
+    if (aiType === ApiType.SentientSimsAI) {
+      return this.sentientSimsAIService;
+    }
+
+    if (aiType === ApiType.Gemini) {
+      return this.geminiService;
+    }
+
+    throw new Error(`Image generation is not supported for provider: ${aiType}`);
   }
 
   // Every AI call in the app goes through here, which makes it the one place that can log

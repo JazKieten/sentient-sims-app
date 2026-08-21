@@ -4,6 +4,7 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import {
   EmbeddingService,
   NoopEmbeddingService,
+  bufferToEmbedding,
   embeddingToBuffer,
 } from 'main/sentient-sims/services/EmbeddingService';
 import { MemoryWithIndex } from 'main/sentient-sims/db/entities/MemoryIndexEntity';
@@ -51,13 +52,21 @@ function fakeEmbedder(vector: number[]): EmbeddingService {
   };
 }
 
-function indexMemory(ctx: ApiContext, memory: MemoryEntity, importance: number, embedding?: number[]) {
-  ctx.memoryIndexRepository.upsertIndex({
-    memory_id: String(memory.id),
-    importance,
-    embedding: embedding ? embeddingToBuffer(Float32Array.from(embedding)) : undefined,
-    embedding_model: embedding ? 'fake-model' : undefined,
-  });
+function indexMemory(
+  ctx: ApiContext,
+  memory: MemoryEntity,
+  importance: number,
+  embedding?: number[],
+  model = 'fake-model',
+) {
+  ctx.memoryIndexRepository.upsertIndex({ memory_id: String(memory.id), importance });
+  if (embedding) {
+    ctx.memoryIndexRepository.upsertEmbedding({
+      memory_id: String(memory.id),
+      embedding_model: model,
+      embedding: embeddingToBuffer(Float32Array.from(embedding)),
+    });
+  }
 }
 
 describe('scoring', () => {
@@ -84,6 +93,7 @@ describe('scoring', () => {
         embedding_model: 'fake-model',
       },
       query,
+      'fake-model',
       now,
     );
     expect(scored.recency).toBeCloseTo(1);
@@ -95,10 +105,32 @@ describe('scoring', () => {
     const unannotated = scoreCandidate(
       { id: '2', location_id: 1, timestamp: '2026-07-22 12:00:00', event_type: 'reflection' },
       query,
+      'fake-model',
       now,
     );
     expect(unannotated.importance).toBeCloseTo(0.8);
     expect(unannotated.similarity).toEqual(0);
+  });
+
+  it('ignores embeddings created by a different model than the query', () => {
+    const now = new Date('2026-07-22T12:00:00Z');
+    const query = Float32Array.from([1, 0]);
+    // Identical vector, but a different model's space: cosine over it is meaningless
+    const mismatched = scoreCandidate(
+      {
+        id: '3',
+        location_id: 1,
+        timestamp: '2026-07-22 12:00:00',
+        importance: 7,
+        embedding: embeddingToBuffer(Float32Array.from([1, 0])),
+        embedding_model: 'old-model',
+      },
+      query,
+      'fake-model',
+      now,
+    );
+    expect(mismatched.similarity).toEqual(0);
+    expect(mismatched.score).toBeCloseTo(1.7);
   });
 });
 
@@ -222,6 +254,19 @@ describe('MemoryRetrievalService', () => {
     expect(await ctx.memoryRetrieval.retrieve({ participantIds: [], queryText: 'anything', k: 10 })).toEqual([]);
   });
 
+  it('does not score similarity against embeddings from a previous model', async () => {
+    const ctx = loadedContext('retrieval-model-switch');
+    vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(fakeEmbedder([1, 0]));
+
+    // Same vector the query embeds to, but produced by another model — must contribute nothing
+    const stale = createMemory(ctx, { content: 'embedded by the old provider' });
+    indexMemory(ctx, stale, 5, [1, 0], 'old-model');
+
+    const results = await ctx.memoryRetrieval.retrieve({ participantIds: ['100'], queryText: 'anything', k: 1 });
+    expect(results).toHaveLength(1);
+    expect(results[0].similarity).toEqual(0);
+  });
+
   it('ranks by importance and recency when no embedder is configured', async () => {
     const ctx = loadedContext('retrieval-degraded');
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(new NoopEmbeddingService());
@@ -257,13 +302,41 @@ describe('backfill', () => {
     expect(await ctx.memoryAnnotation.backfill(2)).toEqual(2);
     expect(embed).toHaveBeenCalledTimes(1); // outcome excluded, one batch of 2
 
-    expect(ctx.memoryIndexRepository.getUnindexedMemories(10)).toEqual([]);
-    const ratedRow = ctx.memoryIndexRepository.getIndex(String(rated.id));
-    expect(ratedRow?.importance).toEqual(9);
-    expect(ratedRow?.embedding_model).toEqual('fake-model');
+    expect(ctx.memoryIndexRepository.getUnindexedMemories(10, 'fake-model')).toEqual([]);
+    expect(ctx.memoryIndexRepository.getIndex(String(rated.id))?.importance).toEqual(9);
+    expect(ctx.memoryIndexRepository.getEmbedding(String(rated.id), 'fake-model')).toBeDefined();
 
     // Idempotent: a second run finds nothing to do and makes no embedding calls
     expect(await ctx.memoryAnnotation.backfill(2)).toEqual(0);
+    expect(embed).toHaveBeenCalledTimes(1);
+  });
+
+  it('embeds under a new model without erasing the previous model, and switching back is free', async () => {
+    const ctx = loadedContext('backfill-model-switch');
+    vi.spyOn(ctx.generationQueue, 'runWhenIdle').mockImplementation((task) => task());
+    const embed = vi.fn((texts: string[]) => Promise.resolve(texts.map(() => Float32Array.from([9]))));
+    const embedderSpy = vi
+      .spyOn(ctx, 'embedding', 'get')
+      .mockReturnValue({ model: 'new-model', isAvailable: () => true, embed });
+
+    const memory = createMemory(ctx, { content: 'embedded under the old provider' });
+    indexMemory(ctx, memory, 7, [1, 2]); // stored as 'fake-model'
+
+    expect(await ctx.memoryAnnotation.backfill()).toEqual(1);
+    const newVector = ctx.memoryIndexRepository.getEmbedding(String(memory.id), 'new-model');
+    expect(Array.from(bufferToEmbedding(newVector as Buffer))).toEqual([9]);
+    // The previous model's embedding and the importance rating both survive the switch
+    const oldVector = ctx.memoryIndexRepository.getEmbedding(String(memory.id), 'fake-model');
+    expect(Array.from(bufferToEmbedding(oldVector as Buffer))).toEqual([1, 2]);
+    expect(ctx.memoryIndexRepository.getIndex(String(memory.id))?.importance).toEqual(7);
+
+    // Idempotent once the current model covers everything
+    expect(await ctx.memoryAnnotation.backfill()).toEqual(0);
+    expect(embed).toHaveBeenCalledTimes(1);
+
+    // Switching back to the earlier model finds its rows intact: nothing to embed
+    embedderSpy.mockReturnValue({ model: 'fake-model', isAvailable: () => true, embed });
+    expect(await ctx.memoryAnnotation.backfill()).toEqual(0);
     expect(embed).toHaveBeenCalledTimes(1);
   });
 
@@ -343,9 +416,8 @@ describe('prompt wiring', () => {
     expect(summarized.endsWith('…')).toBe(true);
   });
 
-  it('adds a <RELEVANT_MEMORIES> block and honors the settings toggle', async () => {
+  it('adds a <RELEVANT_MEMORIES> block', async () => {
     const ctx = loadedContext('prompt-relevant-memories');
-    ctx.settings.memoryRetrievalEnabled = true;
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(new NoopEmbeddingService());
 
     const past = createMemory(ctx, { content: 'won the neighborhood chess tournament' });
@@ -354,15 +426,10 @@ describe('prompt wiring', () => {
     const result = await ctx.promptBuilder.buildPromptRequest(testEvent(), promptOptions());
     expect(result.participants).toContain('<RELEVANT_MEMORIES>');
     expect(result.participants).toContain('won the neighborhood chess tournament');
-
-    ctx.settings.memoryRetrievalEnabled = false;
-    const disabled = await ctx.promptBuilder.buildPromptRequest(testEvent(), promptOptions());
-    expect(disabled.participants).not.toContain('<RELEVANT_MEMORIES>');
   });
 
   it('excludes current-scene memories from retrieval', async () => {
     const ctx = loadedContext('prompt-scene-exclusion');
-    ctx.settings.memoryRetrievalEnabled = true;
     vi.spyOn(ctx, 'embedding', 'get').mockReturnValue(new NoopEmbeddingService());
 
     const older = createMemory(ctx, { content: 'burned the anniversary dinner', location_id: 2 });

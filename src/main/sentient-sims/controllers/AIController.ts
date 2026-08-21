@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import log from 'electron-log';
-import { InteractionEvents } from '../models/InteractionEvents';
+import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { playTTS, sendChatGeneration } from '../util/notifyRenderer';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
@@ -14,6 +14,7 @@ import {
   InteractionPrefetchRequest,
 } from '../services/GenerationQueueService';
 import { ApiTypeFromValue } from '../models/ApiType';
+import { ImageGenerationRequest } from '../models/ImageGeneration';
 
 export class AIController {
   private readonly ctx: ApiContext;
@@ -36,6 +37,18 @@ export class AIController {
   };
 
   @CatchErrors()
+  generateImage = async (req: Request, res: Response) => {
+    const request = req.body as ImageGenerationRequest;
+    if (!request.prompt) {
+      res.status(400).json({ error: 'Must include prompt in request body' });
+      return;
+    }
+
+    const response = await this.ctx.ai.generateImage(request);
+    res.json(response);
+  };
+
+  @CatchErrors()
   interactionEvent = async (req: Request, res: Response) => {
     const event = req.body as InteractionEvents;
 
@@ -43,9 +56,14 @@ export class AIController {
 
     // V-2: the player's spoken line rides the speech lane (drained before everything else)
     const isPlayerVoice = (event as { source?: string }).source === 'player_voice';
+    // The chat window blocks on this response while prefetch traffic is speculative,
+    // so chat messages skip ahead of queued prefetch generations
+    const isChat = event.event_type === SSEventType.CHAT || event.event_type === SSEventType.CHAT_CONTINUE;
     const result = isPlayerVoice
       ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event))
-      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event));
+      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event), {
+          priority: isChat,
+        });
     result.input = event;
     // Leading newline so each generation stands apart from the previous one in the game window;
     // memories, TTS, and the app chat UI keep the untouched text. Classic mode sends it verbatim.

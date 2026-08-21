@@ -59,7 +59,6 @@ function buildCtx(options: CtxOptions = {}) {
       cognitionMaxConcurrent: 1,
       cognitionPerSimHourlyBudget: options.hourlyBudget ?? 100,
       cognitionActionScoreThreshold: options.actionScoreThreshold ?? 7,
-      memoryRetrievalEnabled: false,
     },
     simStateCache: cache,
     db: { isLoaded: () => true },

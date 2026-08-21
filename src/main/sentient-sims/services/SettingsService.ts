@@ -7,6 +7,7 @@ import { defaultOpenAITTSSettings, OpenAITTSSettings } from '../models/OpenAITTS
 import { ApiType, ApiTypeFromValue } from '../models/ApiType';
 import { AIProviderConfig, autoConfigId, newAutoConfig, sanitizeProviderConfigs } from '../models/AIProviderConfig';
 import { AIActionOverrides } from '../models/AIActionType';
+import { defaultEmbeddingModelFor } from '../models/EmbeddingModels';
 import {
   defaultElevenLabsEndpoint,
   defaultGeminiModel,
@@ -27,6 +28,7 @@ import {
   openrouterDefaultEndpoint,
   openrouterDefaultModel,
   retiredGeminiModels,
+  sentientSimsAIDefaultEmbeddingModel,
   sentientSimsAIDefaultModel,
   defaultSentientSimsAIHost,
   defaultGameAppPath,
@@ -231,9 +233,13 @@ export function defaultStore(cwd?: string) {
         type: 'number',
         default: defaultPrefetchMaxQueueDepth,
       },
-      [SettingsEnum.MEMORY_RETRIEVAL_ENABLED.toString()]: {
-        type: 'boolean',
-        default: false,
+      [SettingsEnum.EMBEDDING_API_TYPE.toString()]: {
+        type: 'string',
+        default: ApiType.OpenAI.toString(),
+      },
+      [SettingsEnum.SENTIENTSIMSAI_EMBEDDING_MODEL.toString()]: {
+        type: 'string',
+        default: sentientSimsAIDefaultEmbeddingModel,
       },
       [SettingsEnum.COGNITION_ENABLED.toString()]: {
         type: 'boolean',
@@ -357,6 +363,28 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: defaultGameAppPath,
       },
+      [SettingsEnum.IMAGE_PROVIDER_CONFIGS.toString()]: {
+        type: 'array',
+        default: [],
+        items: {
+          type: 'object',
+        },
+      },
+      [SettingsEnum.DEFAULT_IMAGE_PROVIDER_CONFIG_ID.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.EMBEDDING_PROVIDER_CONFIGS.toString()]: {
+        type: 'array',
+        default: [],
+        items: {
+          type: 'object',
+        },
+      },
+      [SettingsEnum.DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID.toString()]: {
+        type: 'string',
+        default: '',
+      },
     },
     migrations: {
       '3.1.0': (store) => {
@@ -418,6 +446,12 @@ export class SettingsService {
     if (key === (SettingsEnum.AI_PROVIDER_CONFIGS as string)) {
       this.pruneProviderConfigReferences();
     }
+    if (key === (SettingsEnum.IMAGE_PROVIDER_CONFIGS as string)) {
+      this.pruneImageProviderConfigReferences();
+    }
+    if (key === (SettingsEnum.EMBEDDING_PROVIDER_CONFIGS as string)) {
+      this.pruneEmbeddingProviderConfigReferences();
+    }
 
     this.changeListener?.(key, value);
 
@@ -444,6 +478,31 @@ export class SettingsService {
       default:
         // KoboldAI runs whatever model is loaded server side
         return undefined;
+    }
+  }
+
+  // Whether the user has entered the credential a provider needs, used to derive
+  // capability defaults. Deliberately ignores env-var fallbacks: only an explicit
+  // user setup should attract Auto-resolved image/embedding traffic.
+  hasProviderCredentials(apiType: ApiType): boolean {
+    switch (apiType) {
+      case ApiType.OpenAI:
+        return this.openaiKey.trim() !== '';
+      case ApiType.SentientSimsAI:
+      case ApiType.CustomAI:
+        return this.accessToken.trim() !== '';
+      case ApiType.Gemini:
+        return this.geminiKeys.trim() !== '';
+      case ApiType.OpenRouter:
+        return this.openrouterKey.trim() !== '';
+      case ApiType.NovelAI:
+        return this.novelAIKey.trim() !== '';
+      case ApiType.KoboldAI:
+        return this.koboldaiEndpoint.trim() !== '';
+      case ApiType.VLLM:
+        return this.vllmEndpoint.trim() !== '';
+      default:
+        return false;
     }
   }
 
@@ -493,6 +552,24 @@ export class SettingsService {
     const prunedEntries = Object.entries(overrides).filter(([, configId]) => configId && ids.has(configId));
     if (prunedEntries.length !== Object.keys(overrides).length) {
       this.set(SettingsEnum.AI_ACTION_PROVIDER_OVERRIDES, Object.fromEntries(prunedEntries));
+    }
+  }
+
+  // Empty default id means Auto: follow the main provider. Deleting the default
+  // config falls back there rather than to an arbitrary remaining config.
+  private pruneImageProviderConfigReferences() {
+    const configs = this.imageProviderConfigs;
+    const defaultId = this.defaultImageProviderConfigId;
+    if (defaultId && !configs.some((config) => config.id === defaultId)) {
+      this.set(SettingsEnum.DEFAULT_IMAGE_PROVIDER_CONFIG_ID, '');
+    }
+  }
+
+  private pruneEmbeddingProviderConfigReferences() {
+    const configs = this.embeddingProviderConfigs;
+    const defaultId = this.defaultEmbeddingProviderConfigId;
+    if (defaultId && !configs.some((config) => config.id === defaultId)) {
+      this.set(SettingsEnum.DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID, '');
     }
   }
 
@@ -885,6 +962,40 @@ export class SettingsService {
     this.set(SettingsEnum.GAME_APP_PATH, value);
   }
 
+  get imageProviderConfigs(): AIProviderConfig[] {
+    return sanitizeProviderConfigs(this.get(SettingsEnum.IMAGE_PROVIDER_CONFIGS));
+  }
+
+  set imageProviderConfigs(value: AIProviderConfig[]) {
+    this.set(SettingsEnum.IMAGE_PROVIDER_CONFIGS, sanitizeProviderConfigs(value));
+  }
+
+  get defaultImageProviderConfigId(): string {
+    const value = this.get(SettingsEnum.DEFAULT_IMAGE_PROVIDER_CONFIG_ID);
+    return typeof value === 'string' ? value : '';
+  }
+
+  set defaultImageProviderConfigId(value: string) {
+    this.set(SettingsEnum.DEFAULT_IMAGE_PROVIDER_CONFIG_ID, value);
+  }
+
+  get embeddingProviderConfigs(): AIProviderConfig[] {
+    return sanitizeProviderConfigs(this.get(SettingsEnum.EMBEDDING_PROVIDER_CONFIGS));
+  }
+
+  set embeddingProviderConfigs(value: AIProviderConfig[]) {
+    this.set(SettingsEnum.EMBEDDING_PROVIDER_CONFIGS, sanitizeProviderConfigs(value));
+  }
+
+  get defaultEmbeddingProviderConfigId(): string {
+    const value = this.get(SettingsEnum.DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID);
+    return typeof value === 'string' ? value : '';
+  }
+
+  set defaultEmbeddingProviderConfigId(value: string) {
+    this.set(SettingsEnum.DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID, value);
+  }
+
   get maxResponseTokens(): number {
     return this.get(SettingsEnum.MAX_RESPONSE_TOKENS) as number;
   }
@@ -919,12 +1030,20 @@ export class SettingsService {
     this.set(SettingsEnum.GENERATION_CONCURRENCY, value);
   }
 
-  get memoryRetrievalEnabled(): boolean {
-    return this.get(SettingsEnum.MEMORY_RETRIEVAL_ENABLED) as boolean;
+  get embeddingApiType(): ApiType {
+    return ApiTypeFromValue(this.get(SettingsEnum.EMBEDDING_API_TYPE));
   }
 
-  set memoryRetrievalEnabled(value: boolean) {
-    this.set(SettingsEnum.MEMORY_RETRIEVAL_ENABLED, value);
+  set embeddingApiType(value: ApiType) {
+    this.set(SettingsEnum.EMBEDDING_API_TYPE, value.toString());
+  }
+
+  get sentientSimsAIEmbeddingModel(): string {
+    return this.get(SettingsEnum.SENTIENTSIMSAI_EMBEDDING_MODEL) as string;
+  }
+
+  set sentientSimsAIEmbeddingModel(value: string) {
+    this.set(SettingsEnum.SENTIENTSIMSAI_EMBEDDING_MODEL, value);
   }
 
   get cognitionEnabled(): boolean {
@@ -1038,6 +1157,24 @@ export class SettingsService {
       this.defaultAiProviderConfigId = seeded.id;
     } else if (!this.defaultAiProviderConfigId) {
       this.defaultAiProviderConfigId = this.aiProviderConfigs[0].id;
+    }
+
+    // Seed the embedding configs from the legacy single-provider embedding selection.
+    // The legacy schema default is OpenAI, which is indistinguishable from "never
+    // chosen"; those stay unseeded so Auto (follow the main provider) applies.
+    if (this.embeddingProviderConfigs.length === 0 && !this.defaultEmbeddingProviderConfigId) {
+      const legacyEmbeddingApiType = this.embeddingApiType;
+      if (legacyEmbeddingApiType !== ApiType.OpenAI) {
+        const seeded = newAutoConfig(legacyEmbeddingApiType);
+        // Pin the model so the choice is visible and editable in the config UI
+        seeded.model =
+          legacyEmbeddingApiType === ApiType.SentientSimsAI || legacyEmbeddingApiType === ApiType.CustomAI
+            ? this.sentientSimsAIEmbeddingModel
+            : defaultEmbeddingModelFor(legacyEmbeddingApiType);
+        log.info(`Migrating legacy embedding provider ${legacyEmbeddingApiType} to an embedding config`);
+        this.embeddingProviderConfigs = [seeded];
+        this.defaultEmbeddingProviderConfigId = seeded.id;
+      }
     }
 
     // Rewrite Gemini model IDs Google has removed from the API. Users get

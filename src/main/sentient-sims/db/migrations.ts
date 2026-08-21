@@ -109,6 +109,16 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       ALTER TABLE memory
       ADD COLUMN interaction_name TEXT;
     `,
+    '010-create-painting-table': `
+      CREATE TABLE painting (
+        uuid                 TEXT NOT NULL  PRIMARY KEY  ,
+        instance_id          TEXT NOT NULL  UNIQUE  ,
+        prompt               TEXT     ,
+        image                BLOB     ,
+        metadata             TEXT     ,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `,
     // Scenes are derived from location_id + timestamp instead of a dedicated column: the mod
     // parses memory rows into a Python class with fixed fields, so any new column breaks it.
     // This cleans up databases that briefly ran an add-scene-id migration; no-op elsewhere.
@@ -168,6 +178,33 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         PRIMARY KEY ( sim_id, absolute_day )
       );
     `,
+    // An embedding is only comparable to vectors from the model that produced it, so
+    // embeddings move out of memory_index into their own table keyed by
+    // (memory_id, embedding_model). Every model's vectors persist side by side: switching
+    // embedding providers adds rows instead of overwriting, and switching back reuses the
+    // already-stored work. memory_index keeps importance, which is model-independent.
+    '014-move-embeddings-to-memory-embedding': (db: Database) => {
+      db.prepare(
+        `
+          CREATE TABLE memory_embedding (
+            memory_id            INTEGER NOT NULL    ,
+            embedding_model      TEXT NOT NULL       ,
+            embedding            BLOB NOT NULL       ,
+            PRIMARY KEY ( memory_id, embedding_model ),
+            FOREIGN KEY ( memory_id ) REFERENCES memory( id ) ON DELETE CASCADE ON UPDATE CASCADE
+          );
+        `,
+      ).run();
+      db.prepare(
+        `
+          INSERT INTO memory_embedding (memory_id, embedding_model, embedding)
+          SELECT memory_id, embedding_model, embedding FROM memory_index
+          WHERE embedding IS NOT NULL AND embedding_model IS NOT NULL;
+        `,
+      ).run();
+      db.prepare('ALTER TABLE memory_index DROP COLUMN embedding').run();
+      db.prepare('ALTER TABLE memory_index DROP COLUMN embedding_model').run();
+    },
   }),
 );
 

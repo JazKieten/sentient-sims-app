@@ -116,6 +116,9 @@ const createWindow = async () => {
     webPreferences: {
       webSecurity: false, // Disable web security
       allowRunningInsecureContent: true,
+      // Players keep the app minimized behind the game; throttled timers would stall
+      // the renderer's TTS scene queue and websocket-driven UI updates
+      backgroundThrottling: false,
       preload: preloadPath,
     },
   });
@@ -197,6 +200,12 @@ const startServices = () => {
   void ctx.gameSigning.ensureSigned().catch((err: unknown) => {
     log.error('Failed to verify game signature on startup', err);
   });
+
+  try {
+    ctx.paintingMount.ensureMount();
+  } catch (err: unknown) {
+    log.error('Failed to set up paintings texture mount on startup', err);
+  }
 
   log.transports.file.level = 'info';
 

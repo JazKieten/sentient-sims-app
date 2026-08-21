@@ -46,7 +46,11 @@ export enum SettingsEnum {
   GENERATION_TIMEOUT_SECONDS = 'generationTimeoutSeconds',
   GENERATION_CONCURRENCY = 'generationConcurrency',
   PREFETCH_MAX_QUEUE_DEPTH = 'prefetchMaxQueueDepth',
-  MEMORY_RETRIEVAL_ENABLED = 'memoryRetrievalEnabled',
+  // Legacy single-provider embedding selection; migrated into EMBEDDING_PROVIDER_CONFIGS
+  EMBEDDING_API_TYPE = 'embeddingApiType',
+  SENTIENTSIMSAI_EMBEDDING_MODEL = 'sentientsimsAIEmbeddingModel',
+  EMBEDDING_PROVIDER_CONFIGS = 'embeddingProviderConfigs',
+  DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID = 'defaultEmbeddingProviderConfigId',
   AI_PROVIDER_CONFIGS = 'aiProviderConfigs',
   DEFAULT_AI_PROVIDER_CONFIG_ID = 'defaultAiProviderConfigId',
   AI_ACTION_PROVIDER_OVERRIDES = 'aiActionProviderOverrides',
@@ -84,6 +88,8 @@ export enum SettingsEnum {
   // V-6: write a first description for undescribed sims/lots instead of the stock default
   GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
   GAME_APP_PATH = 'gameAppPath',
+  IMAGE_PROVIDER_CONFIGS = 'imageProviderConfigs',
+  DEFAULT_IMAGE_PROVIDER_CONFIG_ID = 'defaultImageProviderConfigId',
 }
 
 export enum DeprecatedSettingsEnum {

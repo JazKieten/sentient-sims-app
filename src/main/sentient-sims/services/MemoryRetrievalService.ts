@@ -1,7 +1,7 @@
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { MemoryWithIndex } from '../db/entities/MemoryIndexEntity';
 import { ApiContext } from './ApiContext';
-import { bufferToEmbedding, cosineSimilarity } from './EmbeddingService';
+import { bufferToEmbedding, cosineSimilarity, EmbeddingService } from './EmbeddingService';
 import { heuristicImportance } from './MemoryAnnotationService';
 
 // A wider net than k so scoring has something to rank, small enough that decoding
@@ -65,17 +65,22 @@ export function recencyScore(timestamp: string | undefined, now: Date): number {
 }
 
 // Equal-weight blend of how recent, how important, and how semantically close to the
-// query a memory is. Similarity contributes 0 when either side has no embedding, so
-// retrieval still ranks sensibly with no embedder configured.
+// query a memory is. Similarity contributes 0 when either side has no embedding, or when
+// the candidate was embedded with a different model than the query (vectors from
+// different models share no space, so comparing them scores garbage), so retrieval still
+// ranks sensibly with no embedder configured or mid re-embed after a provider switch.
 export function scoreCandidate(
   candidate: MemoryWithIndex,
   queryVector: Float32Array | undefined,
+  queryModel: string | undefined,
   now: Date,
 ): RetrievedMemory {
   const recency = recencyScore(candidate.timestamp, now);
   const importance = (candidate.importance ?? heuristicImportance(candidate.event_type)) / 10;
   const similarity =
-    queryVector && candidate.embedding ? cosineSimilarity(queryVector, bufferToEmbedding(candidate.embedding)) : 0;
+    queryVector && candidate.embedding && candidate.embedding_model === queryModel
+      ? cosineSimilarity(queryVector, bufferToEmbedding(candidate.embedding))
+      : 0;
 
   return {
     memory: candidate,
@@ -101,9 +106,13 @@ export class MemoryRetrievalService {
       return [];
     }
 
+    // Capture the embedder once so the candidate embeddings, the query vector, and the
+    // model they're compared under can't drift if the provider setting changes mid-request
+    const embedder = this.ctx.embedding;
     const candidates = this.ctx.memoryIndexRepository.getRetrievalCandidates(
       request.participantIds,
       CANDIDATE_LIMIT,
+      embedder.model,
       request.ownerScope ?? [],
     );
     const excluded = new Set(request.excludeMemoryIds ?? []);
@@ -112,9 +121,9 @@ export class MemoryRetrievalService {
       return [];
     }
 
-    const queryVector = await this.embedQuery(request.queryText);
+    const queryVector = await this.embedQuery(request.queryText, embedder);
     const now = new Date();
-    const scored = scoreable.map((candidate) => scoreCandidate(candidate, queryVector, now));
+    const scored = scoreable.map((candidate) => scoreCandidate(candidate, queryVector, embedder.model, now));
     // Ties (same score, e.g. no embeddings and equal importance) break toward newer memories
     scored.sort((a, b) => b.score - a.score || newerIdFirst(a.memory.id, b.memory.id));
     if (request.maxSelfAuthored === undefined) {
@@ -139,11 +148,11 @@ export class MemoryRetrievalService {
     return selected;
   }
 
-  private async embedQuery(queryText: string): Promise<Float32Array | undefined> {
-    if (!queryText || !this.ctx.embedding.isAvailable()) {
+  private async embedQuery(queryText: string, embedder: EmbeddingService): Promise<Float32Array | undefined> {
+    if (!queryText || !embedder.isAvailable()) {
       return undefined;
     }
-    const [vector] = await this.ctx.embedding.embed([queryText]);
+    const [vector] = await embedder.embed([queryText]);
     return vector;
   }
 }

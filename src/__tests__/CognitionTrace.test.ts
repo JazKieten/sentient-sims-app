@@ -50,7 +50,6 @@ describe('Cognition tick tracing', () => {
     ctx.db.loadDatabase({ sessionId: `cog-${Math.random().toString(36).slice(2)}`, saveId: '1' });
     ctx.settings.aiApiType = ApiType.OpenAI;
     ctx.settings.openaiKey = 'sk-test';
-    ctx.settings.memoryRetrievalEnabled = false;
     // Cognition knobs are read-only properties over the settings store
     ctx.settings.set(SettingsEnum.COGNITION_ENABLED, true);
     ctx.settings.set(SettingsEnum.COGNITION_AUTONOMY_LEVEL, 'suggest');

@@ -1183,10 +1183,9 @@ export class CognitionService {
     }
   }
 
+  // Retrieval is always on since 4.0.6 (the embedding provider config decides how it
+  // scores); a Noop embedder still ranks by importance and recency.
   private async relevantMemoriesBlock(entry: SimStateEntry): Promise<string | undefined> {
-    if (!this.ctx.settings.memoryRetrievalEnabled) {
-      return undefined;
-    }
     try {
       const perceivedNames = (entry.sims ?? [])
         .map((perceived) => perceived.name)

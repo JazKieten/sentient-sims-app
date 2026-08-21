@@ -24,6 +24,7 @@ import SimsPage from './SimsPage';
 import { SnackBarProvider } from './providers/SnackBarProvider';
 import { AISettingsProvider } from './providers/AISettingsProvider';
 import { VersionsProvider } from './providers/VersionsProvider';
+import { ModUpdateProvider } from './providers/ModUpdateProvider';
 import TraitsPage from './TraitsPage';
 import { AudioContextProvider } from './providers/AudioContextProvider';
 import { VoiceInputProvider } from './providers/VoiceInputProvider';
@@ -113,17 +114,19 @@ root.render(
             <SnackBarProvider>
               <WebsocketProvider>
                 <VersionsProvider>
-                  <AISettingsProvider>
-                    <AudioContextProvider>
-                      <VoiceInputProvider>
-                        <ChatGenerationProvider>
-                          <DebugModeProvider>
-                            <RouterProvider router={router} />
-                          </DebugModeProvider>
-                        </ChatGenerationProvider>
-                      </VoiceInputProvider>
-                    </AudioContextProvider>
-                  </AISettingsProvider>
+                  <ModUpdateProvider>
+                    <AISettingsProvider>
+                      <AudioContextProvider>
+                        <VoiceInputProvider>
+                          <ChatGenerationProvider>
+                            <DebugModeProvider>
+                              <RouterProvider router={router} />
+                            </DebugModeProvider>
+                          </ChatGenerationProvider>
+                        </VoiceInputProvider>
+                      </AudioContextProvider>
+                    </AISettingsProvider>
+                  </ModUpdateProvider>
                 </VersionsProvider>
               </WebsocketProvider>
             </SnackBarProvider>

@@ -152,13 +152,13 @@ describe('private memory ownership', () => {
     const ids = (rows: { id?: string }[]) => rows.map((row) => row.id).sort();
 
     // No scope: shared only — another sim's head is never a default
-    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10))).toEqual([shared?.id]);
+    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10, 'fake-model'))).toEqual([shared?.id]);
     // Sim 100 retrieving for itself sees its own private row, never sim 200's
-    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10, ['100']))).toEqual(
+    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10, 'fake-model', ['100']))).toEqual(
       ids([{ id: shared?.id }, { id: privateA?.id }]),
     );
     // A scene containing both sims (the omniscient director) sees everything
-    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10, ['100', '200']))).toEqual(
+    expect(ids(ctx.memoryIndexRepository.getRetrievalCandidates(['100', '200'], 10, 'fake-model', ['100', '200']))).toEqual(
       ids([{ id: shared?.id }, { id: privateA?.id }, { id: privateB?.id }]),
     );
   });
@@ -178,9 +178,9 @@ describe('private memory ownership', () => {
       { notifyMod: false },
     );
 
-    const forOwner = ctx.memoryIndexRepository.getRetrievalCandidates([bigOwner], 10, [bigOwner]);
+    const forOwner = ctx.memoryIndexRepository.getRetrievalCandidates([bigOwner], 10, 'fake-model', [bigOwner]);
     expect(forOwner.map((row) => row.id)).toEqual([owned?.id]);
-    const forNeighbor = ctx.memoryIndexRepository.getRetrievalCandidates([bigOwner], 10, [almostSame]);
+    const forNeighbor = ctx.memoryIndexRepository.getRetrievalCandidates([bigOwner], 10, 'fake-model', [almostSame]);
     expect(forNeighbor).toEqual([]);
   });
 

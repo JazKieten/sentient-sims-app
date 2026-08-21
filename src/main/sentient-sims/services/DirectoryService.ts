@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import os from 'os';
 import path from 'path';
 import log from 'electron-log';
 import { SettingsService } from './SettingsService';
@@ -38,7 +39,9 @@ export class DirectoryService {
   }
 
   getZippedModFile(): string {
-    return path.join(this.getModsFolder(), 'sentient-sims.zip');
+    // Legacy download location; UpdateService now downloads to a unique temp
+    // file per install. Kept in filesToDelete() to clean up old leftovers.
+    return path.join(os.tmpdir(), 'sentient-sims.zip');
   }
 
   getSentientSimsScriptsFolder(): string {

@@ -1602,7 +1602,7 @@ ${
         const numbered = performedLines.map((line, index) => `${index + 1}. ${line.speaker}: ${line.text}`).join('\n');
         const directionSummary = continuingScene
           ? 'a continuation beat of a conversation already underway'
-          : displayAction ?? sceneAction;
+          : (displayAction ?? sceneAction);
         const compiled = await this.runOneShot(
           'Director Review',
           compileSystemPrompt,
@@ -1769,7 +1769,9 @@ ${
         pacedText: finalText,
       });
       if (continueNext) {
-        log.info(`[Pipeline] Scene round ${round + 1}/${this.ctx.settings.sceneMaxRounds}: continuing the conversation`);
+        log.info(
+          `[Pipeline] Scene round ${round + 1}/${this.ctx.settings.sceneMaxRounds}: continuing the conversation`,
+        );
         const carriedLines = [...(options.carriedLines ?? []), ...(playerLine ? [playerLine] : []), ...finalLines];
         // Fire-and-forget: the continuation is its own generation with its own memory row
         void this.runDirectedGeneration(

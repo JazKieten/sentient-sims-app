@@ -109,9 +109,10 @@ const createWindow = async () => {
     show: false,
     width: 1400,
     height: 850,
+    minWidth: 800,
+    minHeight: 500,
     autoHideMenuBar: true,
     icon: getAssetPath('icon.png'),
-    thickFrame: false,
     backgroundColor: '#2f3136',
     webPreferences: {
       webSecurity: false, // Disable web security

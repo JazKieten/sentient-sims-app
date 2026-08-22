@@ -148,7 +148,12 @@ export async function playAudioStream(
   // Ref-object rather than a bare boolean so the flag set by stop() stays visible
   // inside the pump loop without TS narrowing it to its initial value
   const stopState = { current: false };
+  // stop() and the element's own 'ended'/'error' can each fire; the second must not
+  // disconnect nodes twice or revoke an already-revoked URL
+  let cleanedUp = false;
   const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     offRate();
     offPause();
     element.disconnect();
@@ -211,7 +216,12 @@ export async function playAudioStream(
     }
   })();
 
+  // audio.pause() in stop() fires neither 'ended' nor 'error', so stop() must settle
+  // this itself — a caller awaiting `finished` (the scene drain loop) would otherwise
+  // hang forever after the player pre-empts a line, and no later scene would ever play
+  let settle: () => void = () => {};
   const finished = new Promise<void>((resolve) => {
+    settle = resolve;
     audio.addEventListener(
       'ended',
       () => {
@@ -259,7 +269,9 @@ export async function playAudioStream(
         log.debug('Stream reader already cancelled', err);
       });
       audio.pause();
+      log.info(`[TTS] Streaming playback stopped after ${audio.currentTime.toFixed(2)}s`);
       cleanup();
+      settle();
     },
     pause: () => audio.pause(),
     resume: () => {

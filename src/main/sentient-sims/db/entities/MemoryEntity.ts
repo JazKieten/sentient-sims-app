@@ -10,10 +10,12 @@ export type MemoryEntity = {
   action?: string;
   event_type?: string;
   interaction_name?: string;
-  // V-4: renderer-only name tags (the mod's SentientMemory ctor takes explicit kwargs, so
-  // the mod-bound copy is stripped in notifyNewMemoryAdded via toModMemory)
+  // Owner: whose inner voice a monologue/reflection/thought row is. The mod's memories
+  // window attributes the row by these (overlay_memories.split_lines), so they ride the
+  // websocket pushes too.
   owner_participant_id?: string;
   owner_name?: string;
+  // V-4: renderer-only name tags (stripped from the mod-bound copy via toModMemory)
   participant_names?: string[];
 };
 
@@ -27,9 +29,10 @@ export function toMemoryEntity(row: MemoryRow): MemoryEntity {
   return { ...row, id: row.id.toString(), location_id: Number(row.location_id) };
 }
 
-// The row shape the mod's SentientMemory(**memory) accepts: nothing beyond its kwargs
+// The row shape handed to the mod: SentientMemory.from_row ignores fields it does not know,
+// and the overlay's memories window reads the owner fields off the raw row.
 export function toModMemory(memory: MemoryEntity): MemoryEntity {
-  const { owner_participant_id: _owner, owner_name: _ownerName, participant_names: _names, ...modRow } = memory;
+  const { participant_names: _names, ...modRow } = memory;
   return modRow;
 }
 

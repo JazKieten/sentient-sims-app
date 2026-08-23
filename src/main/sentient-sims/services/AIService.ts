@@ -658,13 +658,15 @@ ${diaryRules}`;
         event_type: 'reflection',
       };
       const participants: ParticipantDTO[] = participantIds.map((id) => ({ id }));
-      // Reflections are internal monologue for retrieval/prompting; notifyMod false keeps
-      // the whole reflection prose from being pushed to the mod as one giant subtitle block.
+      // Reflections are internal monologue for retrieval/prompting. The push reaches the
+      // mod's memories window live as the sim's thought; the mod keeps reflection rows off
+      // the subtitle/pause path (ss_memories_service _INNER_VOICE_EVENT_TYPES).
       // Owner-stamped: first-person "I" prose must never surface as another sim's own memory.
-      this.ctx.memoryRepository.createMemory(
-        { memory: reflectionMemory, participants, index: pov ? { owner: pov.simId } : undefined },
-        { notifyMod: false },
-      );
+      this.ctx.memoryRepository.createMemory({
+        memory: reflectionMemory,
+        participants,
+        index: pov ? { owner: pov.simId } : undefined,
+      });
       log.info(`[Reflection] Saved reflection for scene ${previousScene.sceneId}: ${text}`);
     } catch (err) {
       log.error(`[Reflection] Failed to generate reflection for scene ${previousScene.sceneId}`, err);
@@ -1908,14 +1910,13 @@ ${
       const participants = this.ctx.participantRepository.getParticipants([
         { id: performer.sim_id, fullName: performer.name },
       ]);
-      this.ctx.memoryRepository.createMemory(
-        {
-          memory: newMemory,
-          participants,
-          index: { owner: performer.sim_id, importance: score?.memory },
-        },
-        { notifyMod: false },
-      );
+      // The monologue row reaches the mod's memories window live as the sim's thought;
+      // the mod keeps monologue rows off the subtitle/pause path.
+      this.ctx.memoryRepository.createMemory({
+        memory: newMemory,
+        participants,
+        index: { owner: performer.sim_id, importance: score?.memory },
+      });
     }
 
     // The thought plays aloud as a self-directed aside: marking the scene paced suppresses
@@ -2036,18 +2037,17 @@ Respond with ONLY a JSON object in exactly this shape, covering every character,
         return;
       }
       try {
-        this.ctx.memoryRepository.createMemory(
-          {
-            memory: {
-              content: think,
-              location_id: event.environment.location_id,
-              event_type: 'monologue',
-            },
-            participants: [{ id: sim.sim_id }],
-            index: { owner: sim.sim_id, importance: scores.get(sim.name)?.memory },
+        // Pushed to the mod so the memories window shows the thought live under the
+        // sim's lines; the mod keeps monologue rows off the subtitle/pause path.
+        this.ctx.memoryRepository.createMemory({
+          memory: {
+            content: think,
+            location_id: event.environment.location_id,
+            event_type: 'monologue',
           },
-          { notifyMod: false },
-        );
+          participants: [{ id: sim.sim_id }],
+          index: { owner: sim.sim_id, importance: scores.get(sim.name)?.memory },
+        });
       } catch (error) {
         log.warn(`[Pipeline] Failed to store monologue for ${sim.name}`, error);
       }

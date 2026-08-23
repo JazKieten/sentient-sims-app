@@ -1162,22 +1162,20 @@ export class CognitionService {
     }
 
     try {
-      // Thoughts constrain later retrieval (what a sim thinks shapes what it says), but
-      // never subtitle or pause the game at tick cadence
-      this.ctx.memoryRepository.createMemory(
-        {
-          memory: {
-            content: intent.thought,
-            location_id: Number(entry.location?.zone_id ?? 0),
-            event_type: 'thought',
-          },
-          participants: [{ id: entry.sim_id }],
-          // A thought is private: no other sim's retrieval may ever surface it. The
-          // tick's own memory score prices it when the scores stage delivered one.
-          index: { owner: entry.sim_id, importance },
+      // Thoughts constrain later retrieval (what a sim thinks shapes what it says). The
+      // push shows the thought live in the mod's memories window; the mod keeps thought
+      // rows off the subtitle/pause path, so tick cadence never pauses the game.
+      this.ctx.memoryRepository.createMemory({
+        memory: {
+          content: intent.thought,
+          location_id: Number(entry.location?.zone_id ?? 0),
+          event_type: 'thought',
         },
-        { notifyMod: false },
-      );
+        participants: [{ id: entry.sim_id }],
+        // A thought is private: no other sim's retrieval may ever surface it. The
+        // tick's own memory score prices it when the scores stage delivered one.
+        index: { owner: entry.sim_id, importance },
+      });
     } catch (error) {
       log.warn(`[Cognition] failed to store thought for sim ${entry.sim_id}`, error);
     }

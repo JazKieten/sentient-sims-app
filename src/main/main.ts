@@ -31,6 +31,7 @@ import electronUpdater from 'electron-updater';
 import { resolveHtmlPath } from './util';
 import { ApiContext } from './sentient-sims/services/ApiContext';
 import { VoiceInputService } from './sentient-sims/services/VoiceInputService';
+import { TwitchChatService } from './sentient-sims/services/TwitchChatService';
 import { version as releaseAppVersion } from '../../release/app/package.json';
 
 log.initialize({ preload: true });
@@ -69,6 +70,7 @@ log.transports.file.archiveLogFn = (oldLogFile) => {
 
 let mainWindow: BrowserWindow | null = null;
 let voiceInputService: VoiceInputService | null = null;
+let twitchChatService: TwitchChatService | null = null;
 
 if (process.env.NODE_ENV === 'production') {
   installSourceMapSupport();
@@ -179,14 +181,21 @@ const startServices = () => {
   });
   voiceInputService?.shutdown();
   voiceInputService = new VoiceInputService(ctx);
-  // Single listener slot: compose so both the renderer cache and the voice hotkey
-  // react to setting writes
+  twitchChatService?.shutdown();
+  twitchChatService = new TwitchChatService(ctx);
+  // The chat service lives here (beside VoiceInputService) but HTTP controllers reach it
+  // through the context for the /debug/twitch-message route
+  ctx.setTwitchChat(twitchChatService);
+  // Single listener slot: compose so the renderer cache, the voice hotkey, and the Twitch
+  // connection all react to setting writes
   settingsService.onSettingChanged((key, value) => {
     notifySettingChanged(key, value);
     voiceInputService?.onSettingChanged(key);
+    twitchChatService?.onSettingChanged(key);
   });
-  ipcHandlers(ctx, voiceInputService);
+  ipcHandlers(ctx, voiceInputService, twitchChatService);
   voiceInputService.initialize();
+  twitchChatService.initialize();
 
   if (ctx.settings.debugLogs) {
     enableDebugLogging();
@@ -263,6 +272,7 @@ app.on('window-all-closed', () => {
 // The uiohook keyboard-hook thread keeps the process alive unless stopped
 app.on('will-quit', () => {
   voiceInputService?.shutdown();
+  twitchChatService?.shutdown();
 });
 
 // Concurrent copies fight over ports 25145/25146/25148 and every one of them ends up

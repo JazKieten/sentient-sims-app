@@ -8,6 +8,7 @@ import { getAllBrowserWindows } from './util/browserWindows';
 import { resolveHtmlPath } from '../util';
 import { ApiContext } from './services/ApiContext';
 import { VoiceInputService } from './services/VoiceInputService';
+import { TwitchChatService } from './services/TwitchChatService';
 import { InteractionDTO } from './db/dto/InteractionDTO';
 import { Animation } from './models/Animation';
 
@@ -35,7 +36,7 @@ async function handleSelectGameApp() {
   return null;
 }
 
-export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputService) {
+export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputService, twitchChat: TwitchChatService) {
   ipcMain.handle('dialog:selectDirectory', handleSelectDirectory);
   ipcMain.handle('dialog:selectGameApp', handleSelectGameApp);
   ipcMain.on('set-setting', (_event: IpcMainEvent, setting: SettingsEnum, value: unknown) => {
@@ -105,5 +106,13 @@ export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputServi
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
+  });
+
+  // Twitch !ask: settings panel status seed + account login (device code flow)
+  ipcMain.handle('twitch-status-get', () => twitchChat.getStatus());
+  ipcMain.handle('twitch-login-start', () => ctx.twitchAuth.startDeviceLogin());
+  ipcMain.handle('twitch-logout', () => {
+    ctx.twitchAuth.logout();
+    return ctx.twitchAuth.getStatus();
   });
 }

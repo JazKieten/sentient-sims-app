@@ -34,7 +34,9 @@ import {
   defaultGameAppPath,
   defaultVoiceInputHotkey,
   defaultVoiceInputModel,
+  defaultTwitchCommandWord,
 } from '../constants';
+import { TwitchStoredAuth } from '../models/TwitchChatStatus';
 import { disableDebugLogging, enableDebugLogging } from '../util/debugLog';
 import { defaultSentientSimsAITTSSettings, SentientSimsAITTSSettings } from '../models/SentientSimsAITTSSettings';
 import { defaultKokoroAITTSSettings, KokoroAITTSSettings } from '../models/KokoroAITTSSettings';
@@ -341,6 +343,44 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.VOICE_INPUT_DEVICE_ID.toString()]: {
         type: 'string',
         default: '',
+      },
+      [SettingsEnum.TWITCH_CHAT_ENABLED.toString()]: {
+        type: 'boolean',
+        default: false,
+      },
+      [SettingsEnum.TWITCH_CHANNEL.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.TWITCH_COMMAND_WORD.toString()]: {
+        type: 'string',
+        default: defaultTwitchCommandWord,
+      },
+      [SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS.toString()]: {
+        type: 'number',
+        default: 60,
+      },
+      [SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS.toString()]: {
+        type: 'number',
+        default: 15,
+      },
+      [SettingsEnum.TWITCH_ASK_PERMISSION.toString()]: {
+        type: 'string',
+        default: 'everyone',
+      },
+      // On by default: the follower requirement is the point of the account login;
+      // without a connected account the gate fails closed with a visible reason
+      [SettingsEnum.TWITCH_FOLLOWERS_ONLY.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
+      [SettingsEnum.TWITCH_CLIENT_ID.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.TWITCH_AUTH.toString()]: {
+        type: 'object',
+        default: {},
       },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
@@ -1136,6 +1176,51 @@ export class SettingsService {
 
   get voiceInputLanguage(): string {
     return this.get(SettingsEnum.VOICE_INPUT_LANGUAGE) as string;
+  }
+
+  get twitchChatEnabled(): boolean {
+    return this.get(SettingsEnum.TWITCH_CHAT_ENABLED) as boolean;
+  }
+
+  // Normalized for IRC JOIN: lowercase login name, no leading '#'
+  get twitchChannel(): string {
+    return (this.get(SettingsEnum.TWITCH_CHANNEL) as string).trim().replace(/^#/, '').toLowerCase();
+  }
+
+  get twitchCommandWord(): string {
+    return (this.get(SettingsEnum.TWITCH_COMMAND_WORD) as string).trim() || defaultTwitchCommandWord;
+  }
+
+  get twitchViewerCooldownSeconds(): number {
+    const raw = Number(this.get(SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS));
+    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 60));
+  }
+
+  get twitchGlobalCooldownSeconds(): number {
+    const raw = Number(this.get(SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS));
+    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 15));
+  }
+
+  get twitchAskPermission(): 'everyone' | 'subs' | 'mods' {
+    const raw = this.get(SettingsEnum.TWITCH_ASK_PERMISSION) as string;
+    return raw === 'subs' || raw === 'mods' ? raw : 'everyone';
+  }
+
+  get twitchFollowersOnly(): boolean {
+    return this.get(SettingsEnum.TWITCH_FOLLOWERS_ONLY) !== false;
+  }
+
+  get twitchClientId(): string {
+    return (this.get(SettingsEnum.TWITCH_CLIENT_ID) as string).trim();
+  }
+
+  get twitchAuth(): TwitchStoredAuth {
+    const raw = this.get(SettingsEnum.TWITCH_AUTH);
+    return raw && typeof raw === 'object' ? raw : {};
+  }
+
+  set twitchAuth(value: TwitchStoredAuth) {
+    this.set(SettingsEnum.TWITCH_AUTH, value);
   }
 
   get prefetchMaxQueueDepth(): number {

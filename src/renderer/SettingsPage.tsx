@@ -15,6 +15,7 @@ import { ModsDirectoryComponent } from './ModsDirectoryComponent';
 import { GameAppPathComponent } from './GameAppPathComponent';
 import { useAISettings } from './providers/AISettingsProvider';
 import VoiceSettingsComponent from './settings/VoiceSettingsComponent';
+import TwitchSettingsComponent from './settings/TwitchSettingsComponent';
 import { useSetupWizard } from './providers/SetupWizardProvider';
 import { AiMaxResponseLengthSettingsComponent } from './settings/AiMaxResponseLengthSettingsComponent';
 import { ProviderConfigsComponent } from './settings/ProviderConfigsComponent';
@@ -25,6 +26,7 @@ import useSetting from './hooks/useSetting';
 enum SettingsTabSelectionValue {
   Settings = 'settings',
   Voice = 'voice',
+  Twitch = 'twitch',
 }
 
 export default function SettingsPage() {
@@ -108,6 +110,9 @@ export default function SettingsPage() {
           </TabPanel>
           <TabPanel value={SettingsTabSelectionValue.Voice}>
             <VoiceSettingsComponent />
+          </TabPanel>
+          <TabPanel value={SettingsTabSelectionValue.Twitch}>
+            <TwitchSettingsComponent />
           </TabPanel>
         </TabContext>
       </AppCard>

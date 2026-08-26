@@ -5,7 +5,7 @@ import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
 import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
-import { ModPlayerVoiceStatus, ModWebsocketMessageType, ModWebsocketNotification, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
+import { ModWebsocketMessageType, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
 import { CaughtError } from '../models/CaughtError';
 import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
@@ -13,6 +13,7 @@ import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
 import { castVoicesForLines } from '../formatter/ElevenLabsVoiceCasting';
 import { SentientSim } from '../models/SentientSim';
+import { TwitchChatStatus } from '../models/TwitchChatStatus';
 import { consumePacedScene } from './pacedScenes';
 
 function notifyAllWindows(message: string, ...args: unknown[]) {
@@ -37,7 +38,7 @@ export function notifyProviderHealth(health: { down: boolean; failures: number; 
         }. Sims will keep playing on their own until it recovers.`,
         message_type: ModWebsocketNotificationType.MESSAGE,
       },
-    } as ModWebsocketNotification);
+    });
   }
 }
 
@@ -48,6 +49,11 @@ export function notifyClockState(state: ClockState) {
 
 export function notifySettingChanged(setting: string, value: unknown) {
   notifyAllWindows('setting-changed', setting, value);
+}
+
+// Twitch !ask connection/queue status for the settings panel's chip + last-event line
+export function notifyTwitchStatus(status: TwitchChatStatus) {
+  notifyAllWindows('twitch-status', status);
 }
 
 export function notifyNewMemoryAdded(memory: MemoryEntity, options?: { notifyMod?: boolean }) {
@@ -178,7 +184,7 @@ export function sendPlayerVoiceStatusToMod(
     detail,
     speaker: extra?.speaker,
     mode: extra?.mode,
-  } as ModPlayerVoiceStatus);
+  });
 }
 
 export function playTTS(text: string, sims?: SentientSim[], voiceOverrides?: Map<string, string>) {

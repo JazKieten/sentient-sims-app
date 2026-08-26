@@ -1,0 +1,464 @@
+import log from 'electron-log';
+import { WebSocket } from 'ws';
+import { SettingsEnum } from '../models/SettingsEnum';
+import {
+  twitchAnswerFallbackMs,
+  twitchAnswerSettleMs,
+  twitchAskQueueCap,
+  twitchIdleTimeoutMs,
+  twitchIrcUrl,
+  twitchModRetryMs,
+  twitchQuestionMaxLength,
+  twitchReconnectMaxMs,
+} from '../constants';
+import { TwitchChatState, TwitchChatStatus } from '../models/TwitchChatStatus';
+import { notifyTwitchStatus, sendPlayerVoiceMessageToMod } from '../util/notifyRenderer';
+import { onPlayerVoiceAnswerComplete } from '../util/playerVoiceSignal';
+import {
+  extractCommand,
+  parseBadges,
+  parseIrcLine,
+  sanitizeQuestion,
+  splitIrcLines,
+  stripAction,
+} from '../util/twitchIrc';
+import { isWebSocketConnected } from '../websocketServer';
+import { ApiContext } from './ApiContext';
+
+// Minimal surface of `ws`'s WebSocket so tests can inject a scripted fake
+export type TwitchSocketLike = {
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  send(data: string): void;
+  close(): void;
+};
+
+export type TwitchSocketFactory = (url: string) => TwitchSocketLike;
+
+const defaultSocketFactory: TwitchSocketFactory = (url) => new WebSocket(url);
+
+type QueuedQuestion = {
+  question: string;
+  viewer: string;
+};
+
+// Twitch !ask: an anonymous read-only IRC connection (justinfan nick, no OAuth) watches the
+// streamer's chat for the command word and feeds accepted questions one at a time into the
+// existing player-voice pipeline — the active sim answers aloud as the player's persona
+// ("The Voice" by default) with subtitle and memory handled downstream. Lifecycle mirrors
+// VoiceInputService: constructed in main.ts, initialize/shutdown, onSettingChanged.
+export class TwitchChatService {
+  private readonly ctx: ApiContext;
+
+  private readonly socketFactory: TwitchSocketFactory;
+
+  private socket?: TwitchSocketLike;
+
+  // Bumped on every (re)connect and captured by socket handlers so a torn-down socket's
+  // close/error events cannot clobber the replacement connection's state
+  private epoch = 0;
+
+  private state: TwitchChatState = 'disabled';
+
+  private lastEvent?: string;
+
+  private readonly queue: QueuedQuestion[] = [];
+
+  private inFlight = false;
+
+  private backoffAttempt = 0;
+
+  private lastGlobalAcceptAt = 0;
+
+  private readonly viewerLastAcceptAt = new Map<string, number>();
+
+  private reconnectTimer?: NodeJS.Timeout;
+
+  private idleTimer?: NodeJS.Timeout;
+
+  private fallbackTimer?: NodeJS.Timeout;
+
+  private settleTimer?: NodeJS.Timeout;
+
+  private modRetryTimer?: NodeJS.Timeout;
+
+  private reconfigureTimer?: NodeJS.Timeout;
+
+  private unsubscribeAnswerSignal?: () => void;
+
+  constructor(ctx: ApiContext, socketFactory?: TwitchSocketFactory) {
+    this.ctx = ctx;
+    this.socketFactory = socketFactory ?? defaultSocketFactory;
+  }
+
+  initialize() {
+    this.unsubscribeAnswerSignal = onPlayerVoiceAnswerComplete(() => {
+      this.handleAnswerComplete();
+    });
+    this.ctx.twitchAuth.onChanged = () => {
+      this.pushStatus();
+    };
+    this.reconfigure();
+  }
+
+  shutdown() {
+    this.unsubscribeAnswerSignal?.();
+    this.unsubscribeAnswerSignal = undefined;
+    this.clearTimer('reconnectTimer');
+    this.clearTimer('idleTimer');
+    this.clearTimer('fallbackTimer');
+    this.clearTimer('settleTimer');
+    this.clearTimer('modRetryTimer');
+    this.clearTimer('reconfigureTimer');
+    this.closeSocket();
+    this.queue.length = 0;
+    this.inFlight = false;
+    this.state = 'disabled';
+  }
+
+  onSettingChanged(key: string) {
+    if (key === (SettingsEnum.TWITCH_CHAT_ENABLED as string) || key === (SettingsEnum.TWITCH_CHANNEL as string)) {
+      // Debounced: the settings UI writes per keystroke and each channel change reconnects
+      this.clearTimer('reconfigureTimer');
+      this.reconfigureTimer = setTimeout(() => {
+        this.reconfigure();
+      }, 500);
+    } else if (key.startsWith('twitch')) {
+      // Cooldowns/permission/command word are read live per message; just refresh the panel
+      this.pushStatus();
+    }
+  }
+
+  getStatus(): TwitchChatStatus {
+    return {
+      state: this.state,
+      channel: this.ctx.settings.twitchChannel,
+      queueDepth: this.queue.length,
+      lastEvent: this.lastEvent,
+      auth: this.ctx.twitchAuth.getStatus(),
+    };
+  }
+
+  // The /debug/twitch-message route: exercises the exact same path as a live PRIVMSG so the
+  // whole pipeline can be tested end-to-end without a live stream
+  handleDebugMessage(user: string, message: string, opts?: { mod?: boolean; subscriber?: boolean; userId?: string }) {
+    const tags: Record<string, string> = {
+      'display-name': user,
+      'user-id': opts?.userId ?? '',
+      'mod': opts?.mod ? '1' : '0',
+      'subscriber': opts?.subscriber ? '1' : '0',
+    };
+    this.handleChatMessage(user, tags, message);
+  }
+
+  private reconfigure() {
+    this.clearTimer('reconnectTimer');
+    this.backoffAttempt = 0;
+    this.closeSocket();
+    const channel = this.ctx.settings.twitchChannel;
+    if (!this.ctx.settings.twitchChatEnabled || !channel) {
+      this.setState('disabled');
+      return;
+    }
+    this.connect();
+  }
+
+  private connect() {
+    this.epoch += 1;
+    const epoch = this.epoch;
+    const channel = this.ctx.settings.twitchChannel;
+    this.setState(this.backoffAttempt > 0 ? 'reconnecting' : 'connecting');
+    let socket: TwitchSocketLike;
+    try {
+      socket = this.socketFactory(twitchIrcUrl);
+    } catch (err) {
+      log.error('Twitch: could not open chat socket', err);
+      this.scheduleReconnect(epoch);
+      return;
+    }
+    this.socket = socket;
+    socket.on('open', () => {
+      if (epoch !== this.epoch) {
+        return;
+      }
+      // Anonymous read-only login; fresh digits per attempt sidestep nick collisions.
+      // Tags are requested for the mods/subs filter and the follower gate's user-id.
+      const nick = `justinfan${Math.floor(10000 + Math.random() * 89999)}`;
+      this.sendRaw('CAP REQ :twitch.tv/tags');
+      this.sendRaw(`NICK ${nick}`);
+      this.sendRaw(`JOIN #${channel}`);
+      this.armIdleWatchdog(epoch);
+    });
+    socket.on('message', (data: unknown) => {
+      if (epoch !== this.epoch) {
+        return;
+      }
+      this.armIdleWatchdog(epoch);
+      this.handleFrame(String(data));
+    });
+    socket.on('close', () => {
+      if (epoch !== this.epoch) {
+        return;
+      }
+      this.scheduleReconnect(epoch);
+    });
+    socket.on('error', (err: unknown) => {
+      if (epoch !== this.epoch) {
+        return;
+      }
+      log.error('Twitch chat socket error', err);
+      // 'close' follows and schedules the reconnect
+    });
+  }
+
+  private handleFrame(frame: string) {
+    splitIrcLines(frame).forEach((line) => {
+      const message = parseIrcLine(line);
+      if (!message) {
+        return;
+      }
+      if (message.command === 'PING') {
+        this.sendRaw(`PONG :${message.trailing ?? 'tmi.twitch.tv'}`);
+        return;
+      }
+      if (message.command === 'RECONNECT') {
+        log.info('Twitch requested a reconnect');
+        this.scheduleReconnect(this.epoch);
+        return;
+      }
+      // 366 = end of JOIN names list: we are in the channel
+      if (message.command === '366') {
+        this.backoffAttempt = 0;
+        this.setState('connected', `Connected to #${this.ctx.settings.twitchChannel}`);
+        log.info(`Twitch: connected to #${this.ctx.settings.twitchChannel}`);
+        return;
+      }
+      if (message.command === 'NOTICE' && (message.trailing ?? '').toLowerCase().includes('login')) {
+        log.warn(`Twitch NOTICE: ${message.trailing}`);
+        this.scheduleReconnect(this.epoch);
+        return;
+      }
+      if (message.command === 'PRIVMSG') {
+        const viewer = message.tags['display-name'] || message.nick || 'viewer';
+        this.handleChatMessage(viewer, message.tags, message.trailing ?? '');
+      }
+    });
+  }
+
+  private handleChatMessage(viewer: string, tags: Record<string, string>, text: string) {
+    const question = extractCommand(stripAction(text), this.ctx.settings.twitchCommandWord);
+    if (question === undefined) {
+      return;
+    }
+    void this.handleAsk(viewer, tags, question);
+  }
+
+  private async handleAsk(viewer: string, tags: Record<string, string>, rawQuestion: string) {
+    const badges = parseBadges(tags);
+    const privileged = badges.mod || badges.broadcaster;
+
+    const permission = this.ctx.settings.twitchAskPermission;
+    if (permission === 'mods' && !privileged) {
+      this.drop(`Dropped !ask from ${viewer}: mods only`);
+      return;
+    }
+    if (permission === 'subs' && !privileged && !badges.subscriber) {
+      this.drop(`Dropped !ask from ${viewer}: subscribers only`);
+      return;
+    }
+
+    const now = Date.now();
+    const globalCooldownMs = this.ctx.settings.twitchGlobalCooldownSeconds * 1000;
+    if (now - this.lastGlobalAcceptAt < globalCooldownMs) {
+      this.drop(`Dropped !ask from ${viewer}: global cooldown`);
+      return;
+    }
+    const viewerKey = viewer.toLowerCase();
+    const viewerCooldownMs = this.ctx.settings.twitchViewerCooldownSeconds * 1000;
+    const viewerLast = this.viewerLastAcceptAt.get(viewerKey) ?? 0;
+    if (now - viewerLast < viewerCooldownMs) {
+      this.drop(`Dropped !ask from ${viewer}: viewer cooldown`);
+      return;
+    }
+
+    const question = sanitizeQuestion(rawQuestion, twitchQuestionMaxLength);
+    if (!question) {
+      this.drop(`Dropped !ask from ${viewer}: empty question`);
+      return;
+    }
+
+    if (this.ctx.settings.twitchFollowersOnly && !privileged) {
+      if (!this.ctx.twitchAuth.getStatus().loggedIn) {
+        this.drop('Follower gate is on but no Twitch account is connected (Settings, Twitch tab)');
+        return;
+      }
+      const viewerUserId = tags['user-id'];
+      if (!viewerUserId) {
+        this.drop(`Dropped !ask from ${viewer}: no user id on the message`);
+        return;
+      }
+      const follows = await this.ctx.twitchAuth.isFollower(viewerUserId);
+      if (follows === undefined) {
+        this.drop(`Dropped !ask from ${viewer}: follower check unavailable`);
+        return;
+      }
+      if (!follows) {
+        this.drop(`Dropped !ask from ${viewer}: not a follower`);
+        return;
+      }
+    }
+
+    if (this.queue.length >= twitchAskQueueCap) {
+      this.drop(`Dropped !ask from ${viewer}: question queue full`);
+      return;
+    }
+
+    // Stamp cooldowns only on accept so a gated ask does not burn the viewer's cooldown
+    this.lastGlobalAcceptAt = now;
+    this.viewerLastAcceptAt.set(viewerKey, now);
+    this.pruneViewerCooldowns();
+
+    this.queue.push({ question, viewer });
+    this.setEvent(`Accepted !ask from ${viewer}`);
+    log.info(`Twitch: accepted !ask from ${viewer}: ${question}`);
+    this.maybeDispatch();
+  }
+
+  private maybeDispatch() {
+    this.clearTimer('modRetryTimer');
+    if (this.inFlight || this.queue.length === 0) {
+      return;
+    }
+    if (!isWebSocketConnected('mod')) {
+      // sendModNotification silently drops when the game is away — hold the queue instead
+      this.setEvent('Waiting: game not connected');
+      this.modRetryTimer = setTimeout(() => {
+        this.maybeDispatch();
+      }, twitchModRetryMs);
+      return;
+    }
+    const item = this.queue.shift();
+    if (!item) {
+      return;
+    }
+    this.inFlight = true;
+    sendPlayerVoiceMessageToMod(item.question);
+    this.setEvent(`Asking the sim (from ${item.viewer})`);
+    log.info(`Twitch: sent question to the game (from ${item.viewer})`);
+    // If the mod never posts the chat event back (game paused, echo lost), release anyway
+    this.fallbackTimer = setTimeout(() => {
+      log.warn('Twitch: no answer signal within the fallback window; releasing the queue');
+      this.inFlight = false;
+      this.maybeDispatch();
+    }, twitchAnswerFallbackMs);
+  }
+
+  private handleAnswerComplete() {
+    if (!this.inFlight) {
+      return;
+    }
+    this.clearTimer('fallbackTimer');
+    this.clearTimer('settleTimer');
+    // Short breather so this answer's subtitle/TTS starts before the next question lands
+    this.settleTimer = setTimeout(() => {
+      this.inFlight = false;
+      this.maybeDispatch();
+    }, twitchAnswerSettleMs);
+  }
+
+  private scheduleReconnect(epoch: number) {
+    if (epoch !== this.epoch) {
+      return;
+    }
+    this.closeSocket();
+    this.clearTimer('idleTimer');
+    if (!this.ctx.settings.twitchChatEnabled || !this.ctx.settings.twitchChannel) {
+      this.setState('disabled');
+      return;
+    }
+    this.backoffAttempt += 1;
+    const delay = Math.min(1000 * 2 ** (this.backoffAttempt - 1), twitchReconnectMaxMs) + Math.random() * 1000;
+    this.setState('reconnecting', `Reconnecting to Twitch (attempt ${this.backoffAttempt})`);
+    this.clearTimer('reconnectTimer');
+    this.reconnectTimer = setTimeout(() => {
+      this.connect();
+    }, delay);
+  }
+
+  // Twitch pings roughly every 5 minutes; a silent socket is half-open (sleep/wake)
+  private armIdleWatchdog(epoch: number) {
+    this.clearTimer('idleTimer');
+    this.idleTimer = setTimeout(() => {
+      if (epoch !== this.epoch) {
+        return;
+      }
+      log.warn('Twitch chat socket went silent; reconnecting');
+      this.scheduleReconnect(epoch);
+    }, twitchIdleTimeoutMs);
+  }
+
+  private pruneViewerCooldowns() {
+    if (this.viewerLastAcceptAt.size <= 500) {
+      return;
+    }
+    const cutoff = Date.now() - this.ctx.settings.twitchViewerCooldownSeconds * 1000;
+    [...this.viewerLastAcceptAt.entries()].forEach(([key, acceptedAt]) => {
+      if (acceptedAt < cutoff) {
+        this.viewerLastAcceptAt.delete(key);
+      }
+    });
+  }
+
+  private sendRaw(line: string) {
+    try {
+      this.socket?.send(`${line}\r\n`);
+    } catch (err) {
+      log.error('Twitch: could not send to chat socket', err);
+    }
+  }
+
+  private closeSocket() {
+    const socket = this.socket;
+    this.socket = undefined;
+    // Orphan the old socket's events before closing so its 'close' cannot re-schedule
+    this.epoch += 1;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  private drop(reason: string) {
+    log.info(`Twitch: ${reason}`);
+    this.setEvent(reason);
+  }
+
+  private setEvent(event: string) {
+    this.lastEvent = event;
+    this.pushStatus();
+  }
+
+  private setState(state: TwitchChatState, event?: string) {
+    this.state = state;
+    if (event) {
+      this.lastEvent = event;
+    }
+    this.pushStatus();
+  }
+
+  private pushStatus() {
+    notifyTwitchStatus(this.getStatus());
+  }
+
+  private clearTimer(
+    name: 'reconnectTimer' | 'idleTimer' | 'fallbackTimer' | 'settleTimer' | 'modRetryTimer' | 'reconfigureTimer',
+  ) {
+    const timer = this[name];
+    if (timer) {
+      clearTimeout(timer);
+      this[name] = undefined;
+    }
+  }
+}

@@ -1,0 +1,34 @@
+export type TwitchChatState = 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+
+export type TwitchAuthStatus = {
+  loggedIn: boolean;
+  // Twitch login name of the connected (broadcaster) account
+  login?: string;
+};
+
+// Pushed to the renderer over 'twitch-status' whenever anything changes; the settings
+// panel renders the chip + last-event line straight from this.
+export type TwitchChatStatus = {
+  state: TwitchChatState;
+  channel: string;
+  queueDepth: number;
+  // Human-readable "why did nothing play" line: accepted/dropped/waiting reasons
+  lastEvent?: string;
+  auth: TwitchAuthStatus;
+};
+
+// Result of starting a device-code login: the person enters userCode at verificationUri
+export type TwitchDeviceLoginStart = {
+  userCode?: string;
+  verificationUri?: string;
+  error?: string;
+};
+
+// What the device-code login persists (electron-store, same plaintext precedent as the
+// app's other tokens). broadcasterId/login identify the connected account.
+export type TwitchStoredAuth = {
+  accessToken?: string;
+  refreshToken?: string;
+  broadcasterId?: string;
+  login?: string;
+};

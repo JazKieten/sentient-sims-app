@@ -7,6 +7,11 @@ import 'electron-log/preload';
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { SettingsEnum } from './sentient-sims/models/SettingsEnum';
 import { CaughtError } from './sentient-sims/models/CaughtError';
+import type {
+  TwitchAuthStatus,
+  TwitchChatStatus,
+  TwitchDeviceLoginStart,
+} from './sentient-sims/models/TwitchChatStatus';
 
 type IpcCallback = (event: IpcRendererEvent, ...args: any[]) => void;
 
@@ -188,6 +193,20 @@ const electronHandler = {
   },
   notifyVoiceRecordError: (message: string) => {
     ipcRenderer.send('voice-record-error', message);
+  },
+  onTwitchStatus: (callback: IpcCallback) => {
+    ipcRenderer.on('twitch-status', callback);
+
+    return () => ipcRenderer.removeListener('twitch-status', callback);
+  },
+  getTwitchStatus: (): Promise<TwitchChatStatus> => {
+    return ipcRenderer.invoke('twitch-status-get') as Promise<TwitchChatStatus>;
+  },
+  twitchLoginStart: (): Promise<TwitchDeviceLoginStart> => {
+    return ipcRenderer.invoke('twitch-login-start') as Promise<TwitchDeviceLoginStart>;
+  },
+  twitchLogout: (): Promise<TwitchAuthStatus> => {
+    return ipcRenderer.invoke('twitch-logout') as Promise<TwitchAuthStatus>;
   },
   setAmplify: async (key: string, value: string): Promise<unknown> => {
     return ipcRenderer.invoke('set-amplify', key, value);

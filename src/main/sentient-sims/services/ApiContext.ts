@@ -77,6 +77,8 @@ import { SentientSimsAIService } from './SentientSimsAIService';
 import { SentientSimsEmbeddingService } from './SentientSimsEmbeddingService';
 import { SettingsService } from './SettingsService';
 import { TranscriptionService } from './TranscriptionService';
+import { TwitchAuthService } from './TwitchAuthService';
+import { TwitchChatService } from './TwitchChatService';
 import { UpdateService } from './UpdateService';
 import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
@@ -258,6 +260,12 @@ export class ApiContext {
   private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
   private readonly _transcriptionService: TranscriptionService;
+
+  private readonly _twitchAuthService: TwitchAuthService;
+
+  // Constructed in main.ts beside VoiceInputService and registered here so HTTP
+  // controllers (the /debug/twitch-message route) can reach it
+  private _twitchChatService?: TwitchChatService;
   // One logging wrapper per provider service, so repeated getGenerationService calls
   // hand back the same object instead of allocating a new proxy each time
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
@@ -359,6 +367,7 @@ export class ApiContext {
     this._paintingMountService = new PaintingMountService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
+    this._twitchAuthService = new TwitchAuthService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService);
     this._memoryRepository.setOnMemoryUpserted((memory) => {
@@ -372,6 +381,18 @@ export class ApiContext {
     this._cognitionService = new CognitionService(this);
 
     this._controller = new ControllerContext(this);
+  }
+
+  get twitchAuth(): TwitchAuthService {
+    return this._twitchAuthService;
+  }
+
+  get twitchChat(): TwitchChatService | undefined {
+    return this._twitchChatService;
+  }
+
+  setTwitchChat(service: TwitchChatService) {
+    this._twitchChatService = service;
   }
 
   get port(): number {

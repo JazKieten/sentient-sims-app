@@ -90,6 +90,17 @@ export enum SettingsEnum {
   GAME_APP_PATH = 'gameAppPath',
   IMAGE_PROVIDER_CONFIGS = 'imageProviderConfigs',
   DEFAULT_IMAGE_PROVIDER_CONFIG_ID = 'defaultImageProviderConfigId',
+  // Twitch !ask: viewers' chat questions delivered to the active sim via the player-voice
+  // pipeline (anonymous read-only IRC; the optional account login powers the follower gate)
+  TWITCH_CHAT_ENABLED = 'twitchChatEnabled',
+  TWITCH_CHANNEL = 'twitchChannel',
+  TWITCH_COMMAND_WORD = 'twitchCommandWord',
+  TWITCH_VIEWER_COOLDOWN_SECONDS = 'twitchViewerCooldownSeconds',
+  TWITCH_GLOBAL_COOLDOWN_SECONDS = 'twitchGlobalCooldownSeconds',
+  TWITCH_ASK_PERMISSION = 'twitchAskPermission', // everyone | subs | mods
+  TWITCH_FOLLOWERS_ONLY = 'twitchFollowersOnly',
+  TWITCH_CLIENT_ID = 'twitchClientId',
+  TWITCH_AUTH = 'twitchAuth', // stored device-flow tokens + broadcaster identity
 }
 
 export enum DeprecatedSettingsEnum {

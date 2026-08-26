@@ -52,4 +52,28 @@ export class DebugController {
   sendBugReport = async (req: Request, res: Response) => {
     res.json(await this.ctx.logSend.sendBugReport(webhookUrl, req.body as InteractionBugReport));
   };
+
+  // E2E test for the Twitch !ask pipeline without a live stream: injects a fake chat
+  // message through the exact same path as a real PRIVMSG.
+  // curl -X POST /debug/twitch-message -d '{"user":"viewer1","message":"!ask ..."}'
+  injectTwitchMessage = (req: Request, res: Response) => {
+    const { user, message, mod, subscriber, userId } = req.body as {
+      user?: string;
+      message?: string;
+      mod?: boolean;
+      subscriber?: boolean;
+      userId?: string;
+    };
+    if (!message) {
+      res.status(400).json({ error: 'Must include message in request body' });
+      return;
+    }
+    const twitchChat = this.ctx.twitchChat;
+    if (!twitchChat) {
+      res.status(503).json({ error: 'Twitch chat service is not started' });
+      return;
+    }
+    twitchChat.handleDebugMessage(user ?? 'debugviewer', message, { mod, subscriber, userId });
+    res.json(twitchChat.getStatus());
+  };
 }

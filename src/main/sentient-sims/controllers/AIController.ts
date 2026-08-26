@@ -3,6 +3,7 @@ import log from 'electron-log';
 import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { playTTS, sendChatGeneration } from '../util/notifyRenderer';
+import { emitPlayerVoiceAnswerComplete } from '../util/playerVoiceSignal';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { InteractionEventStatus } from '../models/InteractionEventResult';
 import { BuffEventRequest, BuffDescriptionRequest, ClassificationRequest } from '../models/OpenAIRequestBuilder';
@@ -60,7 +61,13 @@ export class AIController {
     // so chat messages skip ahead of queued prefetch generations
     const isChat = event.event_type === SSEventType.CHAT || event.event_type === SSEventType.CHAT_CONTINUE;
     const result = isPlayerVoice
-      ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event))
+      ? // finally: the Twitch !ask queue paces one viewer question per answered generation,
+        // and an errored generation must release it too
+        await this.ctx.generationQueue
+          .runSpeech(() => this.ctx.ai.interactionEvent(event))
+          .finally(() => {
+            emitPlayerVoiceAnswerComplete();
+          })
       : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event), {
           priority: isChat,
         });

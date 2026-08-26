@@ -12,16 +12,27 @@ import {
   twitchReconnectMaxMs,
 } from '../constants';
 import { TwitchChatState, TwitchChatStatus } from '../models/TwitchChatStatus';
-import { notifyTwitchStatus, sendPlayerVoiceMessageToMod } from '../util/notifyRenderer';
-import { onPlayerVoiceAnswerComplete } from '../util/playerVoiceSignal';
+import { notifyTwitchStatus } from '../util/notifyRenderer';
 import {
   extractCommand,
   parseBadges,
   parseIrcLine,
   sanitizeQuestion,
+  sanitizeViewerName,
   splitIrcLines,
   stripAction,
+  stripLeadingMention,
 } from '../util/twitchIrc';
+import {
+  SimTargetCandidate,
+  SimTargetResolution,
+  TWITCH_CHAT_FLAVOR,
+  TWITCH_CHAT_SPEAKER,
+  buildAskSentientSim,
+  buildTwitchAskEvent,
+  resolveSimTarget,
+} from '../util/twitchSimTarget';
+import { setSimAliases } from '../util/simAliases';
 import { isWebSocketConnected } from '../websocketServer';
 import { ApiContext } from './ApiContext';
 
@@ -40,6 +51,8 @@ type QueuedQuestion = {
   question: string;
   viewer: string;
 };
+
+type RosterCandidate = SimTargetCandidate & { isHousehold?: boolean; isAlias?: boolean };
 
 // Twitch !ask: an anonymous read-only IRC connection (justinfan nick, no OAuth) watches the
 // streamer's chat for the command word and feeds accepted questions one at a time into the
@@ -71,6 +84,11 @@ export class TwitchChatService {
 
   private readonly viewerLastAcceptAt = new Map<string, number>();
 
+  // Twitch stamps every PRIVMSG with a unique id tag; remembering recent ones makes any
+  // double delivery (dev-restart overlap where old+new instance both listen, reconnect
+  // echo) harmless — the duplicate is skipped instead of answered twice
+  private readonly seenMessageIds: string[] = [];
+
   private reconnectTimer?: NodeJS.Timeout;
 
   private idleTimer?: NodeJS.Timeout;
@@ -83,26 +101,20 @@ export class TwitchChatService {
 
   private reconfigureTimer?: NodeJS.Timeout;
 
-  private unsubscribeAnswerSignal?: () => void;
-
   constructor(ctx: ApiContext, socketFactory?: TwitchSocketFactory) {
     this.ctx = ctx;
     this.socketFactory = socketFactory ?? defaultSocketFactory;
   }
 
   initialize() {
-    this.unsubscribeAnswerSignal = onPlayerVoiceAnswerComplete(() => {
-      this.handleAnswerComplete();
-    });
     this.ctx.twitchAuth.onChanged = () => {
       this.pushStatus();
     };
+    setSimAliases(this.ctx.settings.twitchSimAliases);
     this.reconfigure();
   }
 
   shutdown() {
-    this.unsubscribeAnswerSignal?.();
-    this.unsubscribeAnswerSignal = undefined;
     this.clearTimer('reconnectTimer');
     this.clearTimer('idleTimer');
     this.clearTimer('fallbackTimer');
@@ -123,6 +135,10 @@ export class TwitchChatService {
         this.reconfigure();
       }, 500);
     } else if (key.startsWith('twitch')) {
+      if (key === (SettingsEnum.TWITCH_SIM_ALIASES as string)) {
+        // Voice casting reads the alias registry too (see ElevenLabsVoiceCasting)
+        setSimAliases(this.ctx.settings.twitchSimAliases);
+      }
       // Cooldowns/permission/command word are read live per message; just refresh the panel
       this.pushStatus();
     }
@@ -245,8 +261,26 @@ export class TwitchChatService {
   }
 
   private handleChatMessage(viewer: string, tags: Record<string, string>, text: string) {
-    const question = extractCommand(stripAction(text), this.ctx.settings.twitchCommandWord);
+    // Every received message is visible at debug level so a missing !ask is never invisible
+    log.debug(`Twitch <${viewer}>: ${text}`);
+    const messageId = tags.id;
+    if (messageId) {
+      if (this.seenMessageIds.includes(messageId)) {
+        log.info(`Twitch: skipped duplicate delivery of message ${messageId} from ${viewer}`);
+        return;
+      }
+      this.seenMessageIds.push(messageId);
+      if (this.seenMessageIds.length > 100) {
+        this.seenMessageIds.shift();
+      }
+    }
+    const commandWord = this.ctx.settings.twitchCommandWord;
+    // Twitch's reply feature prefixes "@username " — strip it or those asks vanish silently
+    const question = extractCommand(stripLeadingMention(stripAction(text)), commandWord);
     if (question === undefined) {
+      if (text.toLowerCase().includes(commandWord.toLowerCase())) {
+        log.info(`Twitch: message from ${viewer} contains ${commandWord} but did not parse as a command: ${text}`);
+      }
       return;
     }
     void this.handleAsk(viewer, tags, question);
@@ -329,8 +363,18 @@ export class TwitchChatService {
       return;
     }
     if (!isWebSocketConnected('mod')) {
-      // sendModNotification silently drops when the game is away — hold the queue instead
+      // The answer's subtitles/TTS pushes need the game — hold the queue instead of losing it
       this.setEvent('Waiting: game not connected');
+      this.modRetryTimer = setTimeout(() => {
+        this.maybeDispatch();
+      }, twitchModRetryMs);
+      return;
+    }
+    const roster = this.rosterCandidates();
+    if (!roster.some((candidate) => !candidate.isAlias)) {
+      // The game reports its sims every ~5s; before the first report there is no one to
+      // ask (aliases alone don't count — unnamed asks need a real active-sim fallback)
+      this.setEvent('Waiting: no sims reported yet');
       this.modRetryTimer = setTimeout(() => {
         this.maybeDispatch();
       }, twitchModRetryMs);
@@ -341,15 +385,129 @@ export class TwitchChatService {
       return;
     }
     this.inFlight = true;
-    sendPlayerVoiceMessageToMod(item.question);
-    this.setEvent(`Asking the sim (from ${item.viewer})`);
-    log.info(`Twitch: sent question to the game (from ${item.viewer})`);
-    // If the mod never posts the chat event back (game paused, echo lost), release anyway
+    this.dispatchAsk(item, roster);
+    // Backstop only — completion is the generation promise; this releases the queue if a
+    // generation hangs past the mod's own 80s abandon window
     this.fallbackTimer = setTimeout(() => {
-      log.warn('Twitch: no answer signal within the fallback window; releasing the queue');
+      log.warn('Twitch: ask generation never settled within the fallback window; releasing the queue');
       this.inFlight = false;
       this.maybeDispatch();
     }, twitchAnswerFallbackMs);
+  }
+
+  // The roster from the last FULL state report. Paused heartbeats and daemon-thread
+  // supplements arrive WITHOUT a sims array and still become the cache's "latest report"
+  // (live 08-26 that starved the roster for 20+ minutes), so the last full roster is kept
+  // here. The cache's all-time per-sim entries are NOT a substitute: they span lots and
+  // saves, and live 08-26 they grew two "(active)" sims and sent every unnamed ask to a
+  // sim the player no longer controlled.
+  private lastRoster: RosterCandidate[] = [];
+
+  // Sims the game currently reports (household + up to 8 on-lot NPCs), plus configured
+  // aliases: sims the game reports namelessly (service NPCs like the Grim Reaper), which
+  // chat may address even when they are not on the lot. Aliases never lift the roster
+  // hold and never catch the active-sim fallback.
+  private rosterCandidates(): RosterCandidate[] {
+    try {
+      const sims = this.ctx.simStateCache.getReport()?.sims ?? [];
+      if (sims.length > 0) {
+        this.lastRoster = sims.flatMap((entry) =>
+          entry.sim_id && entry.sim_name
+            ? [
+                {
+                  simId: entry.sim_id,
+                  name: entry.sim_name,
+                  isActive: entry.is_active,
+                  isHousehold: entry.is_household,
+                },
+              ]
+            : [],
+        );
+      }
+      const aliases: RosterCandidate[] = this.ctx.settings.twitchSimAliases.map((alias) => ({
+        simId: alias.simId,
+        name: alias.name,
+        isAlias: true,
+      }));
+      return [...this.lastRoster, ...aliases];
+    } catch {
+      return this.lastRoster;
+    }
+  }
+
+  private dispatchAsk(item: QueuedQuestion, roster: RosterCandidate[]) {
+    const resolved = resolveSimTarget(item.question, roster);
+    if (!resolved && item.question.trim().split(/\s+/).length >= 2) {
+      // Diagnosability: last time targeting "didn't work" the fallback was silent
+      log.info(
+        `Twitch: no sim name matched; the active sim answers. Roster: ${roster
+          .map((candidate) => candidate.name + (candidate.isActive ? ' (active)' : ''))
+          .join(', ')}`,
+      );
+    }
+    // Unnamed asks always go to a REAL reported sim (the hold above guarantees one exists);
+    // an alias must never absorb them
+    const realSims = roster.filter((candidate) => !candidate.isAlias);
+    const fallback =
+      realSims.find((candidate) => candidate.isActive) ??
+      realSims.find((candidate) => candidate.isHousehold !== false) ??
+      realSims[0];
+    const target = resolved ?? { simId: fallback.simId, name: fallback.name, question: item.question };
+    // Display credit: "(viewer)" for the active sim, "(viewer, to Jonah)" when the viewer
+    // named a sim. The mod's speaker-tag regex allows at most 40 non-paren chars, and a
+    // failed match demotes the whole line to narration — hence the hard cap.
+    const viewerTag = sanitizeViewerName(item.viewer);
+    const displayTag = resolved
+      ? `${viewerTag}, to ${target.name.trim().split(/\s+/)[0]}`.slice(0, 40).trim()
+      : viewerTag;
+    this.setEvent(`Asking ${target.name} (from ${item.viewer})`);
+    log.info(`Twitch: asking ${target.name}${resolved ? ' (named)' : ''} (from ${item.viewer}): ${target.question}`);
+    void this.ctx.generationQueue
+      .runSpeech(() => this.runAsk(target, displayTag))
+      .catch((err: unknown) => {
+        log.error('Twitch: ask generation failed', err);
+        this.setEvent(`Asking ${target.name} failed; see logs`);
+      })
+      .finally(() => {
+        this.handleAnswerComplete();
+      });
+  }
+
+  // App-built solo chat event: answers Voice-style no matter what conversation is running,
+  // plays next (priority), and the "Chat: <question>" action row gives viewers their own
+  // section in the in-game memories window
+  private async runAsk(target: SimTargetResolution, displayTag: string) {
+    let description: string | undefined;
+    try {
+      description = this.ctx.participantRepository.getParticipant({
+        id: target.simId,
+        fullName: target.name,
+      }).description;
+    } catch {
+      // no save loaded yet: the name and memories still carry the scene
+    }
+    const entry = this.ctx.simStateCache.getSim(target.simId);
+    const sim = buildAskSentientSim({
+      simId: target.simId,
+      name: target.name,
+      description,
+      isActive: entry?.is_active,
+    });
+    const locationId = this.ctx.sceneService.getCurrentScene()?.locationId ?? 0;
+    const event = buildTwitchAskEvent(sim, target.question, locationId);
+    // saveMemory: no mod round trip exists on this path to persist the exchange.
+    // The display speaker credits the asking viewer in-game ("Chat (viewer): ...") while
+    // the model and the stored memory row only ever see plain "Chat".
+    await this.ctx.ai.runDirectedGeneration(
+      event,
+      {
+        playerLine: { speaker: TWITCH_CHAT_SPEAKER, text: target.question },
+        playerLineFlavor: TWITCH_CHAT_FLAVOR,
+        playerLineDisplaySpeaker: `${TWITCH_CHAT_SPEAKER} (${displayTag})`,
+        saveMemory: true,
+      },
+      { priority: true },
+    );
   }
 
   private handleAnswerComplete() {

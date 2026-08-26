@@ -198,12 +198,13 @@ export const twitchOAuthTokenUrl = 'https://id.twitch.tv/oauth2/token';
 export const twitchHelixUrl = 'https://api.twitch.tv/helix';
 export const defaultTwitchCommandWord = '!ask';
 export const twitchQuestionMaxLength = 200;
-export const twitchAskQueueCap = 3;
-// Release the question queue if the mod never posts the chat event back (game paused,
-// generation error, echo lost)
+// Deep on purpose: no ask is ever dropped for a busy queue short of a genuine chat flood
+export const twitchAskQueueCap = 25;
+// Backstop only: completion is the app-side generation promise; this releases the queue
+// if a generation hangs past the mod's own 80s abandon window
 export const twitchAnswerFallbackMs = 60000;
 // Breather after an answer completes so its subtitle/TTS starts before the next question
-export const twitchAnswerSettleMs = 3000;
+export const twitchAnswerSettleMs = 1000;
 // Reconnect backoff cap; base is 1s doubling per attempt, with jitter
 export const twitchReconnectMaxMs = 60000;
 // Twitch pings roughly every 5 minutes; a socket silent longer than this is half-open

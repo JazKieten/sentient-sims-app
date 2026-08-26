@@ -56,7 +56,10 @@ export function notifyTwitchStatus(status: TwitchChatStatus) {
   notifyAllWindows('twitch-status', status);
 }
 
-export function notifyNewMemoryAdded(memory: MemoryEntity, options?: { notifyMod?: boolean }) {
+export function notifyNewMemoryAdded(
+  memory: MemoryEntity,
+  options?: { notifyMod?: boolean; modDisplayAction?: string },
+) {
   log.debug('Sending new memory added to renderer');
   notifyAllWindows('on-new-memory-added', memory);
   // Bookkeeping rows (e.g. outcome memories) skip the mod: memory_created triggers subtitle
@@ -64,12 +67,16 @@ export function notifyNewMemoryAdded(memory: MemoryEntity, options?: { notifyMod
   if (options?.notifyMod === false) {
     return;
   }
+  // Display-only action override for the game-bound copy (e.g. "Chat (viewer): ..." shows
+  // the Twitch asker's name in the memories window while the stored row — and every prompt
+  // that later reads it — keeps the clean speaker)
+  const modBound = options?.modDisplayAction ? { ...memory, action: options.modDisplayAction } : memory;
   sendModNotification({
     type: ModWebsocketMessageType.MEMORY_CREATED,
     // The Flash memories window can't render a null content, and one bad row in its
     // list blanks the whole window on every redraw (see withDisplayContent). The name
     // tags are renderer-only (V-4).
-    memory: withDisplayContent(toModMemory(memory)),
+    memory: withDisplayContent(toModMemory(modBound)),
     paced: consumePacedScene(memory.content),
   });
 }

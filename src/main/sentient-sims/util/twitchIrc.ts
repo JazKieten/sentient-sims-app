@@ -129,6 +129,27 @@ export function stripAction(text: string): string {
   return match ? match[1] : text;
 }
 
+// Twitch's reply feature prefixes "@username " to the message text, which would otherwise
+// hide a perfectly good "!ask ..." from the command parser (observed live 08-24)
+export function stripLeadingMention(text: string): string {
+  return text.replace(/^(?:@\S+[,:]?\s+)+/, '');
+}
+
+// Viewer names ride into the game as a parenthetical display tag ("Chat (viewer): ...");
+// the mod's speaker-tag regex allows up to 40 non-paren chars, so strip nesting hazards
+// and markup and keep it short
+export function sanitizeViewerName(name: string): string {
+  const cleaned = name
+    .replace(/[()<>{}]/g, '')
+    .split('[')
+    .join('')
+    .split(']')
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned.slice(0, 25).trim() || 'viewer';
+}
+
 // '!ask what do you dream about' -> 'what do you dream about'; '!askfoo ...' must NOT match
 export function extractCommand(text: string, commandWord: string): string | undefined {
   const trimmed = text.trim();
@@ -152,6 +173,9 @@ export function extractCommand(text: string, commandWord: string): string | unde
 export function sanitizeQuestion(raw: string, maxLength: number): string {
   // eslint-disable-next-line no-control-regex
   const cleaned = neutralizeMarkup(raw.replace(/[\u0000-\u001f\u007f]/g, ' '))
+    // The mod's memories window strips bracketed text from rows entirely; parentheses survive
+    .replace(/\[/g, '(')
+    .replace(/\]/g, ')')
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned.slice(0, maxLength).trim();

@@ -11,7 +11,13 @@ import { MemoryEntity, MemoryRow, toMemoryEntity, withDisplayContent } from './e
 import { MemoryParticipantEntity } from './entities/MemoryParticipantEntity';
 import { notifyMemoryDeleted, notifyMemoryEdited, notifyNewMemoryAdded } from '../util/notifyRenderer';
 import { MemoryParticipantDTO } from './dto/MemoryParticipantDTO';
-import { stripArtifacts, validateMemoryContent, NEAR_DUP_EVENT_TYPES, NEAR_DUP_JACCARD, trigramJaccard } from '../util/memoryHygiene';
+import {
+  stripArtifacts,
+  validateMemoryContent,
+  NEAR_DUP_EVENT_TYPES,
+  NEAR_DUP_JACCARD,
+  trigramJaccard,
+} from '../util/memoryHygiene';
 
 export class MemoryRepository extends Repository {
   // The db layer can't depend on services, so annotation (importance/embedding into
@@ -330,7 +336,10 @@ export class MemoryRepository extends Repository {
     return undefined;
   }
 
-  createMemory(createMemoryRequest: CreateMemoryRequest, options?: { notifyMod?: boolean }): MemoryEntity | undefined {
+  createMemory(
+    createMemoryRequest: CreateMemoryRequest,
+    options?: { notifyMod?: boolean; modDisplayAction?: string },
+  ): MemoryEntity | undefined {
     // Refuse-to-persist gate: refusals, leaked prompt scaffolding, and no-text rows are
     // permanent retrieval poison once written (~8% of the playtest DB). Outcome rows
     // legitimately carry their text in observation, so content-less rows pass as long

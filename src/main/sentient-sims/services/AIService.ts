@@ -31,6 +31,7 @@ import {
   sendSceneLineToMod,
 } from '../util/notifyRenderer';
 import { markScenePaced } from '../util/pacedScenes';
+import { applySimAliasNames } from '../util/simAliases';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
 import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
@@ -270,6 +271,14 @@ export type DirectedGenerationOptions = {
   // transcript the actors reply to, the sim who said it takes no actor turn, and it stays out
   // of the aired scene (the mod already showed it, and it rides along as the memory's action)
   playerLine?: DialogueLine;
+  // What the playerLine's speaker IS, for speakers outside the player-voice personas
+  // (e.g. Twitch 'Chat'). Overrides the persona flavor sentence.
+  playerLineFlavor?: string;
+  // Display-only speaker for the game (e.g. "Chat (viewer)"): decorates the scene-line
+  // subtitle and the mod-bound memory copy; the model and the stored row see only
+  // playerLine.speaker. Keep the first word identical to playerLine.speaker — the mod's
+  // memories window sections on it, and its 30s subtitle dedupe compares full strings.
+  playerLineDisplaySpeaker?: string;
   directorModel?: string;
   // Parallel to event.sentient_sims order
   actorModels?: (string | undefined)[];
@@ -1028,6 +1037,9 @@ ${diaryRules}`;
     options: GenerationOptions = {},
     playbackOptions: PlaybackOptions = {},
   ): Promise<InteractionEventResult> {
+    // Service NPCs arrive named "Sim <id>"; the alias table gives them their real name
+    // so prompts and transcripts never call the Grim Reaper "Sim"
+    event.sentient_sims = applySimAliasNames(event.sentient_sims);
     const providerConfig = this.ctx.providerConfigs.getConfigForAction(actionTypeForEvent(event.event_type));
     log.debug(
       `Using provider config for ${event.event_type}: ${providerConfig.name} (${providerConfig.apiType}${providerConfig.model ? `, ${providerConfig.model}` : ''})`,
@@ -1319,6 +1331,9 @@ If the scene is already good, return it unchanged.`;
     options: DirectedGenerationOptions,
     playbackOptions: PlaybackOptions = {},
   ): Promise<InteractionEventResult> {
+    // Service NPCs arrive named "Sim <id>"; the alias table gives them their real name
+    // so prompts and transcripts never call the Grim Reaper "Sim"
+    event.sentient_sims = applySimAliasNames(event.sentient_sims);
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
       AIActionType.DIRECTED_SCENE_DIRECTOR,
@@ -1373,7 +1388,9 @@ If the scene is already good, return it unchanged.`;
       sceneAction = `${playerLine.speaker} just said${audience}: "${playerLine.text}" — play the reply. Answer what was actually said, in the flow of the conversation already underway.`;
       // V-3: the one semantic spot where the sim learns WHAT is speaking to them
       const persona = this.ctx.settings.playerVoicePersona;
-      if (playerLine.speaker === playerSpeakerLabel(persona)) {
+      if (options.playerLineFlavor) {
+        sceneAction += ` ${playerLine.speaker} is ${options.playerLineFlavor}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
+      } else if (playerLine.speaker === playerSpeakerLabel(persona)) {
         const bio = persona === 'player' ? this.ctx.settings.playerVoicePersonaBio : '';
         sceneAction += ` ${playerLine.speaker} is ${PLAYER_VOICE_PERSONA_FLAVOR[persona]}${bio ? ` — ${bio}` : ''}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
       }
@@ -1783,7 +1800,16 @@ ${
       const participants = this.ctx.participantRepository.getParticipants(
         event.sentient_sims.map((sim) => ({ id: sim.sim_id, fullName: sim.name })),
       );
-      this.ctx.memoryRepository.createMemory({ memory: newMemory, participants });
+      const modDisplayAction =
+        playerLine && options.playerLineDisplaySpeaker
+          ? toTranscript([{ ...playerLine, speaker: options.playerLineDisplaySpeaker }])
+          : undefined;
+      // This save pushes memory_created BEFORE play() marks the scene paced — mark first so
+      // the game suppresses the block subtitle and waits for the streamed lines
+      if (newMemory.content) {
+        markScenePaced(newMemory.content);
+      }
+      this.ctx.memoryRepository.createMemory({ memory: newMemory, participants }, { modDisplayAction });
     }
 
     // The scene reaches the game one line at a time: the memory block's subtitle is
@@ -1801,7 +1827,10 @@ ${
       // line: the Flash side appends it to the window, and suppresses the subtitle while the
       // chat window is open. It is not TTS-voiced — the player already said it.
       if (playerLine) {
-        sendSceneLineToMod({ speaker: playerLine.speaker, text: playerLine.text });
+        sendSceneLineToMod({
+          speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
+          text: playerLine.text,
+        });
       }
       this.playTtsLines(finalLines, event.sentient_sims, {
         paced: true,

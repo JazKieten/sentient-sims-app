@@ -356,13 +356,15 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: defaultTwitchCommandWord,
       },
+      // Cooldowns default OFF: live 08-24 the 60s viewer cooldown was the top reason viewer
+      // questions silently died; the FIFO queue already paces answers one at a time
       [SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS.toString()]: {
         type: 'number',
-        default: 60,
+        default: 0,
       },
       [SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS.toString()]: {
         type: 'number',
-        default: 15,
+        default: 0,
       },
       [SettingsEnum.TWITCH_ASK_PERMISSION.toString()]: {
         type: 'string',
@@ -375,6 +377,10 @@ export function defaultStore(cwd?: string) {
         default: true,
       },
       [SettingsEnum.TWITCH_CLIENT_ID.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.TWITCH_SIM_ALIASES.toString()]: {
         type: 'string',
         default: '',
       },
@@ -1193,12 +1199,12 @@ export class SettingsService {
 
   get twitchViewerCooldownSeconds(): number {
     const raw = Number(this.get(SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS));
-    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 60));
+    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 0));
   }
 
   get twitchGlobalCooldownSeconds(): number {
     const raw = Number(this.get(SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS));
-    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 15));
+    return Math.min(3600, Math.max(0, Number.isFinite(raw) ? raw : 0));
   }
 
   get twitchAskPermission(): 'everyone' | 'subs' | 'mods' {
@@ -1212,6 +1218,21 @@ export class SettingsService {
 
   get twitchClientId(): string {
     return (this.get(SettingsEnum.TWITCH_CLIENT_ID) as string).trim();
+  }
+
+  // "Name=simId" per line (or comma-separated): extra !ask targets for sims the game
+  // reports without a usable name (service NPCs like the Grim Reaper)
+  get twitchSimAliases(): { name: string; simId: string }[] {
+    return (this.get(SettingsEnum.TWITCH_SIM_ALIASES) as string)
+      .split(/[\r\n,]+/)
+      .map((line) => line.trim())
+      .filter((line) => line.includes('='))
+      .flatMap((line) => {
+        const eq = line.indexOf('=');
+        const name = line.slice(0, eq).trim();
+        const simId = line.slice(eq + 1).trim();
+        return name && /^\d+$/.test(simId) ? [{ name, simId }] : [];
+      });
   }
 
   get twitchAuth(): TwitchStoredAuth {

@@ -42,10 +42,11 @@ export default function TwitchSettingsComponent() {
   const channel = useSetting<string>(SettingsEnum.TWITCH_CHANNEL, '');
   const commandWord = useSetting<string>(SettingsEnum.TWITCH_COMMAND_WORD, defaultTwitchCommandWord);
   const askPermission = useSetting<string>(SettingsEnum.TWITCH_ASK_PERMISSION, 'everyone');
-  const viewerCooldown = useSetting<number>(SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS, 60);
-  const globalCooldown = useSetting<number>(SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS, 15);
+  const viewerCooldown = useSetting<number>(SettingsEnum.TWITCH_VIEWER_COOLDOWN_SECONDS, 0);
+  const globalCooldown = useSetting<number>(SettingsEnum.TWITCH_GLOBAL_COOLDOWN_SECONDS, 0);
   const followersOnly = useSetting<boolean>(SettingsEnum.TWITCH_FOLLOWERS_ONLY, true);
   const clientId = useSetting<string>(SettingsEnum.TWITCH_CLIENT_ID, '');
+  const aliases = useSetting<string>(SettingsEnum.TWITCH_SIM_ALIASES, '');
 
   const [status, setStatus] = useState<TwitchChatStatus>();
   const [loginStart, setLoginStart] = useState<TwitchDeviceLoginStart>();
@@ -100,9 +101,10 @@ export default function TwitchSettingsComponent() {
         {stateChip(status)}
       </Box>
       <FormHelperText sx={{ marginBottom: 2 }}>
-        Viewers type {commandWord.value || defaultTwitchCommandWord} followed by a question and your active Sim answers
-        it aloud in-game as {'"'}The Voice{'"'} (your player voice persona). OBS picks it up through game capture and
-        desktop audio.
+        Viewers type {commandWord.value || defaultTwitchCommandWord} plus a question and your active Sim answers, or
+        they can name any Sim on the lot ({commandWord.value || defaultTwitchCommandWord} lillie how are you) to make
+        that Sim answer — even mid-conversation. Questions get their own {'"'}Chat{'"'} section in the in-game memories
+        window, answers play aloud, and OBS picks everything up through game capture and desktop audio.
       </FormHelperText>
       {staleBridge ? (
         <FormHelperText error sx={{ marginBottom: 2 }}>
@@ -160,6 +162,24 @@ export default function TwitchSettingsComponent() {
             {status?.queueDepth ? (
               <Typography variant="body2">{status.queueDepth} question(s) queued</Typography>
             ) : null}
+          </Stack>
+          <FormHelperText>
+            Cooldowns are off by default: every ask is accepted and answered strictly in order. If a message never shows
+            up here at all, Twitch AutoMod may be holding it before it reaches chat — approve it or relax AutoMod in
+            your Twitch moderation settings.
+          </FormHelperText>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 130 }}>Extra targets:</Typography>
+            <TextField
+              size="small"
+              fullWidth
+              multiline
+              minRows={1}
+              value={aliases.value}
+              placeholder="Grim Reaper=153992008478429871"
+              onChange={(change) => void aliases.setSetting(change.target.value)}
+              helperText="Name=simId per line. Lets chat !ask sims the game reports without a name (service NPCs like the Grim Reaper) — even when they aren't on the lot."
+            />
           </Stack>
           {status?.lastEvent ? (
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>

@@ -99,6 +99,9 @@ export enum SettingsEnum {
   TWITCH_GLOBAL_COOLDOWN_SECONDS = 'twitchGlobalCooldownSeconds',
   TWITCH_ASK_PERMISSION = 'twitchAskPermission', // everyone | subs | mods
   TWITCH_FOLLOWERS_ONLY = 'twitchFollowersOnly',
+  // "Name=simId" lines: extra !ask targets for sims the game reports namelessly (service
+  // NPCs like the Grim Reaper) — reachable by chat even when not on the lot
+  TWITCH_SIM_ALIASES = 'twitchSimAliases',
   TWITCH_CLIENT_ID = 'twitchClientId',
   TWITCH_AUTH = 'twitchAuth', // stored device-flow tokens + broadcaster identity
 }

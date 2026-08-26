@@ -1,4 +1,5 @@
 import { SentientSim } from '../models/SentientSim';
+import { getSimAliases } from '../util/simAliases';
 import { SimAge } from '../models/SimAge';
 import { DialogueLine } from './PromptFormatter';
 import { hashString } from './VoiceAssignment';
@@ -165,10 +166,21 @@ export function castElevenLabsVoice(sim: SentientSim): string {
 function findSimForSpeaker(speaker: string, sims: SentientSim[]): SentientSim | undefined {
   // A delivery label on the speaker ("Jasmine (to self)") never changes whose voice it is
   const speakerLower = speaker.replace(/\s*\([^)]*\)\s*$/, '').toLowerCase();
-  return sims.find((sim) => {
+  const match = sims.find((sim) => {
     const nameLower = sim.name.toLowerCase();
     return nameLower === speakerLower || nameLower.startsWith(`${speakerLower} `);
   });
+  if (match) {
+    return match;
+  }
+  // Namelessly-reported sims (service NPCs): the scene knows "Sim 153...", but the model
+  // labels the line with the character's real name ("Grim Reaper:") — the alias table
+  // bridges the two so the pinned voice still applies
+  const alias = getSimAliases().find((entry) => {
+    const aliasLower = entry.name.toLowerCase();
+    return aliasLower === speakerLower || aliasLower.startsWith(`${speakerLower} `);
+  });
+  return alias ? sims.find((sim) => sim.sim_id === alias.simId) : undefined;
 }
 
 /**

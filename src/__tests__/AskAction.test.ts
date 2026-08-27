@@ -159,7 +159,7 @@ describe('Ask actions', () => {
       }),
     );
     expect(result.text).toContain('A book sounds perfect right now.');
-    expect(result.memory?.content).toEqual('Marisol Vega (thinking): A book sounds perfect right now.');
+    expect(result.memory?.content).toEqual('Marisol Vega (to self): A book sounds perfect right now.');
     expect(result.memory?.event_type).toEqual('monologue');
     // The ask heads the memory row, attributed like any chat beat
     expect(result.memory?.action).toEqual('The Voice: go read a book');

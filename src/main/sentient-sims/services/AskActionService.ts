@@ -333,7 +333,12 @@ Will you do it?`;
     decision: AskDecision,
     exchanges: LLMExchange[],
   ): InteractionEventResult {
-    const finalText = `${sim.name} (thinking): ${decision.thought}`;
+    // "(to self)" (not "(thinking)"): the mod renders this tag as white spoken
+    // text with the label dropped — the sim's answer to the player should read
+    // as speech in the memories window even after a refresh rebuilds the rows
+    // from this stored copy. Ordinary monologues keep "(thinking)" and stay
+    // italic thoughts.
+    const finalText = `${sim.name} (to self): ${decision.thought}`;
     const askedLine = `${playerLine.speaker}: ${playerLine.text}`;
 
     const newMemory: MemoryEntity = {

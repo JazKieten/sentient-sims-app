@@ -135,4 +135,20 @@ describe('playTTSLines', () => {
 
     expect(sentVoiceLines()).toEqual([{ speaker: 'Narrator', text: 'The house is quiet.' }]);
   });
+
+  it('keeps a pre-cast voice and skipSceneLine flag on a non-sim line while casting sim lines', () => {
+    playTTSLines(
+      [
+        { speaker: 'Chat (nova)', text: 'nova asks: hi', voiceId: 'chat-voice', skipSceneLine: true },
+        { speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' },
+      ],
+      [ricky],
+    );
+
+    const lines = sentVoiceLines();
+    expect(lines[0].voiceId).toBe('chat-voice');
+    expect(lines[0].skipSceneLine).toBe(true);
+    expect(lines[1].voiceId).toBeTruthy();
+    expect(lines[1].voiceId).not.toBe('chat-voice');
+  });
 });

@@ -213,3 +213,6 @@ export const twitchIdleTimeoutMs = 360000;
 // While the mod is disconnected the queue holds and re-checks on this cadence
 export const twitchModRetryMs = 5000;
 export const twitchFollowerCacheTtlMs = 600000;
+// Voice the app speaks viewer !ask questions with when none is configured (ElevenLabs
+// premade "Charlie": energetic, casual — distinct from the drama-cast sim voices)
+export const defaultTwitchChatVoiceId = 'IKne3meq5aSn9XLyUdCD';

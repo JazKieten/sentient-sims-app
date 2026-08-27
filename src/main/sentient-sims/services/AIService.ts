@@ -285,6 +285,11 @@ export type DirectedGenerationOptions = {
   // Real game events return the memory to the mod, which saves it back via POST /memories
   // when the interaction completes; the scenario tester has no mod, so it saves directly
   saveMemory?: boolean;
+  // Twitch !ask: the app speaks the viewer's typed question in a dedicated chat voice before
+  // the sim's reply. spokenText is what is voiced ("nova asks: ..."); the in-game subtitle
+  // still comes from the direct playerLine send, so the prepended TTS line is flagged
+  // skipSceneLine. Continuations never set this (playerLine is cleared alongside it).
+  speakPlayerLine?: { voiceId: string; spokenText: string };
 };
 
 export type DeferredInteractionResult = {
@@ -1832,7 +1837,21 @@ ${
           text: playerLine.text,
         });
       }
-      this.playTtsLines(finalLines, event.sentient_sims, {
+      // Twitch chat's own voice: the question airs as the scene's first TTS line, pre-cast
+      // to the configured chat voice. Its subtitle already went out just above, so the
+      // renderer skips re-reporting it.
+      const spokenQuestion: DialogueLine[] =
+        playerLine && options.speakPlayerLine
+          ? [
+              {
+                speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
+                text: options.speakPlayerLine.spokenText,
+                voiceId: options.speakPlayerLine.voiceId,
+                skipSceneLine: true,
+              },
+            ]
+          : [];
+      this.playTtsLines([...spokenQuestion, ...finalLines], event.sentient_sims, {
         paced: true,
         priority: playbackOptions.priority,
         preamble: preActionLine ? `(${preActionLine})` : undefined,
@@ -1846,7 +1865,14 @@ ${
         // Fire-and-forget: the continuation is its own generation with its own memory row
         void this.runDirectedGeneration(
           event,
-          { ...options, continueScene: true, playerLine: undefined, round: round + 1, carriedLines },
+          {
+            ...options,
+            continueScene: true,
+            playerLine: undefined,
+            speakPlayerLine: undefined,
+            round: round + 1,
+            carriedLines,
+          },
           { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
         ).catch((error: unknown) => {
           log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);

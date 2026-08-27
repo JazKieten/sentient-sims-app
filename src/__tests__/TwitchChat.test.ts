@@ -1,5 +1,6 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
+import { defaultTwitchChatVoiceId } from 'main/sentient-sims/constants';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { mockEnvironment } from './util';
 
@@ -46,6 +47,7 @@ type GenerationCall = [
     playerLineFlavor?: string;
     playerLineDisplaySpeaker?: string;
     saveMemory?: boolean;
+    speakPlayerLine?: { voiceId: string; spokenText: string };
   },
   { priority?: boolean },
 ];
@@ -319,6 +321,53 @@ describe('TwitchChatService', () => {
     expect(options.playerLineDisplaySpeaker).toBe('Chat (nova)');
     expect(options.saveMemory).toBe(true);
     expect(playback.priority).toBe(true);
+    service.shutdown();
+  });
+
+  it('speaks the viewer question in the configured chat voice when ElevenLabs TTS is on', () => {
+    const { settingsService, sockets, service, runDirectedGeneration } = twitchContext();
+    settingsService.set(SettingsEnum.TTS_ENABLED, true);
+    settingsService.set(SettingsEnum.TTS_API_TYPE, 'elevenlabs');
+    settingsService.set(SettingsEnum.TWITCH_CHAT_VOICE_ID, 'voice-123');
+    connectSocket(sockets[0]);
+
+    privmsg(sockets[0], '!ask how is <your> day?');
+    const [, options] = runDirectedGeneration.mock.calls[0] as GenerationCall;
+    // The spoken text carries the viewer credit; the subtitle/memory keep the raw question
+    expect(options.speakPlayerLine).toEqual({ voiceId: 'voice-123', spokenText: 'nova asks: how is ‹your› day?' });
+    service.shutdown();
+  });
+
+  it('falls back to the built-in chat voice when none is configured', () => {
+    const { settingsService, sockets, service, runDirectedGeneration } = twitchContext();
+    settingsService.set(SettingsEnum.TTS_ENABLED, true);
+    settingsService.set(SettingsEnum.TTS_API_TYPE, 'elevenlabs');
+    connectSocket(sockets[0]);
+
+    privmsg(sockets[0], '!ask hi');
+    const [, options] = runDirectedGeneration.mock.calls[0] as GenerationCall;
+    expect(options.speakPlayerLine?.voiceId).toBe(defaultTwitchChatVoiceId);
+    service.shutdown();
+  });
+
+  it('does not speak the question when the toggle is off or TTS is not ElevenLabs', async () => {
+    const { settingsService, sockets, service, runDirectedGeneration } = twitchContext();
+    settingsService.set(SettingsEnum.TTS_ENABLED, true);
+    settingsService.set(SettingsEnum.TTS_API_TYPE, 'elevenlabs');
+    settingsService.set(SettingsEnum.TWITCH_SPEAK_QUESTIONS, false);
+    connectSocket(sockets[0]);
+
+    privmsg(sockets[0], '!ask hi');
+    const [, disabled] = runDirectedGeneration.mock.calls[0] as GenerationCall;
+    expect(disabled.speakPlayerLine).toBeUndefined();
+
+    settingsService.set(SettingsEnum.TWITCH_SPEAK_QUESTIONS, true);
+    settingsService.set(SettingsEnum.TTS_API_TYPE, 'sentientsimsai');
+    await flushAsync();
+    vi.advanceTimersByTime(1001);
+    privmsg(sockets[0], '!ask hello again', '', 'other');
+    const [, wrongEngine] = runDirectedGeneration.mock.calls[1] as GenerationCall;
+    expect(wrongEngine.speakPlayerLine).toBeUndefined();
     service.shutdown();
   });
 

@@ -104,6 +104,9 @@ export enum SettingsEnum {
   TWITCH_SIM_ALIASES = 'twitchSimAliases',
   TWITCH_CLIENT_ID = 'twitchClientId',
   TWITCH_AUTH = 'twitchAuth', // stored device-flow tokens + broadcaster identity
+  // Speak each viewer's typed question aloud in a dedicated ElevenLabs voice before the reply
+  TWITCH_SPEAK_QUESTIONS = 'twitchSpeakQuestions',
+  TWITCH_CHAT_VOICE_ID = 'twitchChatVoiceId', // '' = the built-in default chat voice
 }
 
 export enum DeprecatedSettingsEnum {

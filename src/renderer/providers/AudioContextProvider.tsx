@@ -123,6 +123,9 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
 
       const notifyLineShown = paced
         ? (line: DialogueLine) => {
+            // A skipSceneLine line's subtitle was already sent directly by the main
+            // process (e.g. a Twitch question) — reporting it again would double it
+            if (line.skipSceneLine) return;
             window.electron.notifySceneLineShown({ speaker: line.speaker, text: line.text, preamble });
           }
         : undefined;

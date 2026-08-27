@@ -35,6 +35,7 @@ import {
   defaultVoiceInputHotkey,
   defaultVoiceInputModel,
   defaultTwitchCommandWord,
+  defaultTwitchChatVoiceId,
 } from '../constants';
 import { TwitchStoredAuth } from '../models/TwitchChatStatus';
 import { disableDebugLogging, enableDebugLogging } from '../util/debugLog';
@@ -387,6 +388,16 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.TWITCH_AUTH.toString()]: {
         type: 'object',
         default: {},
+      },
+      // On by default: only activates when Twitch chat AND ElevenLabs TTS are already on,
+      // both of which are opt-in
+      [SettingsEnum.TWITCH_SPEAK_QUESTIONS.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
+      [SettingsEnum.TWITCH_CHAT_VOICE_ID.toString()]: {
+        type: 'string',
+        default: '',
       },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
@@ -1242,6 +1253,14 @@ export class SettingsService {
 
   set twitchAuth(value: TwitchStoredAuth) {
     this.set(SettingsEnum.TWITCH_AUTH, value);
+  }
+
+  get twitchSpeakQuestions(): boolean {
+    return this.get(SettingsEnum.TWITCH_SPEAK_QUESTIONS) !== false;
+  }
+
+  get twitchChatVoiceId(): string {
+    return (this.get(SettingsEnum.TWITCH_CHAT_VOICE_ID) as string).trim() || defaultTwitchChatVoiceId;
   }
 
   get prefetchMaxQueueDepth(): number {

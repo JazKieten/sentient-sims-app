@@ -1,23 +1,33 @@
 import { useEffect, useState } from 'react';
+import SyncIcon from '@mui/icons-material/Sync';
 import {
   Box,
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Divider,
+  FormControl,
   FormControlLabel,
   FormHelperText,
+  IconButton,
+  InputLabel,
   MenuItem,
   Select,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
-import { defaultTwitchCommandWord } from 'main/sentient-sims/constants';
+import { ApiType } from 'main/sentient-sims/models/ApiType';
+import { defaultTwitchChatVoiceId, defaultTwitchCommandWord } from 'main/sentient-sims/constants';
 import { TwitchChatStatus, TwitchDeviceLoginStart } from 'main/sentient-sims/models/TwitchChatStatus';
 import useSetting from 'renderer/hooks/useSetting';
 import HelpButton from 'renderer/components/HelpButton';
+import { useElevenLabsVoices } from 'renderer/hooks/useElevenLabsVoices';
+import { useAISettings } from 'renderer/providers/AISettingsProvider';
+import { TestVoiceButton } from 'renderer/components/VoiceTestButton';
 
 function stateChip(status?: TwitchChatStatus) {
   if (!status || status.state === 'disabled') {
@@ -47,6 +57,10 @@ export default function TwitchSettingsComponent() {
   const followersOnly = useSetting<boolean>(SettingsEnum.TWITCH_FOLLOWERS_ONLY, true);
   const clientId = useSetting<string>(SettingsEnum.TWITCH_CLIENT_ID, '');
   const aliases = useSetting<string>(SettingsEnum.TWITCH_SIM_ALIASES, '');
+  const speakQuestions = useSetting<boolean>(SettingsEnum.TWITCH_SPEAK_QUESTIONS, true);
+  const chatVoiceId = useSetting<string>(SettingsEnum.TWITCH_CHAT_VOICE_ID, '');
+  const { ttsApiType, ttsEnabled } = useAISettings();
+  const { cache: voicesCache, isRefreshing, refresh } = useElevenLabsVoices();
 
   const [status, setStatus] = useState<TwitchChatStatus>();
   const [loginStart, setLoginStart] = useState<TwitchDeviceLoginStart>();
@@ -185,6 +199,60 @@ export default function TwitchSettingsComponent() {
             <Typography variant="body2" sx={{ color: 'text.secondary' }}>
               {status.lastEvent}
             </Typography>
+          ) : null}
+          <Divider />
+          <FormControlLabel
+            label="Give chat a voice: speak each question aloud (ElevenLabs)"
+            control={
+              <Checkbox
+                checked={speakQuestions.value}
+                onChange={(change) => void speakQuestions.setSetting(change.target.checked)}
+              />
+            }
+          />
+          {speakQuestions.value ? (
+            <>
+              <Stack spacing={1} direction="row" sx={{ alignItems: 'center' }}>
+                <FormControl size="small" sx={{ minWidth: 260 }}>
+                  <InputLabel id="twitch-chat-voice-label">Chat voice</InputLabel>
+                  <Select
+                    labelId="twitch-chat-voice-label"
+                    label="Chat voice"
+                    value={chatVoiceId.value}
+                    onChange={(change) => void chatVoiceId.setSetting(change.target.value)}
+                  >
+                    <MenuItem value="">Default (Charlie)</MenuItem>
+                    {/* A voice removed from My Voices still plays, so keep it selectable */}
+                    {chatVoiceId.value && !voicesCache.voices.some((voice) => voice.voiceId === chatVoiceId.value) ? (
+                      <MenuItem value={chatVoiceId.value}>{`${chatVoiceId.value} (removed)`}</MenuItem>
+                    ) : null}
+                    {voicesCache.voices.map((voice) => (
+                      <MenuItem key={voice.voiceId} value={voice.voiceId}>
+                        {voice.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Tooltip title="Refresh voices from ElevenLabs">
+                  <span>
+                    <IconButton
+                      disabled={isRefreshing}
+                      onClick={() => {
+                        void refresh();
+                      }}
+                    >
+                      {isRefreshing ? <CircularProgress size={20} /> : <SyncIcon />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <TestVoiceButton voiceId={chatVoiceId.value || defaultTwitchChatVoiceId} />
+              </Stack>
+              {ttsApiType !== ApiType.ElevenLabs || !ttsEnabled ? (
+                <FormHelperText error>
+                  Questions are only spoken while TTS is enabled and set to ElevenLabs in the Voice settings.
+                </FormHelperText>
+              ) : null}
+            </>
           ) : null}
           <Divider />
           <FormControlLabel

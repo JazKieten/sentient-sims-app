@@ -1,6 +1,7 @@
 import log from 'electron-log';
 import { WebSocket } from 'ws';
 import { SettingsEnum } from '../models/SettingsEnum';
+import { ApiType } from '../models/ApiType';
 import {
   twitchAnswerFallbackMs,
   twitchAnswerSettleMs,
@@ -463,7 +464,7 @@ export class TwitchChatService {
     this.setEvent(`Asking ${target.name} (from ${item.viewer})`);
     log.info(`Twitch: asking ${target.name}${resolved ? ' (named)' : ''} (from ${item.viewer}): ${target.question}`);
     void this.ctx.generationQueue
-      .runSpeech(() => this.runAsk(target, displayTag))
+      .runSpeech(() => this.runAsk(target, displayTag, viewerTag))
       .catch((err: unknown) => {
         log.error('Twitch: ask generation failed', err);
         this.setEvent(`Asking ${target.name} failed; see logs`);
@@ -476,7 +477,7 @@ export class TwitchChatService {
   // App-built solo chat event: answers Voice-style no matter what conversation is running,
   // plays next (priority), and the "Chat: <question>" action row gives viewers their own
   // section in the in-game memories window
-  private async runAsk(target: SimTargetResolution, displayTag: string) {
+  private async runAsk(target: SimTargetResolution, displayTag: string, viewerTag: string) {
     let description: string | undefined;
     try {
       description = this.ctx.participantRepository.getParticipant({
@@ -495,6 +496,11 @@ export class TwitchChatService {
     });
     const locationId = this.ctx.sceneService.getCurrentScene()?.locationId ?? 0;
     const event = buildTwitchAskEvent(sim, target.question, locationId);
+    // Chat's own voice: only when the renderer's TTS engine is ElevenLabs — gating here
+    // keeps the chat line away from other engines and the TTS-off reading-hold entirely
+    const { settings } = this.ctx;
+    const speakQuestion =
+      settings.twitchSpeakQuestions && settings.ttsEnabled && settings.ttsApiType === ApiType.ElevenLabs;
     // saveMemory: no mod round trip exists on this path to persist the exchange.
     // The display speaker credits the asking viewer in-game ("Chat (viewer): ...") while
     // the model and the stored memory row only ever see plain "Chat".
@@ -505,6 +511,14 @@ export class TwitchChatService {
         playerLineFlavor: TWITCH_CHAT_FLAVOR,
         playerLineDisplaySpeaker: `${TWITCH_CHAT_SPEAKER} (${displayTag})`,
         saveMemory: true,
+        ...(speakQuestion
+          ? {
+              speakPlayerLine: {
+                voiceId: settings.twitchChatVoiceId,
+                spokenText: `${viewerTag} asks: ${target.question}`,
+              },
+            }
+          : {}),
       },
       { priority: true },
     );

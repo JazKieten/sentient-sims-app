@@ -530,6 +530,9 @@ export type DialogueLine = {
   deliveryNote?: string;
   // Provider-specific voice cast for this speaker (currently an ElevenLabs voice id)
   voiceId?: string;
+  // This line's in-game subtitle was already sent directly (e.g. a Twitch question), so the
+  // renderer must not report it again via notifySceneLineShown when it starts playing
+  skipSceneLine?: boolean;
 };
 
 const dialogueLineRegex = /^([A-Za-z][A-Za-z'-]*(?:\s[A-Za-z][A-Za-z'-]*){0,2}):\s*(?:\(([^)]*)\)\s*)?"([^"]+)"\s*$/;

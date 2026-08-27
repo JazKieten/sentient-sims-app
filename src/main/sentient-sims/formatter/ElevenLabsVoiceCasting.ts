@@ -199,6 +199,6 @@ export function castVoicesForLines(
     if (!sim) {
       return line;
     }
-    return { ...line, voiceId: voiceOverrides?.get(sim.sim_id) ?? castElevenLabsVoice(sim) };
+    return { ...line, voiceId: line.voiceId ?? voiceOverrides?.get(sim.sim_id) ?? castElevenLabsVoice(sim) };
   });
 }

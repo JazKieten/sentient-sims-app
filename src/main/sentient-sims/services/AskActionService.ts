@@ -6,7 +6,7 @@ import { InteractionEventResult, InteractionEventStatus, LLMExchange } from '../
 import { SSEvent } from '../models/InteractionEvents';
 import { SentientSim } from '../models/SentientSim';
 import { SimStateEntry } from '../models/SimStateReport';
-import { PLAYER_VOICE_PERSONA_FLAVOR, playerSpeakerLabel } from '../models/PlayerVoicePersona';
+import { playerPersonaFlavor } from '../models/PlayerVoicePersona';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { firstJsonBlock } from '../util/formatCognitionPrompt';
 import { markScenePaced } from '../util/pacedScenes';
@@ -246,9 +246,8 @@ export class AskActionService {
     // WHAT is speaking to them
     const persona = this.ctx.settings.playerVoicePersona;
     let flavor = options.playerLineFlavor;
-    if (!flavor && playerLine.speaker === playerSpeakerLabel(persona)) {
-      const bio = persona === 'player' ? this.ctx.settings.playerVoicePersonaBio : '';
-      flavor = `${PLAYER_VOICE_PERSONA_FLAVOR[persona]}${bio ? ` — ${bio}` : ''}`;
+    if (!flavor && playerLine.speaker === this.ctx.settings.playerSpeakerName) {
+      flavor = playerPersonaFlavor(persona, this.ctx.settings.playerVoicePersonaBio);
     }
 
     // The same scene-context blocks the director gets, so the decision is grounded in
@@ -281,7 +280,9 @@ export class AskActionService {
     }
 
     const speakerIs = flavor ? ` ${playerLine.speaker} is ${flavor}.` : '';
-    const decisionSystemPrompt = `You are playing ${sim.name}, a sentient Sim in The Sims 4. ${playerLine.speaker} — a voice only you can hear — just asked you to do something, and you decide, in character, whether you will.${speakerIs}
+    // "a voice" reads wrong once the speaker has a name of their own ("Jaz — a voice...")
+    const heardAs = this.ctx.settings.playerVoicePersonaName ? 'someone only you can hear' : 'a voice only you can hear';
+    const decisionSystemPrompt = `You are playing ${sim.name}, a sentient Sim in The Sims 4. ${playerLine.speaker} — ${heardAs} — just asked you to do something, and you decide, in character, whether you will.${speakerIs}
 ${sceneContext ? `\n${sceneContext}\n` : ''}
 Reply with ONLY a JSON object: {"willing": true | false, "thought": "<why or why not, one or two short sentences>"}
 Rules for "thought":

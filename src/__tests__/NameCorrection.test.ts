@@ -16,6 +16,40 @@ describe('STT dictionary (V-7)', () => {
     expect(correctNames('hello', [])).toBe('hello');
   });
 
+  it('never renames the everyday words a sentence starts with', () => {
+    // Live 08-27: the player's fillers were snapped to sims and the sims were addressed
+    // by the wrong name — "Well" -> Wells, "Kay" -> Kai (a phonetic tie), "Hey" -> Huy
+    const known = ['Marcus Wells', 'Kai Nguyen', 'Huy Tran'];
+    expect(correctNames('Well, how are you today?', known)).toBe('Well, how are you today?');
+    expect(correctNames("Kay let's go to the park", known)).toBe("Kay let's go to the park");
+    expect(correctNames('Hey there, what are you up to?', known)).toBe('Hey there, what are you up to?');
+    // The real names still resolve when they are actually spoken
+    expect(correctNames('Kai, come here', known)).toBe('Kai, come here');
+  });
+
+  it('keeps sims whose names are also everyday words', () => {
+    const known = ['Will Wright', 'Grace Kim'];
+    expect(correctNames('Will, come here', known)).toBe('Will, come here');
+    expect(correctNames('Tell Grace I said hi', known)).toBe('Tell Grace I said hi');
+  });
+
+  it('only snaps toward sims in the scene', () => {
+    // The wide pools (every sim ever met, the participant table) no longer reach the
+    // fuzzy matcher — an absent Lillie cannot claim the word
+    expect(correctNames('Tell Lily I said hi', ['Milo Calder'])).toBe('Tell Lily I said hi');
+    expect(correctNames('Tell Lily I said hi', ['Lillie Cason'])).toBe('Tell Lillie I said hi');
+  });
+
+  it('ignores placeholder names from namelessly-reported sims', () => {
+    expect(correctNames('Simon says hello', ['Sim 132600080439250755'])).toBe('Simon says hello');
+  });
+
+  it('requires an exact phonetic hit for three-letter tokens', () => {
+    // One edit is a third of a short word; "Bax" must not become "Bex"
+    expect(correctNames('Bax said so', ['Bex Lee'])).toBe('Bax said so');
+    expect(correctNames('Bex said so', ['Bex Lee'])).toBe('Bex said so');
+  });
+
   it('builds a name-dense prompt, tightest scope first, capped', () => {
     const prompt = buildTranscriptionPrompt([['Lillie Cason'], ['Mika Oshino', 'Lillie Cason'], []]);
     expect(prompt).toBe('Names in this scene: Lillie Cason, Mika Oshino.');

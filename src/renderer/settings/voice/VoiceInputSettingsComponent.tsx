@@ -17,7 +17,11 @@ import log from 'electron-log';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { defaultVoiceInputHotkey, defaultVoiceInputModel, openaiDefaultEndpoint } from 'main/sentient-sims/constants';
 import useSetting from 'renderer/hooks/useSetting';
-import { PLAYER_VOICE_PERSONAS, PLAYER_VOICE_PERSONA_LABELS } from 'main/sentient-sims/models/PlayerVoicePersona';
+import {
+  PLAYER_VOICE_PERSONAS,
+  PLAYER_VOICE_PERSONA_LABELS,
+  PlayerVoicePersona,
+} from 'main/sentient-sims/models/PlayerVoicePersona';
 import HelpButton from 'renderer/components/HelpButton';
 
 // Single keys must be ones The Sims 4 leaves unbound — the hook observes without
@@ -46,6 +50,7 @@ export default function VoiceInputSettingsComponent() {
   const deviceId = useSetting<string>(SettingsEnum.VOICE_INPUT_DEVICE_ID, '');
   const persona = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA, 'voice');
   const personaBio = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_BIO, '');
+  const personaName = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_NAME, '');
   const commandHotkey = useSetting<string>(SettingsEnum.VOICE_COMMAND_HOTKEY, '');
   const followsClock = useSetting<boolean>(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK, true);
 
@@ -179,23 +184,39 @@ export default function VoiceInputSettingsComponent() {
           </Stack>
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
             <Typography sx={{ minWidth: 110 }}>You are:</Typography>
-            <Select size="small" value={persona.value} onChange={(change) => void persona.setSetting(change.target.value)}>
+            <Select
+              size="small"
+              value={persona.value}
+              onChange={(change) => void persona.setSetting(change.target.value)}
+            >
               {PLAYER_VOICE_PERSONAS.map((option) => (
                 <MenuItem key={option} value={option}>
                   {PLAYER_VOICE_PERSONA_LABELS[option]}
                 </MenuItem>
               ))}
             </Select>
-            {persona.value === 'player' ? (
-              <TextField
-                size="small"
-                fullWidth
-                value={personaBio.value}
-                placeholder="A line or two about who you are to them"
-                onChange={(change) => void personaBio.setSetting(change.target.value)}
-              />
-            ) : null}
+            <TextField
+              size="small"
+              fullWidth
+              label="Your name"
+              value={personaName.value}
+              slotProps={{ htmlInput: { maxLength: 40 } }}
+              placeholder={PLAYER_VOICE_PERSONA_LABELS[persona.value as PlayerVoicePersona]}
+              helperText="What your sims call you, in their memories and subtitles. Leave blank to use the persona above; one word reads best in game."
+              onChange={(change) => void personaName.setSetting(change.target.value)}
+            />
           </Stack>
+          <TextField
+            size="small"
+            fullWidth
+            multiline
+            minRows={2}
+            label="About you"
+            value={personaBio.value}
+            placeholder="Jaz is the creator of this world — she watches over the household and streams their lives."
+            helperText="One to three short sentences about you, written in third person. Your sims are told this every time you speak, so keep it brief."
+            onChange={(change) => void personaBio.setSetting(change.target.value)}
+          />
           <FormControlLabel
             label="Voices and subtitles follow the game clock (pause with the game, faster on speed 2/3)"
             control={

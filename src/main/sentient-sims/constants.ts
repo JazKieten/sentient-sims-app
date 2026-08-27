@@ -183,9 +183,6 @@ export const defaultKokoroEndpoint = 'https://api.kokorotts.com';
 export const defaultVLLMEndpoint = 'http://localhost:8000/v1';
 export const defaultVoiceInputModel = 'whisper-1';
 export const defaultVoiceInputHotkey = 'Ctrl+Space';
-// The player's persona when speaking to a lone sim by voice. The mod echoes the same
-// speaker string, so the subtitle dedupe collapses the echo and the streamed scene line.
-export const playerVoiceSpeaker = 'The Voice';
 // Backstop for a lost keyup (alt-tab mid-hold) so the mic never stays hot indefinitely
 export const voiceInputMaxRecordMs = 60000;
 // Recordings shorter than this are accidental hotkey taps, not speech

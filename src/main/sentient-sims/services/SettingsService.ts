@@ -2,7 +2,12 @@ import log from 'electron-log';
 import Store from 'electron-store';
 import path from 'path';
 import { DeprecatedSettingsEnum, SettingsEnum } from '../models/SettingsEnum';
-import { PLAYER_VOICE_PERSONAS, PlayerVoicePersona } from '../models/PlayerVoicePersona';
+import {
+  PLAYER_VOICE_PERSONAS,
+  PlayerVoicePersona,
+  playerSpeakerLabel,
+  sanitizePlayerVoiceName,
+} from '../models/PlayerVoicePersona';
 import { defaultOpenAITTSSettings, OpenAITTSSettings } from '../models/OpenAITTSSettings';
 import { ApiType, ApiTypeFromValue } from '../models/ApiType';
 import { AIProviderConfig, autoConfigId, newAutoConfig, sanitizeProviderConfigs } from '../models/AIProviderConfig';
@@ -302,6 +307,10 @@ export function defaultStore(cwd?: string) {
         default: 'voice',
       },
       [SettingsEnum.PLAYER_VOICE_PERSONA_BIO.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.PLAYER_VOICE_PERSONA_NAME.toString()]: {
         type: 'string',
         default: '',
       },
@@ -1174,6 +1183,17 @@ export class SettingsService {
 
   get playerVoicePersonaBio(): string {
     return String(this.get(SettingsEnum.PLAYER_VOICE_PERSONA_BIO) ?? '').trim();
+  }
+
+  get playerVoicePersonaName(): string {
+    return sanitizePlayerVoiceName(this.get(SettingsEnum.PLAYER_VOICE_PERSONA_NAME) as string);
+  }
+
+  // The one place persona + custom name resolve into the speaker string. Every producer of
+  // a player line, the flavor gate that recognizes one, and the label pushed to the mod all
+  // read this, so they cannot drift apart (the mod's subtitle dedupe compares full strings).
+  get playerSpeakerName(): string {
+    return playerSpeakerLabel(this.playerVoicePersona, this.playerVoicePersonaName);
   }
 
   get voiceCommandHotkey(): string {

@@ -2,6 +2,7 @@
 // Chatman (all observed live 08-04..08-14). Two layers: the transcription request carries
 // a `prompt` of the names in play (a soft bias every OpenAI-compatible whisper honours or
 // ignores silently), and a post-pass snaps near-miss tokens to known names.
+import { isPlaceholderName } from './simAliases';
 
 export function levenshtein(a: string, b: string): number {
   if (a === b) {
@@ -68,12 +69,39 @@ export function phonetic(text: string): string {
     .replace(/(.)\1+/g, '$1');
 }
 
+// Everyday speech a sentence starts with, which capitalization alone cannot tell from a
+// name. Live 08-27 the player's "Well,"/"Kay"/"Hey" became Wells/Kai/Huy and the sims were
+// addressed by the wrong name. A word in here is never FUZZY-matched; an exact vocabulary
+// hit still wins first, so a sim actually named Will or Grace is untouched.
+const COMMON_WORDS = new Set(
+  `about after again all also and any anyway are ask back bad because been before being both boy
+   but bye call came can cant come cool could damn day did does doing done dont down dude each
+   even ever every eyes face fine first for from game geez get give going gonna good gosh got
+   gotta great guess had has hate have hay heck hell hello help her here hey him his hmm home
+   hope how huh its just kay keep kind know less let lets like listen little look lot love made
+   make man many may maybe mean more most much must nah need never new next nice nope not now off
+   okay old once one only ooh other our out over own play please put really right said same say
+   see she should sim sims some sorry stay still stop sure take talk tell than thank thanks that
+   the their them then there these they thing think this those time too two umm use used very
+   wait walk want wanna was watch way well were what when where which while who why will with
+   wont work would wow whoa yeah yep yes yet you your`.split(/\s+/),
+);
+
 // Snap tokens within a small edit distance of a known first/last name to that name.
-// Conservative on purpose: never touch short tokens, never touch exact dictionary words
+// Conservative on purpose: never touch common speech, never touch exact dictionary words
 // (a token that IS a known name stays), and require the candidate to be clearly closest.
-export function correctNames(transcript: string, knownNames: string[]): string {
+//
+// `sceneNames` MUST be scene-scoped (sims on the lot / in the room). The wide pools —
+// every sim the household has ever met, the whole participant table — belong in the
+// transcription prompt (buildTranscriptionPrompt), not here: fuzzy-matching against 100+
+// half-forgotten townies is what produced the wrong-name snaps live 08-27.
+export function correctNames(transcript: string, sceneNames: string[]): string {
   const vocabulary = new Map<string, string>(); // lowercase -> canonical
-  knownNames.forEach((full) => {
+  sceneNames.forEach((full) => {
+    if (isPlaceholderName(full)) {
+      // "Sim 153" would otherwise contribute "Sim" as a name candidate
+      return;
+    }
     (full ?? '')
       .split(/\s+/)
       .map((part) => part.trim())
@@ -95,8 +123,14 @@ export function correctNames(transcript: string, knownNames: string[]): string {
     if (token[0] !== token[0].toUpperCase()) {
       return token;
     }
+    // Sentence-initial capitalization is indistinguishable from a name, so everyday
+    // speech needs its own guard
+    if (COMMON_WORDS.has(lowered)) {
+      return token;
+    }
     const spoken = phonetic(lowered);
-    const allowed = spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
+    // A three-letter token is one edit from half the world; require an exact phonetic hit
+    const allowed = spoken.length <= 3 ? 0 : spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
     let best: string | undefined;
     let bestDistance = Number.POSITIVE_INFINITY;
     let secondBest = Number.POSITIVE_INFINITY;

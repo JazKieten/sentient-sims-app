@@ -56,6 +56,13 @@ describe('isForeignSpeakerLine', () => {
     expect(isForeignSpeakerLine('"Guardian Angel: hush now"', 'Ricky Rickerson', SPEAKERS)).toBe(true);
   });
 
+  it('flags a line the actor wrote for the player under their custom name', () => {
+    // The caller appends the live playerSpeakerName, so a renamed player ("Jaz") is
+    // guarded exactly like the built-in persona labels
+    expect(isForeignSpeakerLine('Jaz: hush now', 'Ricky Rickerson', [...SPEAKERS, 'Jaz'])).toBe(true);
+    expect(isForeignSpeakerLine('I keep hearing Jaz in my head', 'Ricky Rickerson', [...SPEAKERS, 'Jaz'])).toBe(false);
+  });
+
   it('flags a line the actor wrote for another sim, but not their own label', () => {
     expect(isForeignSpeakerLine('Richy Richardson: I never said that.', 'Ricky Rickerson', SPEAKERS)).toBe(true);
     expect(isForeignSpeakerLine('Ricky Rickerson: I never said that.', 'Ricky Rickerson', SPEAKERS)).toBe(false);

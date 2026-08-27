@@ -1,9 +1,5 @@
 import log from 'electron-log';
-import {
-  PLAYER_VOICE_PERSONA_FLAVOR,
-  PLAYER_VOICE_PERSONA_LABELS,
-  playerSpeakerLabel,
-} from '../models/PlayerVoicePersona';
+import { PLAYER_VOICE_PERSONA_LABELS, playerPersonaFlavor } from '../models/PlayerVoicePersona';
 import {
   ChatContinueInteractionEvent,
   ChatInteractionEvent,
@@ -42,7 +38,6 @@ import {
   defaultWantsPrefixes,
   defaultWantsPrompt,
   directedSceneBudgetMs,
-  playerVoiceSpeaker,
 } from '../constants';
 import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import {
@@ -1011,7 +1006,7 @@ ${diaryRules}`;
       return this.runDirectedGeneration(
         primaryEvent,
         {
-          playerLine: { speaker: playerSpeakerLabel(this.ctx.settings.playerVoicePersona), text: spoken },
+          playerLine: { speaker: this.ctx.settings.playerSpeakerName, text: spoken },
         },
         { priority: true },
       );
@@ -1407,9 +1402,9 @@ If the scene is already good, return it unchanged.`;
       const persona = this.ctx.settings.playerVoicePersona;
       if (options.playerLineFlavor) {
         sceneAction += ` ${playerLine.speaker} is ${options.playerLineFlavor}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
-      } else if (playerLine.speaker === playerSpeakerLabel(persona)) {
-        const bio = persona === 'player' ? this.ctx.settings.playerVoicePersonaBio : '';
-        sceneAction += ` ${playerLine.speaker} is ${PLAYER_VOICE_PERSONA_FLAVOR[persona]}${bio ? ` — ${bio}` : ''}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
+      } else if (playerLine.speaker === this.ctx.settings.playerSpeakerName) {
+        const flavor = playerPersonaFlavor(persona, this.ctx.settings.playerVoicePersonaBio);
+        sceneAction += ` ${playerLine.speaker} is ${flavor}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
       }
     } else {
       sceneAction = promptRequest.action ?? options.action;
@@ -1599,11 +1594,14 @@ Rules for THINK:
         let think = parsed.think || (monologueOnly ? parsed.say : '');
         // The actor wrote somebody else's line (typically the player's next line in a
         // continued voice scene) — drop it rather than air it as this sim's own words
-        if (say && isForeignSpeakerLine(say, sim.name, simNames)) {
+        // The player's own label is in the set too: with a custom name set, "Jaz: ..."
+        // is exactly the impersonation the default labels already guard against
+        const foreignSpeakers = [...simNames, this.ctx.settings.playerSpeakerName];
+        if (say && isForeignSpeakerLine(say, sim.name, foreignSpeakers)) {
           log.warn(`[Pipeline] Actor ${sim.name} spoke for another speaker — dropping say: ${say}`);
           say = '';
         }
-        if (think && isForeignSpeakerLine(think, sim.name, simNames)) {
+        if (think && isForeignSpeakerLine(think, sim.name, foreignSpeakers)) {
           log.warn(`[Pipeline] Actor ${sim.name} thought another speaker's line — dropping think: ${think}`);
           think = '';
         }

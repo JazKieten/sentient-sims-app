@@ -81,6 +81,8 @@ export enum SettingsEnum {
   // V-3: who the player IS when they speak into the game (The Voice, guardian angel, ...)
   PLAYER_VOICE_PERSONA = 'playerVoicePersona',
   PLAYER_VOICE_PERSONA_BIO = 'playerVoicePersonaBio',
+  // The player's own name, spoken to sims instead of the persona's label ('' = the label)
+  PLAYER_VOICE_PERSONA_NAME = 'playerVoicePersonaName',
   // V-8: a second hotkey where speech is an ORDER to the sim, not talk
   VOICE_COMMAND_HOTKEY = 'voiceCommandHotkey',
   // Ask actions: triage Voice/Twitch lines for talk-vs-do; a "do" matches the full action

@@ -125,6 +125,10 @@ export type SimActivity = {
   // mod-side through the reverse index (fallbacks included). A dispatch that names it
   // is an echo of autonomy, not a decision — counted as continue.
   running_action_key?: string;
+  // The running head SI a mod-pushed action starved behind (ss_stuck_watchdog): new
+  // pushes at this sim are doomed until it clears. Absent on older mods = unknown,
+  // never "unreachable".
+  blocked_by?: string;
 };
 
 // A sim's entry in the report: the perception snapshot plus internal state

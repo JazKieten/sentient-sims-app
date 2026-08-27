@@ -536,6 +536,14 @@ export class CognitionService {
     if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return;
     }
+    // The mod's stuck watchdog proved a pushed rescue starves behind this sim's running
+    // head SI — every dispatch until it clears is doomed (live 2026-08-26: three
+    // plausible-looking rescues while hunger fell -52 -> -61). Resumes the report after
+    // blocked_by clears.
+    if (entry.activity?.blocked_by) {
+      log.info(`[Cognition] sim ${simId} rescue held: pushes starve behind ${entry.activity.blocked_by}`);
+      return;
+    }
     const needs = entry.self?.needs ?? {};
     const offered = offeredActions(entry);
     for (const [need, fixes] of Object.entries(CRITICAL_NEED_FIXES)) {

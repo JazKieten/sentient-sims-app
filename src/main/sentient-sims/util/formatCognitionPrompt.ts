@@ -65,7 +65,7 @@ function describeTarget(simId: string, target: SimTargetInfo): string {
     const bits = (target.bits ?? []).map(prettyBit).filter((bit): bit is string => Boolean(bit));
     parts.push(...new Set(bits));
   }
-  return `${target.name ?? 'someone'} (${parts.join(', ')})`;
+  return `${target.name || 'someone'} (${parts.join(', ')})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +227,9 @@ export function buildCognitionUserPrompt(
   hiddenActions?: Set<string>,
 ): string {
   const sections: string[] = [];
-  const name = entry.sim_name ?? entry.sim_id;
+  // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
+  // worse than the id
+  const name = entry.sim_name || entry.sim_id;
   sections.push(`You are ${name} (sim_id ${entry.sim_id}).`);
 
   sections.push(formatPerception(entry));

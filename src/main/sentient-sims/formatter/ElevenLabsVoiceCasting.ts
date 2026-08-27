@@ -166,12 +166,19 @@ export function castElevenLabsVoice(sim: SentientSim): string {
 function findSimForSpeaker(speaker: string, sims: SentientSim[]): SentientSim | undefined {
   // A delivery label on the speaker ("Jasmine (to self)") never changes whose voice it is
   const speakerLower = speaker.replace(/\s*\([^)]*\)\s*$/, '').toLowerCase();
-  const match = sims.find((sim) => {
-    const nameLower = sim.name.toLowerCase();
-    return nameLower === speakerLower || nameLower.startsWith(`${speakerLower} `);
-  });
-  if (match) {
-    return match;
+  // Exact full-name match beats first-name prefix, and an AMBIGUOUS prefix match casts
+  // nobody rather than first-in-list: "Lillie:" in a scene holding two Lillies used to
+  // bind whichever appeared first (live 2026-08-26, finding #4). Uncast falls back to
+  // the configured default voice, which is the safe failure.
+  const exact = sims.filter((sim) => sim.name.toLowerCase() === speakerLower);
+  if (exact.length === 1) {
+    return exact[0];
+  }
+  if (exact.length === 0) {
+    const prefixMatches = sims.filter((sim) => sim.name.toLowerCase().startsWith(`${speakerLower} `));
+    if (prefixMatches.length === 1) {
+      return prefixMatches[0];
+    }
   }
   // Namelessly-reported sims (service NPCs): the scene knows "Sim 153...", but the model
   // labels the line with the character's real name ("Grim Reaper:") — the alias table

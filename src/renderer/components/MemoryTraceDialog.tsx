@@ -26,6 +26,7 @@ const pipelineLabels: Record<MemoryTrace['pipeline'], string> = {
   scene_generation: 'Scene generation (single pass → reviewer)',
   scene_reflection: 'Scene reflection',
   cognition: 'Cognition tick (deliberation → review)',
+  ask_action: 'Ask action (triage → match → decision)',
   other: 'AI calls for this memory',
 };
 

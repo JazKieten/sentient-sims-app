@@ -1334,6 +1334,16 @@ If the scene is already good, return it unchanged.`;
     // Service NPCs arrive named "Sim <id>"; the alias table gives them their real name
     // so prompts and transcripts never call the Grim Reaper "Sim"
     event.sentient_sims = applySimAliasNames(event.sentient_sims);
+    // A solo player line (The Voice, Twitch Chat) may be a request for the sim to DO
+    // something rather than talk. The ask-action sub-type triages it, and only a fully
+    // completed run (matched action + in-character yes/no, refusals included) replaces
+    // the scene — any miss falls through to the ordinary reply below.
+    if (!options.continueScene && options.playerLine && event.sentient_sims.length === 1) {
+      const asked = await this.ctx.askAction.tryAskedAction(event, options, playbackOptions);
+      if (asked) {
+        return asked;
+      }
+    }
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
       AIActionType.DIRECTED_SCENE_DIRECTOR,

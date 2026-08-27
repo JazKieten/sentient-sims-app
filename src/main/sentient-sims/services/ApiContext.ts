@@ -33,6 +33,7 @@ import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { ActionDispatcherService } from './ActionDispatcherService';
+import { AskActionService } from './AskActionService';
 import { VoiceCommandService } from './VoiceCommandService';
 import { DefaultDescriptionService } from './DefaultDescriptionService';
 import { DailyPlanService } from './DailyPlanService';
@@ -247,6 +248,7 @@ export class ApiContext {
   private readonly _actionDispatcherService: ActionDispatcherService;
 
   private _voiceCommandService?: VoiceCommandService;
+  private _askActionService?: AskActionService;
   private _defaultDescriptionService?: DefaultDescriptionService;
   private readonly _simStateCache: SimStateCache;
   private readonly _cognitionService: CognitionService;
@@ -473,6 +475,14 @@ export class ApiContext {
       this._voiceCommandService = new VoiceCommandService(this);
     }
     return this._voiceCommandService;
+  }
+
+  // Lazily built like voiceCommand (needs ai + simStateCache + actionDispatcher)
+  get askAction(): AskActionService {
+    if (!this._askActionService) {
+      this._askActionService = new AskActionService(this);
+    }
+    return this._askActionService;
   }
 
   // V-6: lazily built for the same reason as voiceCommand — it needs ai, which is built late

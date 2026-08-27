@@ -1341,6 +1341,16 @@ If the scene is already good, return it unchanged.`;
     // Service NPCs arrive named "Sim <id>"; the alias table gives them their real name
     // so prompts and transcripts never call the Grim Reaper "Sim"
     event.sentient_sims = applySimAliasNames(event.sentient_sims);
+    // A solo player line (The Voice, Twitch Chat) may be a request for the sim to DO
+    // something rather than talk. The ask-action sub-type triages it, and only a fully
+    // completed run (matched action + in-character yes/no, refusals included) replaces
+    // the scene — any miss falls through to the ordinary reply below.
+    if (!options.continueScene && options.playerLine && event.sentient_sims.length === 1) {
+      const asked = await this.ctx.askAction.tryAskedAction(event, options, playbackOptions);
+      if (asked) {
+        return asked;
+      }
+    }
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
       AIActionType.DIRECTED_SCENE_DIRECTOR,
@@ -1604,7 +1614,10 @@ Rules for THINK:
           performedLines.push(line);
         }
         if (think.length > 1) {
-          monologueBySim.set(sim.name, think);
+          // Keyed by sim_id, never name: two sims sharing a name string collided in
+          // this map and the wrong sim's thought landed in the other's owned memory
+          // row (live 2026-08-26, finding #4)
+          monologueBySim.set(sim.sim_id, think);
         }
       } catch (err) {
         // A failed actor loses their line, not the scene
@@ -1615,7 +1628,7 @@ Rules for THINK:
     if (monologueOnly) {
       return this.finishMonologueScene(event, options, playbackOptions, {
         performer: performers[0],
-        think: monologueBySim.get(performers[0].name),
+        think: monologueBySim.get(performers[0].sim_id),
         sharedScene,
         sceneAction,
         displayAction,
@@ -1717,7 +1730,7 @@ ${
     const sceneScores = await this.runSceneScores(
       sharedScene || sceneAction,
       dialogueText,
-      performers.map((sim) => ({ name: sim.name, think: monologueBySim.get(sim.name) })),
+      performers.map((sim) => ({ name: sim.name, think: monologueBySim.get(sim.sim_id) })),
       options.directorModel,
       interactionActionType,
     );
@@ -2062,15 +2075,28 @@ Respond with ONLY a JSON object in exactly this shape, covering every character,
   // scene can act on it. Best-effort; a missing cognition service must never break a scene.
   private armCognitionDesires(event: SSEvent, scores: Map<string, SceneScore>, monologueBySim: Map<string, string>) {
     scores.forEach((score, name) => {
-      const sim = event.sentient_sims.find((candidate) => candidate.name === name);
-      if (!sim) {
+      // Scores come back from the model keyed by NAME STRING; mapping that back to a
+      // sim must be ambiguity-safe or a name collision arms the WRONG sim's next
+      // action (live 2026-08-26: an infant credited with an adult's go_out). Exactly
+      // one exact match wins; failing that, exactly one first-name-prefix match; still
+      // ambiguous means better no desire than the wrong sim's.
+      let matches = event.sentient_sims.filter((candidate) => candidate.name === name);
+      if (matches.length === 0) {
+        const prefix = `${name.toLowerCase()} `;
+        matches = event.sentient_sims.filter((candidate) => candidate.name.toLowerCase().startsWith(prefix));
+      }
+      if (matches.length !== 1) {
+        if (matches.length > 1) {
+          log.warn(`[Pipeline] scene score for "${name}" matches ${matches.length} sims — skipping, not guessing`);
+        }
         return;
       }
+      const sim = matches[0];
       try {
         this.ctx.cognitionService.armDesireFromScene(sim.sim_id, {
           score: score.action,
           reason: score.action_reason,
-          thought: monologueBySim.get(name),
+          thought: monologueBySim.get(sim.sim_id),
         });
       } catch (error) {
         log.debug(`[Pipeline] could not arm cognition desire for ${name}: ${String(error)}`);
@@ -2089,7 +2115,7 @@ Respond with ONLY a JSON object in exactly this shape, covering every character,
     scores: Map<string, SceneScore>,
   ) {
     performers.forEach((sim) => {
-      const think = monologueBySim.get(sim.name);
+      const think = monologueBySim.get(sim.sim_id);
       if (!think) {
         return;
       }

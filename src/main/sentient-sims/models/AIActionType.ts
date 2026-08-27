@@ -29,6 +29,11 @@ export enum AIActionType {
   VOICE_COMMAND = 'voice_command',
   // V-6: fill a missing sim/location description from live facts
   DESCRIPTION_DEFAULT = 'description_default',
+  // Ask actions: a Voice/Twitch line may be a request for the sim to DO something —
+  // triage talk-vs-do, match onto the full offered vocabulary, then the sim decides
+  ASK_TRIAGE = 'ask_triage',
+  ASK_ACTION_MATCH = 'ask_action_match',
+  ASK_DECISION = 'ask_decision',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -52,6 +57,9 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.DAILY_PLAN,
   AIActionType.VOICE_COMMAND,
   AIActionType.DESCRIPTION_DEFAULT,
+  AIActionType.ASK_TRIAGE,
+  AIActionType.ASK_ACTION_MATCH,
+  AIActionType.ASK_DECISION,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -99,6 +107,12 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Voice Command';
     case AIActionType.DESCRIPTION_DEFAULT:
       return 'Default Description';
+    case AIActionType.ASK_TRIAGE:
+      return 'Ask: Triage';
+    case AIActionType.ASK_ACTION_MATCH:
+      return 'Ask: Action Match';
+    case AIActionType.ASK_DECISION:
+      return 'Ask: Decision';
     default:
       return actionType;
   }
@@ -146,6 +160,12 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Maps a spoken order onto the sim\'s offered actions (cheap model recommended)';
     case AIActionType.DESCRIPTION_DEFAULT:
       return 'Writes a first description for sims and locations that have none';
+    case AIActionType.ASK_TRIAGE:
+      return 'Decides whether a Voice/Chat line is talk or a request to act (cheap model recommended)';
+    case AIActionType.ASK_ACTION_MATCH:
+      return "Matches a Voice/Chat request onto the sim's full offered vocabulary (cheap model recommended)";
+    case AIActionType.ASK_DECISION:
+      return 'The sim decides in character whether to do what was asked, and why';
     default:
       return '';
   }

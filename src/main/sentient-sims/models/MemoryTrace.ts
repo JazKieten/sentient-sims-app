@@ -1,6 +1,12 @@
 import { LLMExchange } from './InteractionEventResult';
 
-export type MemoryTracePipeline = 'directed_scene' | 'scene_generation' | 'scene_reflection' | 'cognition' | 'other';
+export type MemoryTracePipeline =
+  | 'directed_scene'
+  | 'scene_generation'
+  | 'scene_reflection'
+  | 'cognition'
+  | 'ask_action'
+  | 'other';
 
 export type MemoryTraceReview = {
   // What the actors delivered (or the raw scene text) before the reviewer pass

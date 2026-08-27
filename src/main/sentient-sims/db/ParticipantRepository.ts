@@ -5,6 +5,7 @@ import { ParticipantEntity } from './entities/ParticipantEntity';
 import { ParticipantVoiceEntity } from './entities/ParticipantVoiceEntity';
 import { ParticipantDTO } from './dto/ParticipantDTO';
 import { notifySimsChanged } from '../util/notifyRenderer';
+import { isPlaceholderName } from '../util/simAliases';
 import { SaveGame } from '../models/SaveGame';
 import { toVoiceType, VoiceType } from '../models/VoiceType';
 
@@ -21,14 +22,22 @@ export class ParticipantRepository extends Repository {
       .safeIntegers()
       .all([BigInt(participantRequest.id)]) as ParticipantEntity[];
 
+    // A placeholder fullName ("Sim <id>", empty) must never overwrite a real stored
+    // name: once persisted it is served back by every name lookup forever (live
+    // 2026-08-26: the Grim Reaper's row read "Sim 153992008478429871" and three sims
+    // learned to call Death "Sim").
+    const requestNameUsable = !isPlaceholderName(participantRequest.fullName);
+
     if (result.length > 0) {
+      const storedName = result[0].name;
+      const keepStored = !requestNameUsable && !isPlaceholderName(storedName);
       const participant: ParticipantDTO = {
         id: result[0].id.toString(),
         description: result[0].description,
-        name: participantRequest.fullName,
+        name: keepStored ? storedName : participantRequest.fullName,
       };
 
-      if (result[0]?.name !== participant.name) {
+      if (storedName !== participant.name) {
         this.updateParticipant(participant);
       }
 
@@ -38,14 +47,14 @@ export class ParticipantRepository extends Repository {
     const participant: ParticipantDTO = {
       id: participantRequest.id,
       description: defaultSimDescriptions.get(participantRequest.fullName),
-      name: participantRequest.fullName,
+      name: requestNameUsable ? participantRequest.fullName : undefined,
     };
 
     if (participant.description || result.length === 0) {
       this.updateParticipant(participant);
     }
 
-    return participant;
+    return { ...participant, name: participantRequest.fullName };
   }
 
   // V-6: persist a GENERATED default description, but only while the character still has

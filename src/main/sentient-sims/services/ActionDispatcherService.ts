@@ -75,6 +75,7 @@ export class ActionDispatcherService {
       priority: intent.priority,
       insert_strategy: intent.insert_strategy,
       clear_queue: intent.clear_queue,
+      preempt: intent.preempt,
       source: intent.source ?? 'cognition',
     };
     this.pending.set(requestId, { requestId, intent, dispatchedAt: Date.now() });

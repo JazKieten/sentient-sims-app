@@ -4,6 +4,13 @@
 // still finds the placeholder-named sim's pinned voice.
 export type SimAlias = { name: string; simId: string };
 
+// A name the mod could not resolve to anything real: empty, or the "Sim <id>" last
+// resort. Shared so the participant DB never persists one over a real stored name.
+export function isPlaceholderName(name: string | undefined | null): boolean {
+  const trimmed = (name ?? '').trim();
+  return trimmed === '' || /^Sim \d+$/i.test(trimmed);
+}
+
 let aliases: SimAlias[] = [];
 
 export function setSimAliases(next: SimAlias[]) {
@@ -22,8 +29,7 @@ export function applySimAliasNames<T extends { sim_id: string; name: string }>(s
     return sims;
   }
   return sims.map((sim) => {
-    const placeholder = sim.name.trim() === '' || /^Sim \d+$/i.test(sim.name.trim());
-    if (!placeholder) {
+    if (!isPlaceholderName(sim.name)) {
       return sim;
     }
     const alias = aliases.find((entry) => entry.simId === sim.sim_id);

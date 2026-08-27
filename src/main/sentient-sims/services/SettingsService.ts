@@ -309,6 +309,12 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: '',
       },
+      [SettingsEnum.ASK_ACTIONS_ENABLED.toString()]: {
+        type: 'boolean',
+        // On by default: the triage stage is one cheap call, and every failure path falls
+        // through to the ordinary voice/chat reply
+        default: true,
+      },
       [SettingsEnum.SCENE_MAX_ROUNDS.toString()]: {
         type: 'number',
         default: 3,
@@ -1172,6 +1178,10 @@ export class SettingsService {
 
   get voiceCommandHotkey(): string {
     return String(this.get(SettingsEnum.VOICE_COMMAND_HOTKEY) ?? '').trim();
+  }
+
+  get askActionsEnabled(): boolean {
+    return this.get(SettingsEnum.ASK_ACTIONS_ENABLED) as boolean;
   }
 
   get generatedDefaultDescriptions(): boolean {

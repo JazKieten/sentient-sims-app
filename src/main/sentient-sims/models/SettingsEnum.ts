@@ -83,6 +83,9 @@ export enum SettingsEnum {
   PLAYER_VOICE_PERSONA_BIO = 'playerVoicePersonaBio',
   // V-8: a second hotkey where speech is an ORDER to the sim, not talk
   VOICE_COMMAND_HOTKEY = 'voiceCommandHotkey',
+  // Ask actions: triage Voice/Twitch lines for talk-vs-do; a "do" matches the full action
+  // vocabulary and the sim answers yes-or-no in character before it dispatches
+  ASK_ACTIONS_ENABLED = 'askActionsEnabled',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
   // V-6: write a first description for undescribed sims/lots instead of the stock default

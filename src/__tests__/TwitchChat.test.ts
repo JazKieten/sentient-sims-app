@@ -690,7 +690,12 @@ describe('alias voice casting', () => {
     const grim = buildAskSentientSim({ simId: '153', name: 'Sim 153' });
     const overrides = new Map([['153', 'pinned-voice']]);
 
-    const cast = castVoicesForLines([{ speaker: 'Grim Reaper', text: 'Yes.' }], [grim], VoiceType.ElevenLabs, overrides);
+    const cast = castVoicesForLines(
+      [{ speaker: 'Grim Reaper', text: 'Yes.' }],
+      [grim],
+      VoiceType.ElevenLabs,
+      overrides,
+    );
     expect(cast[0].voiceId).toBe('pinned-voice');
 
     // Narrator lines stay uncast, alias or not

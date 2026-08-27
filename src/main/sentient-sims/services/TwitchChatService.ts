@@ -410,7 +410,8 @@ export class TwitchChatService {
   // hold and never catch the active-sim fallback.
   private rosterCandidates(): RosterCandidate[] {
     try {
-      const sims = this.ctx.simStateCache.getReport()?.sims ?? [];
+      const report = this.ctx.simStateCache.getReport();
+      const sims = report?.sims ?? [];
       if (sims.length > 0) {
         this.lastRoster = sims.flatMap((entry) =>
           entry.sim_id && entry.sim_name
@@ -424,6 +425,17 @@ export class TwitchChatService {
               ]
             : [],
         );
+      }
+      // Players switch sims while paused (they pause to type), and full reports only
+      // flow unpaused — so the kept roster's active flag went stale mid-playtest
+      // (live 08-27: every unnamed ask went to a sim deselected 15 minutes earlier).
+      // Paused heartbeats carry the selection; follow it when it names a kept sim.
+      const activeId = report?.active_sim_id;
+      if (activeId && this.lastRoster.some((candidate) => candidate.simId === activeId)) {
+        this.lastRoster = this.lastRoster.map((candidate) => ({
+          ...candidate,
+          isActive: candidate.simId === activeId,
+        }));
       }
       const aliases: RosterCandidate[] = this.ctx.settings.twitchSimAliases.map((alias) => ({
         simId: alias.simId,

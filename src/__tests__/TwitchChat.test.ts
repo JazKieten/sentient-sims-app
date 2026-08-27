@@ -225,7 +225,9 @@ function twitchContext(options?: { followersOnly?: boolean; loggedIn?: boolean; 
     getStatus: vi.fn(() => ({ loggedIn: options?.loggedIn ?? true })),
     isFollower,
   } as unknown as TwitchAuthService;
-  const rosterRef: { sims: RosterEntry[]; reportSims?: RosterEntry[] } = { sims: options?.roster ?? defaultRoster() };
+  const rosterRef: { sims: RosterEntry[]; reportSims?: RosterEntry[]; activeSimId?: string } = {
+    sims: options?.roster ?? defaultRoster(),
+  };
   const runDirectedGeneration = vi.fn().mockResolvedValue({ status: 'generated' });
   const ctx = {
     settings: settingsService,
@@ -233,7 +235,12 @@ function twitchContext(options?: { followersOnly?: boolean; loggedIn?: boolean; 
     simStateCache: {
       // reportSims simulates a supplement/paused report without a sims array; the per-sim
       // entry accessors below still serve the accumulated roster
-      getReport: () => ({ type: 'state_report', seq: 1, sims: rosterRef.reportSims ?? rosterRef.sims }),
+      getReport: () => ({
+        type: 'state_report',
+        seq: 1,
+        sims: rosterRef.reportSims ?? rosterRef.sims,
+        active_sim_id: rosterRef.activeSimId,
+      }),
       getSim: (id: string) => rosterRef.sims.find((entry) => entry.sim_id === id),
       getSimIds: () => rosterRef.sims.map((entry) => entry.sim_id),
     },
@@ -534,6 +541,38 @@ describe('TwitchChatService', () => {
     expect(runDirectedGeneration).toHaveBeenCalledTimes(2);
     const [event2] = runDirectedGeneration.mock.calls[1] as GenerationCall;
     expect(event2.sentient_sims[0].sim_id).toBe('333');
+    service.shutdown();
+  });
+
+  it('follows the paused heartbeat selection for unnamed asks', async () => {
+    const { sockets, service, runDirectedGeneration, rosterRef } = twitchContext();
+    connectSocket(sockets[0]);
+
+    // Unnamed ask goes to the full report's active sim (Bella)
+    privmsg(sockets[0], '!ask how is everyone doing today?');
+    expect(runDirectedGeneration).toHaveBeenCalledTimes(1);
+    const [event] = runDirectedGeneration.mock.calls[0] as GenerationCall;
+    expect(event.sentient_sims[0].sim_id).toBe('222');
+
+    // The player pauses, switches to Lillie, and the paused heartbeat (no sims
+    // array) carries the new selection — the kept roster follows it
+    rosterRef.reportSims = [];
+    rosterRef.activeSimId = '111';
+    await flushAsync();
+    vi.advanceTimersByTime(1001);
+    privmsg(sockets[0], '!ask how is everyone doing today?', '', 'other');
+    expect(runDirectedGeneration).toHaveBeenCalledTimes(2);
+    const [event2] = runDirectedGeneration.mock.calls[1] as GenerationCall;
+    expect(event2.sentient_sims[0].sim_id).toBe('111');
+
+    // A selection the roster does not know (mid-swap edge) changes nothing
+    rosterRef.activeSimId = '999';
+    await flushAsync();
+    vi.advanceTimersByTime(1001);
+    privmsg(sockets[0], '!ask how is everyone doing today?', '', 'third');
+    expect(runDirectedGeneration).toHaveBeenCalledTimes(3);
+    const [event3] = runDirectedGeneration.mock.calls[2] as GenerationCall;
+    expect(event3.sentient_sims[0].sim_id).toBe('111');
     service.shutdown();
   });
 

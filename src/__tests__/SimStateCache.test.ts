@@ -75,6 +75,27 @@ describe('SimStateCache', () => {
     expect(entry?.self?.mood).toBe('Happy');
   });
 
+  it('re-flags cached entries from a paused heartbeat carrying the selection', () => {
+    const cache = new SimStateCache();
+    cache.ingest(
+      report(1, {
+        sims: [
+          { sim_id: '100', sims: [], objects: [], is_active: true },
+          { sim_id: '200', sims: [], objects: [] },
+        ],
+      }),
+    );
+    // The player pauses and switches sims: the heartbeat has no sims array but
+    // names the new selection
+    cache.ingest(report(2, { paused: true, sims: undefined, active_sim_id: '200' }));
+    expect(cache.getSim('100')?.is_active).toBe(false);
+    expect(cache.getSim('200')?.is_active).toBe(true);
+
+    // A selection the cache does not know (mid-swap edge) changes nothing
+    cache.ingest(report(3, { paused: true, sims: undefined, active_sim_id: '999' }));
+    expect(cache.getSim('200')?.is_active).toBe(true);
+  });
+
   it('reset clears everything', () => {
     const cache = new SimStateCache();
     cache.ingest(report(1));

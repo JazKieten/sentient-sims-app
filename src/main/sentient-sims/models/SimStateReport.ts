@@ -159,4 +159,8 @@ export type SimStateReport = {
   known_sims?: KnownSim[];
   // sim_ids that transitioned busy -> idle since the previous report
   went_idle?: string[];
+  // The player's currently selected sim. Rides paused heartbeats too — sim switching
+  // works while paused, so this is fresher than the per-sim is_active flags, which
+  // only update with a full (unpaused) report.
+  active_sim_id?: string;
 };

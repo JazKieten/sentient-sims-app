@@ -42,6 +42,20 @@ export class SimStateCache {
         this.simEntries.set(entry.sim_id, entry);
       }
     });
+    // Sim switching works while paused, so heartbeats carry the selection while the
+    // per-sim is_active flags only refresh with a full report — re-flag the cached
+    // entries so voice commands and unnamed chat asks follow the player immediately.
+    // Only when the selected sim is a cached (reported) sim: a mid-swap or off-lot id
+    // must not strip "active" from everyone and send fallbacks to an arbitrary sim.
+    const activeId = report.active_sim_id;
+    if (activeId && this.simEntries.has(activeId)) {
+      this.simEntries.forEach((entry, simId) => {
+        const isActive = simId === activeId;
+        if (Boolean(entry.is_active) !== isActive) {
+          this.simEntries.set(simId, { ...entry, is_active: isActive });
+        }
+      });
+    }
     this.listeners.forEach((listener) => {
       try {
         listener(report);

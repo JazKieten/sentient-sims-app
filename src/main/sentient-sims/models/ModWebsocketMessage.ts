@@ -82,6 +82,9 @@ export type ModEnqueueInteraction = ModWebsocketMessage & {
   priority?: 'high' | 'low' | 'critical';
   insert_strategy?: 'next' | 'last';
   clear_queue?: boolean;
+  // Cancel the sim's queued AND running interactions before pushing (an accepted
+  // player ask replaces the current plan; the mod spares hidden system SIs)
+  preempt?: boolean;
   source: string;
 };
 

@@ -9,6 +9,9 @@ export type ActionIntent = {
   priority?: 'high' | 'low' | 'critical';
   insert_strategy?: 'next' | 'last';
   clear_queue?: boolean;
+  // Cancel whatever the sim has queued or running before pushing this — set by
+  // accepted ask-actions so the sim drops the old plan instead of finishing it first
+  preempt?: boolean;
   source?: string;
   // The thought that motivated the action; carried into the outcome memory's pre_action so
   // future cognition ticks can see why the action was attempted

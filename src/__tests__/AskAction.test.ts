@@ -151,6 +151,9 @@ describe('Ask actions', () => {
         action: 'read_book',
         target_object_id: '777',
         priority: 'critical',
+        // An accepted ask replaces the sim's current plan: the mod cancels their
+        // queued and running interactions before pushing
+        preempt: true,
         source: ASK_ACTION_SOURCE,
         motivation: 'The Voice asked: "go read a book"',
       }),

@@ -128,6 +128,9 @@ export class AskActionService {
           target_object_id: matched.intent.target_object_id,
           motivation: `${playerLine.speaker} asked: "${playerLine.text}"`,
           priority: 'critical',
+          // The sim said yes to the speaker: whatever they were doing is off. The mod
+          // cancels their queued and running interactions before pushing this one.
+          preempt: true,
           source: ASK_ACTION_SOURCE,
         });
       } catch (error) {

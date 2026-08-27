@@ -459,6 +459,18 @@ export function defaultStore(cwd?: string) {
   });
 }
 
+// Player log bundles are uploaded publicly to Discord, so secret-bearing
+// settings (openaiKey, elevenlabsKey, geminiKeys, ...) must never be logged
+// verbatim.
+const secretSettingKey = /(key|keys|token|secret|password)$/i;
+
+function loggableSettingValue(key: string, value: unknown): string {
+  if (secretSettingKey.test(key) && typeof value === 'string' && value !== '') {
+    return '"<redacted>"';
+  }
+  return JSON.stringify(value);
+}
+
 export class SettingsService {
   private readonly store;
 
@@ -485,7 +497,7 @@ export class SettingsService {
     this.store.set(key, value);
 
     if (key !== (SettingsEnum.ACCESS_TOKEN as string)) {
-      log.info(`Setting app setting: ${key} to value: ${JSON.stringify(value)}`);
+      log.info(`Setting app setting: ${key} to value: ${loggableSettingValue(key, value)}`);
     }
     if (key === (SettingsEnum.DEBUG_LOGS as string)) {
       if (value) {
@@ -633,7 +645,7 @@ export class SettingsService {
   resetSetting(key: string) {
     this.store.reset(key);
     const defaultValue = this.getSetting(key);
-    log.info(`Reset app setting: ${key} to value: ${JSON.stringify(defaultValue)}`);
+    log.info(`Reset app setting: ${key} to value: ${loggableSettingValue(key, defaultValue)}`);
     return defaultValue;
   }
 

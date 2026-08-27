@@ -34,7 +34,8 @@ import { resolveSimTarget, buildAskSentientSim } from 'main/sentient-sims/util/t
 
 import { applySimAliasNames, setSimAliases } from 'main/sentient-sims/util/simAliases';
 
-import { castVoicesForLines } from 'main/sentient-sims/formatter/ElevenLabsVoiceCasting';
+import { castVoicesForLines } from 'main/sentient-sims/formatter/VoiceCasting';
+import { VoiceType } from 'main/sentient-sims/models/VoiceType';
 
 import { TwitchChatService, TwitchSocketLike } from 'main/sentient-sims/services/TwitchChatService';
 
@@ -689,11 +690,16 @@ describe('alias voice casting', () => {
     const grim = buildAskSentientSim({ simId: '153', name: 'Sim 153' });
     const overrides = new Map([['153', 'pinned-voice']]);
 
-    const cast = castVoicesForLines([{ speaker: 'Grim Reaper', text: 'Yes.' }], [grim], overrides);
+    const cast = castVoicesForLines([{ speaker: 'Grim Reaper', text: 'Yes.' }], [grim], VoiceType.ElevenLabs, overrides);
     expect(cast[0].voiceId).toBe('pinned-voice');
 
     // Narrator lines stay uncast, alias or not
-    const narration = castVoicesForLines([{ speaker: 'Narrator', text: 'Meanwhile...' }], [grim], overrides);
+    const narration = castVoicesForLines(
+      [{ speaker: 'Narrator', text: 'Meanwhile...' }],
+      [grim],
+      VoiceType.ElevenLabs,
+      overrides,
+    );
     expect(narration[0].voiceId).toBeUndefined();
     setSimAliases([]);
   });

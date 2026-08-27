@@ -35,6 +35,7 @@ import { AuthProvider } from './providers/AuthProvider';
 import { AmplifyConfig } from './AmplifyConfig';
 import OnlineMappingBrowser from './components/OnlineMappingBrowser';
 import AILogPage from './AILogPage';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 
 Amplify.configure(AmplifyConfig);
 
@@ -105,34 +106,36 @@ const queryClient = new QueryClient();
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
 root.render(
-  <ThemeProvider theme={theme}>
-    <CssBaseline />
-    <Authenticator.Provider>
-      <React.StrictMode>
-        <QueryClientProvider client={queryClient}>
-          <AuthProvider>
-            <SnackBarProvider>
-              <WebsocketProvider>
-                <VersionsProvider>
-                  <ModUpdateProvider>
-                    <AISettingsProvider>
-                      <AudioContextProvider>
-                        <VoiceInputProvider>
-                          <ChatGenerationProvider>
-                            <DebugModeProvider>
-                              <RouterProvider router={router} />
-                            </DebugModeProvider>
-                          </ChatGenerationProvider>
-                        </VoiceInputProvider>
-                      </AudioContextProvider>
-                    </AISettingsProvider>
-                  </ModUpdateProvider>
-                </VersionsProvider>
-              </WebsocketProvider>
-            </SnackBarProvider>
-          </AuthProvider>
-        </QueryClientProvider>
-      </React.StrictMode>
-    </Authenticator.Provider>
-  </ThemeProvider>,
+  <AppErrorBoundary>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Authenticator.Provider>
+        <React.StrictMode>
+          <QueryClientProvider client={queryClient}>
+            <AuthProvider>
+              <SnackBarProvider>
+                <WebsocketProvider>
+                  <VersionsProvider>
+                    <ModUpdateProvider>
+                      <AISettingsProvider>
+                        <AudioContextProvider>
+                          <VoiceInputProvider>
+                            <ChatGenerationProvider>
+                              <DebugModeProvider>
+                                <RouterProvider router={router} />
+                              </DebugModeProvider>
+                            </ChatGenerationProvider>
+                          </VoiceInputProvider>
+                        </AudioContextProvider>
+                      </AISettingsProvider>
+                    </ModUpdateProvider>
+                  </VersionsProvider>
+                </WebsocketProvider>
+              </SnackBarProvider>
+            </AuthProvider>
+          </QueryClientProvider>
+        </React.StrictMode>
+      </Authenticator.Provider>
+    </ThemeProvider>
+  </AppErrorBoundary>,
 );

@@ -11,9 +11,10 @@ import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
 import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
-import { castVoicesForLines } from '../formatter/ElevenLabsVoiceCasting';
+import { castVoicesForLines } from '../formatter/VoiceCasting';
 import { SentientSim } from '../models/SentientSim';
 import { TwitchChatStatus } from '../models/TwitchChatStatus';
+import { VoiceType } from '../models/VoiceType';
 import { consumePacedScene } from './pacedScenes';
 
 function notifyAllWindows(message: string, ...args: unknown[]) {
@@ -131,23 +132,29 @@ export function sendChatGeneration(response: InteractionEventResult) {
   notifyAllWindows('on-chat-generation', response);
 }
 
+export type PlayTTSVoiceOptions = {
+  // Which provider's voices to cast onto lines; undefined means the active TTS setup
+  // has no per-sim voices, so lines stay uncast and play with the settings default
+  voiceType?: VoiceType;
+  // Voice ids the user pinned to specific sims, keyed by sim id
+  voiceOverrides?: Map<string, string>;
+};
+
 export function playTTSLines(
   lines: DialogueLine[],
   sims?: SentientSim[],
-  options?: {
+  options?: PlayTTSVoiceOptions & {
     paced?: boolean;
     preamble?: string;
     pacedText?: string;
     // V-2: front of the renderer's scene queue
     priority?: boolean;
-    // Voice ids the user pinned to specific sims, keyed by sim id
-    voiceOverrides?: Map<string, string>;
   },
 ) {
   log.debug('Sending on-voice');
   let castLines = lines;
-  if (sims && sims.length > 0) {
-    castLines = castVoicesForLines(lines, sims, options?.voiceOverrides);
+  if (sims && sims.length > 0 && options?.voiceType) {
+    castLines = castVoicesForLines(lines, sims, options.voiceType, options.voiceOverrides);
   }
   notifyAllWindows('on-voice', castLines, {
     paced: options?.paced ?? false,
@@ -194,7 +201,7 @@ export function sendPlayerVoiceStatusToMod(
   });
 }
 
-export function playTTS(text: string, sims?: SentientSim[], voiceOverrides?: Map<string, string>) {
+export function playTTS(text: string, sims?: SentientSim[], options?: PlayTTSVoiceOptions) {
   const lines = parseDialogueLines(
     text,
     sims?.map((sim) => sim.name),
@@ -205,11 +212,11 @@ export function playTTS(text: string, sims?: SentientSim[], voiceOverrides?: Map
   // line when every line of the response was accounted for; otherwise read the whole thing.
   const nonEmptyLineCount = text.split('\n').filter((line) => line.trim().length > 0).length;
   if (lines.length < nonEmptyLineCount) {
-    playTTSLines([{ speaker: 'Narrator', text: text.trim() }], sims, { voiceOverrides });
+    playTTSLines([{ speaker: 'Narrator', text: text.trim() }], sims, options);
     return;
   }
 
-  playTTSLines(lines, sims, { voiceOverrides });
+  playTTSLines(lines, sims, options);
 }
 
 export function sendPopUpNotification(message?: string) {

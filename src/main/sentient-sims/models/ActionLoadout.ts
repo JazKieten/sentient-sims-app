@@ -8,9 +8,10 @@
 // failure class), and the rule-lane travel verbs the safety lanes dispatch. The loadout
 // is a personality filter, not a capability system.
 //
-// Mirrors the mod's whitelist categories (ss_affordance_whitelist.py — 52 pushable keys
-// as of 2026-08-15 plus two documented-unsupported picker entries); the mod's
-// local/audit_whitelist.py `drift()` diffs these sets against the whitelist.
+// Mirrors the mod's whitelist categories (ss_affordance_whitelist.py — 58 pushable keys
+// as of 2026-08-26 (52 from 08-15 + 6 infant/toddler) plus two documented-unsupported
+// picker entries); the mod's local/audit_whitelist.py `drift()` diffs these sets
+// against the whitelist.
 
 export const ALWAYS_AVAILABLE_ACTIONS = new Set([
   // need
@@ -39,6 +40,14 @@ export const ALWAYS_AVAILABLE_ACTIONS = new Set([
   'feed_baby',
   'change_diaper',
   'soothe_baby',
+  // infant care (Growing Together infants are sims, not bassinets — the three verbs
+  // above stop resolving the moment a baby ages up) and the toddler social floor
+  // (toddlers refuse sim_Chat, so talk/comfort are their 'chat')
+  'feed_infant',
+  'change_infant_diaper',
+  'put_infant_to_nap',
+  'talk_to_toddler',
+  'comfort_toddler',
 ]);
 
 // What the nightly planner picks from. Off-loadout keys in this set are removed from
@@ -62,6 +71,7 @@ export const DISCRETIONARY_ACTIONS = new Set([
   'tell_joke',
   'tell_funny_story',
   'hug',
+  'hug_toddler',
   // romance / mean
   'flirt',
   'kiss',
@@ -126,6 +136,7 @@ export const DISCRETIONARY_GROUPS: Record<string, string[]> = {
     'tell_joke',
     'tell_funny_story',
     'hug',
+    'hug_toddler',
   ],
   romance: ['flirt', 'kiss'],
   mean: ['insult'],

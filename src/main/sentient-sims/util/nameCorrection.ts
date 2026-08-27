@@ -58,10 +58,12 @@ export function buildTranscriptionPrompt(nameGroups: string[][]): string | undef
 }
 
 // Loose phonetic normalization so "Lily" and "Lillie" (or "Meika"/"Mika") compare close:
-// doubled letters collapse, y/ie -> i, ph -> f, ck -> k
+// doubled letters collapse, y/ie -> i, ph -> f, ck -> k, silent-w wr -> r ("Wren" is
+// heard as "Ren"/"Rin", live 08-27)
 export function phonetic(text: string): string {
   return text
     .toLowerCase()
+    .replace(/wr/g, 'r')
     .replace(/ph/g, 'f')
     .replace(/ck/g, 'k')
     .replace(/ie\b/g, 'i')
@@ -91,13 +93,14 @@ const COMMON_WORDS = new Set(
 // Conservative on purpose: never touch common speech, never touch exact dictionary words
 // (a token that IS a known name stays), and require the candidate to be clearly closest.
 //
-// `sceneNames` MUST be scene-scoped (sims on the lot / in the room). The wide pools —
-// every sim the household has ever met, the whole participant table — belong in the
-// transcription prompt (buildTranscriptionPrompt), not here: fuzzy-matching against 100+
-// half-forgotten townies is what produced the wrong-name snaps live 08-27.
-export function correctNames(transcript: string, sceneNames: string[]): string {
+// The pool is deliberately WIDE (participants included): players pause the game to talk,
+// and while paused the state report carries no sims — a scene-scoped pool went empty at
+// exactly the moment it was needed (live 08-27: "Margot" stayed uncorrected). The
+// wrong-name snaps that motivated scoping were sentence-initial fillers, and the
+// COMMON_WORDS guard handles those directly.
+export function correctNames(transcript: string, knownNames: string[]): string {
   const vocabulary = new Map<string, string>(); // lowercase -> canonical
-  sceneNames.forEach((full) => {
+  knownNames.forEach((full) => {
     if (isPlaceholderName(full)) {
       // "Sim 153" would otherwise contribute "Sim" as a name candidate
       return;
@@ -129,8 +132,7 @@ export function correctNames(transcript: string, sceneNames: string[]): string {
       return token;
     }
     const spoken = phonetic(lowered);
-    // A three-letter token is one edit from half the world; require an exact phonetic hit
-    const allowed = spoken.length <= 3 ? 0 : spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
+    const allowed = spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
     let best: string | undefined;
     let bestDistance = Number.POSITIVE_INFINITY;
     let secondBest = Number.POSITIVE_INFINITY;

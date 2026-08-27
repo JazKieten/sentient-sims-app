@@ -155,9 +155,9 @@ export class VoiceInputService {
         sendPlayerVoiceStatusToMod('error', 'Heard nothing');
         return '';
       }
-      // V-7 post-pass: snap near-miss names to the sims actually in play. The settings
-      // Test button goes through transcribe() directly and stays raw on purpose.
-      const text = correctNames(raw, this.sceneNames());
+      // V-7 post-pass: snap near-miss names to the sims in play. The settings Test
+      // button goes through transcribe() directly and stays raw on purpose.
+      const text = correctNames(raw, this.knownNames());
       if (text !== raw) {
         log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }
@@ -181,27 +181,35 @@ export class VoiceInputService {
     }
   }
 
-  // Only the sims on the lot and the ones perceived in the room — the pool correctNames
-  // is allowed to snap a spoken token to. The wider pools (everyone the household has met,
-  // the whole participant table) still ride the transcription prompt via
-  // TranscriptionService.namePrompt, where a name can only help Whisper hear it right;
-  // here they could only rename the person the player is actually talking to.
-  private sceneNames(): string[] {
+  // Every name the save knows, participants included. Deliberately wide: the player
+  // pauses the game to talk, and paused reports carry no sims — a scene-scoped pool went
+  // empty at exactly the moment corrections were needed (live 08-27). Filler-word snaps
+  // are handled by correctNames' COMMON_WORDS guard instead of by shrinking this pool.
+  private knownNames(): string[] {
     try {
       const report = this.ctx.simStateCache?.getReport?.();
       const names = new Set<string>();
-      (report?.sims ?? []).forEach((entry) => {
-        if (entry.sim_name && !isPlaceholderName(entry.sim_name)) {
-          names.add(entry.sim_name);
+      const add = (name: string | undefined) => {
+        if (name && !isPlaceholderName(name)) {
+          names.add(name);
         }
+      };
+      (report?.sims ?? []).forEach((entry) => {
+        add(entry.sim_name);
         (entry.sims ?? []).forEach((sim) => {
-          // Perception only names sims in the same room (identity is not learned
-          // through a wall), so this is exactly who is present
-          if (sim.name && !isPlaceholderName(sim.name)) {
-            names.add(sim.name);
-          }
+          add(sim.name);
         });
       });
+      (report?.known_sims ?? []).forEach((sim) => {
+        add(sim.name);
+      });
+      try {
+        this.ctx.participantRepository.getAllParticipants().forEach((participant) => {
+          add(participant.name);
+        });
+      } catch {
+        // no DB loaded: the report names still apply
+      }
       return [...names];
     } catch {
       return [];

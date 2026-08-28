@@ -115,6 +115,16 @@ export function isRomanceAge(age: string | undefined): boolean {
   return age !== undefined && ROMANCE_AGES.has(age.trim().toUpperCase());
 }
 
+// Zone travel a sim takes on their own initiative: TEEN+ only, mirrored from the mod's
+// whitelist min_age (live 2026-08-17..27: 29 of 30 logged go_outs were babies/infants/
+// toddlers — an immobile infant solo-traveled to a bar). The mod's age_blocked already
+// narrows these for current builds; stripping here is the skew guard for an older mod
+// that reports no age_blocked entries for handler verbs. The game's TEEN+ set and the
+// romance-age set coincide, so isRomanceAge doubles as the actor-age predicate.
+export const SOLO_TRAVEL_ACTIONS = new Set(['go_out', 'travel_to_zone']);
+
+export const isTeenPlus = isRomanceAge;
+
 // Non-romance socials the game refuses when the TARGET is under teen — the age test
 // rides the social's mixer, so preflight passes and the cancel only lands at execution
 // ("TargetSim's age is Age.CHILD, must be one of Age.TEEN, YOUNGADULT, ADULT, ELDER",

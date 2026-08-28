@@ -465,3 +465,46 @@ describe('persona wording (N-5)', () => {
     expect(service.validate({ persona: 'I am the calm one.' }, []).persona).toBe('I am the calm one.');
   });
 });
+
+describe('outing nudges (C1, 2026-08-27)', () => {
+  it('nudges an outgoing personality toward an outing slot', () => {
+    const { service } = buildService();
+    // Traits arrive as raw tuning names (verified live)
+    const block = service.buildChoicesBlock(POOL, undefined, 'ADULT', [], undefined, undefined, {
+      traits: ['trait_SelfAssured', 'trait_Perfectionist'],
+    });
+    expect(block).toContain('outing key (go_out)');
+  });
+
+  it('stays quiet for a homebody on a weekday', () => {
+    const { service } = buildService();
+    const block = service.buildChoicesBlock(POOL, undefined, 'ADULT', [], undefined, undefined, {
+      traits: ['trait_Loner', 'trait_Geek'],
+      plannedWeekday: 3,
+    });
+    expect(block).not.toContain('outing key (go_out)');
+    expect(block).not.toContain('weekend');
+  });
+
+  it('nudges on weekend days only (0=Sunday, 6=Saturday, verified live)', () => {
+    const { service } = buildService();
+    for (const [day, expected] of [
+      [0, true],
+      [6, true],
+      [5, false],
+    ] as [number, boolean][]) {
+      const block = service.buildChoicesBlock(POOL, undefined, 'ADULT', [], undefined, undefined, {
+        plannedWeekday: day,
+      });
+      expect(block.includes('It is the weekend'), String(day)).toBe(expected);
+    }
+  });
+
+  it('never matches "bro" as a substring of another trait', () => {
+    const { service } = buildService();
+    const block = service.buildChoicesBlock(POOL, undefined, 'ADULT', [], undefined, undefined, {
+      traits: ['trait_Hidden_BrokenHome', 'trait_Umbrella_User'],
+    });
+    expect(block).not.toContain('outing key (go_out)');
+  });
+});

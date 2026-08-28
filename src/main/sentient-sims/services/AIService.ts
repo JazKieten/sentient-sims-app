@@ -505,6 +505,16 @@ export class AIService {
         // G-5/G-8: what tonight's lot serves (annotation only) and goals carried too long
         lotServes: DailyPlanService.lotServedKeys(entry, this.ctx.simStateCache.getReport()?.lot?.action_keys),
         stuck: this.ctx.dailyPlan.stuckGoals(pov.simId, targetDay),
+        // The weekday of the day being planned (the one the sim wakes into): before
+        // midnight that's tomorrow, after midnight it's already today. 0=Sun..6=Sat.
+        plannedWeekday: (() => {
+          const day = this.ctx.simStateCache.getReport()?.lot?.clock?.day;
+          if (day === undefined) {
+            return undefined;
+          }
+          const hour = sleepClock?.hour;
+          return hour !== undefined && hour < 12 ? day : (day + 1) % 7;
+        })(),
       };
     } catch (err) {
       log.warn('[DailyPlan] sleep plan context failed; running plain reflection', err);
@@ -601,6 +611,7 @@ ${aboutLine}${this.ctx.dailyPlan.buildChoicesBlock(
             planContext.ageBlocked,
             planContext.lotServes,
             planContext.stuck,
+            { traits: planContext.traits, plannedWeekday: planContext.plannedWeekday },
           )}
 
 Reply with ONLY a JSON object, fields in this order:

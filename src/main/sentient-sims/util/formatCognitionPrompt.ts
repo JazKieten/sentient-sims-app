@@ -3,7 +3,7 @@
 // vocabulary), and every policy rule that can be enforced in code is enforced in code —
 // the preamble only carries the judgment calls a model has to make.
 
-import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
+import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
 import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout';
@@ -90,7 +90,7 @@ Read the activity line against the needs: a Sim topping up a need that is alread
 
 export const ACTION_OPTIONS_SYSTEM_PROMPT = `You are directing a choose-your-own-adventure beat for one Sim in The Sims 4 who wants a change of course.
 Given their situation, their inner monologue, and what is pulling at them, reply with ONLY a JSON object:
-{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "label": "the choice as the Sim would think it, one short line"}]}
+{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "destination": "<venue name, only for go out, only from the listed destinations>", "label": "the choice as the Sim would think it, one short line"}]}
 Rules:
 - 3 to 5 options, each a genuinely different answer to the pull — more of something, less of something, or something new. No filler.
 - Every "action" MUST be an action key from the OFFERED lists in the situation; social actions need a target_sim_id from the OFFERED people. Never invent actions, targets, or ids.
@@ -186,6 +186,8 @@ export type ActionOption = {
   action: string;
   target_sim_id?: string;
   target_object_id?: string;
+  // go_out only: the venue NAME chosen from the prompt's destination list
+  destination?: string;
   label?: string;
 };
 
@@ -204,6 +206,7 @@ export function parseActionOptions(raw: string): { scene?: string; options: Acti
       action: typeof option.action === 'string' ? option.action : '',
       target_sim_id: typeof option.target_sim_id === 'string' ? option.target_sim_id : undefined,
       target_object_id: typeof option.target_object_id === 'string' ? option.target_object_id : undefined,
+      destination: typeof option.destination === 'string' ? option.destination : undefined,
       label: typeof option.label === 'string' ? option.label : undefined,
     }))
     .filter((option) => option.action.length > 0);
@@ -260,6 +263,9 @@ export function buildCognitionUserPrompt(
   // Filtered out of the rendered social lists (object/lot channels are narrowed upstream).
   // Never listed as "NOT possible": a hidden key is ABSENT from the prompt, not named.
   hiddenActions?: Set<string>,
+  // go_out destinations (the mod's venue directory, same-world first); rendered only
+  // when go_out is actually offered this tick
+  venues?: VenueEntry[],
 ): string {
   const sections: string[] = [];
   // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
@@ -374,6 +380,29 @@ export function buildCognitionUserPrompt(
   sections.push(`OFFERED object actions: ${objectList}`);
   if (offered.lotActions.size > 0) {
     sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
+  }
+  if (offered.lotActions.has('go_out') && venues && venues.length > 0) {
+    // Names only — zone ids never reach the model. Same-world entries lead (the mod
+    // sorts them first) and the cap keeps the prompt from ballooning; anywhere in the
+    // directory stays reachable because validateIntent matches by name, not by list
+    // position... but the model can only name what it sees, so cap generously.
+    const listed = venues
+      .slice(0, 12)
+      .map((venue) => {
+        const detail = [venue.venue, venue.world].filter(Boolean).join(', ');
+        return detail ? `${venue.name} (${detail})` : `${venue.name}`;
+      })
+      .join('; ');
+    sections.push(
+      `go_out destinations — name one with "destination" on a go out option, or leave it off to just head somewhere: ${listed}.`,
+    );
+    // The gentle evening pull: a lonely sim at home with the night ahead should think
+    // of going out on their own — same pattern as the dirty/broken lines above
+    const hour = report?.lot?.clock?.hour;
+    const social = entry.self?.needs?.social;
+    if (typeof hour === 'number' && hour >= 18 && typeof social === 'number' && social < 25) {
+      sections.push('The evening is young and nobody is around — going out (go_out) would put people nearby.');
+    }
   }
   sections.push(`OFFERED people to talk to: ${simList}`);
   if (awakeTargets.length > 0) {

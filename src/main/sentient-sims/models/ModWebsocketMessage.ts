@@ -85,6 +85,9 @@ export type ModEnqueueInteraction = ModWebsocketMessage & {
   // Cancel the sim's queued AND running interactions before pushing (an accepted
   // player ask replaces the current plan; the mod spares hidden system SIs)
   preempt?: boolean;
+  // go_out/travel_to_zone: destination zone (string — the ids are 64-bit); the mod
+  // validates it against its venue directory and falls back to its own picker
+  zone_id?: string;
   source: string;
 };
 

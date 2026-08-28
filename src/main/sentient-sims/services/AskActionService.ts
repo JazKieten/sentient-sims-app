@@ -8,7 +8,7 @@ import { SentientSim } from '../models/SentientSim';
 import { SimStateEntry } from '../models/SimStateReport';
 import { playerPersonaFlavor } from '../models/PlayerVoicePersona';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
-import { firstJsonBlock } from '../util/formatCognitionPrompt';
+import { firstJsonBlock, firstJsonBlockLoose } from '../util/formatCognitionPrompt';
 import { markScenePaced } from '../util/pacedScenes';
 import { sendSceneLineToMod } from '../util/notifyRenderer';
 import { formatSceneForChatWindow } from '../formatter/PromptFormatter';
@@ -113,6 +113,9 @@ export class AskActionService {
       interactionActionType,
     );
     if (!decision) {
+      // Every other miss on this path says so out loud; this one used to be the pipeline's
+      // one silent exit, which read in the log as "the ask never happened"
+      log.info(`[AskAction] no usable decision from ${sim.name} for "${playerLine.text}" — answering as talk`);
       return undefined;
     }
     log.info(
@@ -204,7 +207,9 @@ export class AskActionService {
         interactionActionType,
       );
       exchanges.push(shot.exchange);
-      const parsed = firstJsonBlock(shot.text) as
+      // Loose for the same reason as the decision stage: "label" is prose, and an
+      // unquoted one would throw away a perfectly good action match
+      const parsed = firstJsonBlockLoose(shot.text) as
         | { action?: string | null; target_sim_id?: string; target_object_id?: string; label?: string }
         | undefined;
       if (parsed && typeof parsed.action === 'string' && parsed.action) {
@@ -310,9 +315,14 @@ Will you do it?`;
         interactionActionType,
       );
       exchanges.push(shot.exchange);
-      const parsed = firstJsonBlock(shot.text) as { willing?: unknown; thought?: unknown } | undefined;
+      // Loose: this stage asks for a prose "thought", and the answer comes back with it
+      // unquoted often enough that a strict parse threw the sim's decision away silently
+      const parsed = firstJsonBlockLoose(shot.text) as { willing?: unknown; thought?: unknown } | undefined;
       const thought = typeof parsed?.thought === 'string' ? parsed.thought.trim().slice(0, 300) : '';
       if (!parsed || typeof parsed.willing !== 'boolean' || thought.length <= 1) {
+        log.warn(
+          `[AskAction] ${sim.name}'s decision was unusable; received: ${JSON.stringify(shot.text.slice(0, 200))}`,
+        );
         return undefined;
       }
       return { willing: parsed.willing, thought };

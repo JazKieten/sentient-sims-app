@@ -10,6 +10,7 @@ import { SimAge } from 'main/sentient-sims/models/SimAge';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { ASK_ACTION_SOURCE } from 'main/sentient-sims/services/AskActionService';
+import { firstJsonBlock, firstJsonBlockLoose } from 'main/sentient-sims/util/formatCognitionPrompt';
 import { mockApiContext } from './util';
 
 // The ask-action sub-type: a solo Voice/Twitch line triaged as a request to DO something
@@ -263,5 +264,93 @@ describe('Ask actions', () => {
     expect(request.memory.action).toEqual('Chat: go read a book');
     expect(request.index?.owner).toEqual(askedSim.sim_id);
     expect(opts?.modDisplayAction).toEqual('Chat (viewer): go read a book');
+  });
+
+  // Live 2026-08-27: llama-3.3-70b answered this stage with the prose unquoted almost
+  // every time, a strict parse threw, and 21 of 22 matched asks died here without a word
+  // in the log — the player heard an ordinary talk reply while the sim had said yes
+  it('dispatches when the decision comes back with the thought unquoted', async () => {
+    decisionOutput =
+      '{"willing": true, "thought": I need to get ready for the day anyway and brushing my teeth is a good place to start, might as well get it out of the way}';
+    mockGeneration();
+    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+
+    const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ action: 'read_book', preempt: true }));
+    expect(result.memory?.content).toEqual(
+      'Marisol Vega (to self): I need to get ready for the day anyway and brushing my teeth is a good place to start, might as well get it out of the way',
+    );
+  });
+
+  it('airs an unquoted refusal without dispatching anything', async () => {
+    decisionOutput =
+      '{"willing": false, "thought": I\'m not really in the mood for games, and I don\'t feel like being told what to do right now}';
+    mockGeneration();
+    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+
+    const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(result.memory?.content).toContain("I'm not really in the mood for games");
+  });
+
+  it('matches when the label comes back unquoted', async () => {
+    matchOutput = '{"action": "read_book", "target_object_id": "777", "label": read a book, "confidence": 0.9}';
+    mockGeneration();
+    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+
+    await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
+
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ action: 'read_book' }));
+  });
+
+  it('falls through to the ordinary voice reply when the decision is unrepairable', async () => {
+    decisionOutput = 'Sure, why not!';
+    mockGeneration();
+    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+
+    const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(result.exchanges?.map((exchange) => exchange.label)).toContain('Director Briefing');
+  });
+});
+
+describe('firstJsonBlockLoose', () => {
+  it('quotes a bare prose value, commas and apostrophes intact', () => {
+    expect(
+      firstJsonBlockLoose('{"willing": false, "thought": I\'m exhausted, and rest, not jogging, is what I want}'),
+    ).toEqual({ willing: false, thought: "I'm exhausted, and rest, not jogging, is what I want" });
+  });
+
+  it('repairs a bare value that is not the last key', () => {
+    expect(firstJsonBlockLoose('{"thought": I would rather not, honestly, "willing": false}')).toEqual({
+      thought: 'I would rather not, honestly',
+      willing: false,
+    });
+  });
+
+  it('leaves well-formed JSON exactly as strict parsing found it', () => {
+    const raw = '{"action": null, "confidence": 0, "label": "read a book"}';
+    expect(firstJsonBlockLoose(raw)).toEqual(firstJsonBlock(raw));
+    expect(firstJsonBlockLoose('{"willing": true, "thought": "Quoted, with a comma."}')).toEqual({
+      willing: true,
+      thought: 'Quoted, with a comma.',
+    });
+  });
+
+  it('keeps real scalars typed rather than stringifying them', () => {
+    expect(firstJsonBlockLoose('{"confidence": 0.8, "willing": true, "note": plain words}')).toEqual({
+      confidence: 0.8,
+      willing: true,
+      note: 'plain words',
+    });
+  });
+
+  it('stays a miss when there is nothing to repair', () => {
+    expect(firstJsonBlockLoose('Sure, why not!')).toBeUndefined();
+    expect(firstJsonBlockLoose('{"willing": true, "thought": [unclosed}')).toBeUndefined();
   });
 });

@@ -266,6 +266,51 @@ describe('Ask actions', () => {
     expect(opts?.modDisplayAction).toEqual('Chat (viewer): go read a book');
   });
 
+  // The chat voice narrating the question is the whole reason a viewer's ask reads as a
+  // viewer's ask on stream. It airs on the ordinary talk path; before this it went silent
+  // the moment triage said "do", so the same question was narrated or not depending on
+  // which pipeline it happened to take.
+  it('narrates the Twitch question in the chat voice on the ask-action path too', async () => {
+    mockGeneration();
+    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const playTtsLines = vi.spyOn(ctx.ai, 'playTtsLines').mockReturnValue(undefined);
+
+    await ctx.ai.runDirectedGeneration(
+      buildSoloChatEvent('go read a book'),
+      {
+        playerLine: { speaker: 'Chat', text: 'go read a book' },
+        playerLineDisplaySpeaker: 'Chat (viewer)',
+        speakPlayerLine: { voiceId: 'voice-123', spokenText: 'viewer asks: go read a book' },
+      },
+      { priority: true },
+    );
+
+    expect(playTtsLines).toHaveBeenCalledTimes(1);
+    const [lines] = playTtsLines.mock.calls[0];
+    expect(lines).toEqual([
+      {
+        speaker: 'Chat (viewer)',
+        text: 'viewer asks: go read a book',
+        voiceId: 'voice-123',
+        // The subtitle went out via sendSceneLineToMod above; the renderer must not
+        // report this line again when it starts playing
+        skipSceneLine: true,
+      },
+      { speaker: 'Marisol Vega (to self)', text: 'A book sounds perfect right now.' },
+    ]);
+  });
+
+  it("leaves the Voice's own ask unvoiced — the player already said it", async () => {
+    mockGeneration();
+    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const playTtsLines = vi.spyOn(ctx.ai, 'playTtsLines').mockReturnValue(undefined);
+
+    await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
+
+    const [lines] = playTtsLines.mock.calls[0];
+    expect(lines).toEqual([{ speaker: 'Marisol Vega (to self)', text: 'A book sounds perfect right now.' }]);
+  });
+
   // Live 2026-08-27: llama-3.3-70b answered this stage with the prose unquoted almost
   // every time, a strict parse threw, and 21 of 22 matched asks died here without a word
   // in the log — the player heard an ordinary talk reply while the sim had said yes

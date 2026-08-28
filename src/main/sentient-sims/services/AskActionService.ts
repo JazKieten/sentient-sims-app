@@ -11,7 +11,7 @@ import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { firstJsonBlock, firstJsonBlockLoose } from '../util/formatCognitionPrompt';
 import { markScenePaced } from '../util/pacedScenes';
 import { sendSceneLineToMod } from '../util/notifyRenderer';
-import { formatSceneForChatWindow } from '../formatter/PromptFormatter';
+import { DialogueLine, formatSceneForChatWindow } from '../formatter/PromptFormatter';
 import { formatPreviouslyInScene } from './AIService';
 import type { DirectedGenerationOptions } from './AIService';
 
@@ -380,18 +380,37 @@ Will you do it?`;
     }
 
     const play = () => {
-      // The ask itself opens the beat in the in-game memories window; it is not
-      // TTS-voiced — the speaker already said it
+      // The ask itself opens the beat in the in-game memories window. The Voice's own
+      // asks are not TTS-voiced — the player already said it out loud — but a Twitch
+      // question has no one to say it, so speakPlayerLine gives it the chat voice.
       sendSceneLineToMod({
         speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
         text: playerLine.text,
       });
       markScenePaced(finalText);
-      this.ctx.ai.playTtsLines([{ speaker: `${sim.name} (to self)`, text: decision.thought }], event.sentient_sims, {
-        paced: true,
-        pacedText: finalText,
-        priority: playbackOptions.priority,
-      });
+      // Same shape as runDirectedGeneration's talk path: the question airs as the beat's
+      // first TTS line, pre-cast to the chat voice, with its subtitle already sent above
+      // (skipSceneLine). Without this, an ask that triaged as "do" lost the narration the
+      // identical question keeps when it triages as "talk".
+      const spokenQuestion: DialogueLine[] = options.speakPlayerLine
+        ? [
+            {
+              speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
+              text: options.speakPlayerLine.spokenText,
+              voiceId: options.speakPlayerLine.voiceId,
+              skipSceneLine: true,
+            },
+          ]
+        : [];
+      this.ctx.ai.playTtsLines(
+        [...spokenQuestion, { speaker: `${sim.name} (to self)`, text: decision.thought }],
+        event.sentient_sims,
+        {
+          paced: true,
+          pacedText: finalText,
+          priority: playbackOptions.priority,
+        },
+      );
     };
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);

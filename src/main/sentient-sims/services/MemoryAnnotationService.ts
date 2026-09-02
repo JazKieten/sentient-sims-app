@@ -1,7 +1,10 @@
 import log from 'electron-log';
+import { StageId } from '../pipeline/stages';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { ApiContext } from './ApiContext';
 import { embeddingToBuffer } from './EmbeddingService';
+import { IMPORTANCE_SYSTEM_PROMPT } from '../pipeline/prompts/utility';
+import { AIActionType } from '../models/AIActionType';
 
 // When the rating generation fails (no provider configured, malformed reply), fall back
 // to a prior by memory kind: reflections are distilled and durable, outcomes are notable,
@@ -15,10 +18,6 @@ const IMPORTANCE_BY_EVENT_TYPE: Record<string, number> = {
   monologue: 3,
 };
 const DEFAULT_IMPORTANCE = 3;
-
-const IMPORTANCE_SYSTEM_PROMPT = `You rate how memorable a life event is for the character who experienced it.
-1 means mundane and forgettable (routine chores, small talk), 10 means life-changing (a breakup, a birth, a betrayal).
-Respond with only a single integer from 1 to 10, nothing else.`;
 
 export function heuristicImportance(eventType?: string): number {
   if (eventType && eventType in IMPORTANCE_BY_EVENT_TYPE) {
@@ -193,7 +192,16 @@ export class MemoryAnnotationService {
 
   private async rateImportance(text: string, eventType?: string, memoryId?: string): Promise<number> {
     try {
-      const result = await this.ctx.ai.runOneShot('Memory Importance', IMPORTANCE_SYSTEM_PROMPT, text, 5);
+      const result = await this.ctx.ai.runOneShot(
+        'Memory Importance',
+        IMPORTANCE_SYSTEM_PROMPT,
+        text,
+        5,
+        undefined,
+        AIActionType.MEMORY_IMPORTANCE,
+        undefined,
+        { stageId: StageId.HIPPOCAMPUS_IMPORTANCE },
+      );
       // The row already exists by the time this runs, so the stage attaches by id. Kept in
       // its own try/catch: debug bookkeeping must not send a real rating to the heuristic.
       if (memoryId !== undefined) {

@@ -54,6 +54,8 @@ export enum SettingsEnum {
   AI_PROVIDER_CONFIGS = 'aiProviderConfigs',
   DEFAULT_AI_PROVIDER_CONFIG_ID = 'defaultAiProviderConfigId',
   AI_ACTION_PROVIDER_OVERRIDES = 'aiActionProviderOverrides',
+  // Per-stage system prompt overrides, keyed by pipeline StageId
+  STAGE_PROMPT_OVERRIDES = 'stagePromptOverrides',
   // Cognition (Block 9): the autonomous per-sim tick loop
   COGNITION_ENABLED = 'cognitionEnabled',
   COGNITION_AUTONOMY_LEVEL = 'cognitionAutonomyLevel', // off | suggest | full

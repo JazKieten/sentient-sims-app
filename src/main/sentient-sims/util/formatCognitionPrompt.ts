@@ -68,44 +68,15 @@ function describeTarget(simId: string, target: SimTargetInfo): string {
   return `${target.name || 'someone'} (${parts.join(', ')})`;
 }
 
-// ---------------------------------------------------------------------------
-// Full Autonomy prompts. The game engine is the fast brain: sims keep doing what
-// they are doing. The tick pipeline is Monologue -> Scores; only an action score
-// over the threshold stages an Action Scene (a choose-your-own-adventure beat with
-// options bound to the OFFERED vocabulary). The old one-shot "decide what to do"
-// deliberation prompt is retired.
-// ---------------------------------------------------------------------------
-
-export const TICK_MONOLOGUE_SYSTEM_PROMPT = `You are the private inner voice of one Sim in The Sims 4.
-Given their situation, reply with ONLY one or two short sentences of the Sim's inner monologue right now — first person, present tense, in their own voice, grounded in what they are doing, feeling, and wanting.
-When someone nearby is marked a child, toddler, baby or teenager, think about them the way an adult thinks about a kid — never as a peer, a rival, or a romantic possibility.
-Nobody hears this. No narration, no third person, no JSON, no quotation marks.`;
-
-export const TICK_SCORES_SYSTEM_PROMPT = `You are scoring one Sim's present moment, judged from their own point of view. Their inner monologue is the strongest signal.
-Reply with ONLY a JSON object: {"memory": <1-10>, "action": <1-10>, "action_reason": "one short line"}
-- "memory": how memorable this moment is for them. 1 means routine and forgettable, 10 means life-changing.
-- "action": how strongly they want to CHANGE what they are doing right now — something more, something less, or something different. 1-3 means content to carry on, 4-6 means an itch but nothing urgent, 7 and up means they genuinely want to act on something now. A content Sim mid-activity scores low; boredom, loneliness, low needs, and restless thoughts push it up. If a TODAYS_PLAN block is present and what they are doing now ignores or conflicts with today's goals, that pushes the score up.
-- "action_reason": what they would want to do or change, in their voice.
-Read the activity line against the needs: a Sim topping up a need that is already healthy (brushing teeth at hygiene 70, snacking at hunger 90) while another need sits below -50 is NOT content — score the action high and name the rotting need.`;
-
-export const ACTION_OPTIONS_SYSTEM_PROMPT = `You are directing a choose-your-own-adventure beat for one Sim in The Sims 4 who wants a change of course.
-Given their situation, their inner monologue, and what is pulling at them, reply with ONLY a JSON object:
-{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "label": "the choice as the Sim would think it, one short line"}]}
-Rules:
-- 3 to 5 options, each a genuinely different answer to the pull — more of something, less of something, or something new. No filler.
-- Every "action" MUST be an action key from the OFFERED lists in the situation; social actions need a target_sim_id from the OFFERED people. Never invent actions, targets, or ids.
-- At least one option should directly answer what is pulling at them.
-- If any need is below -50, at least one option MUST address that need (its fixing action from the OFFERED lists); if several are, address the worst.
-- If a TODAYS_PLAN block is present, at least one option should serve one of today's goals.`;
-
-export const ACTION_CHOICE_SYSTEM_PROMPT = `You are one Sim in The Sims 4 choosing what to do next, like picking a path in a choose-your-own-adventure book.
-Given the moment and your numbered options, reply with ONLY a JSON object: {"choice": <option number>, "motivation": "why, in your own voice, one short line", "retries": <0-3>}
-Choose as the character: mood, needs, wants, and your inner monologue decide — not what would look sensible to someone else.
-"retries": how many times you would try again if the attempt gets interrupted before it starts (someone walks off, you get bumped) — 0 for a passing whim, 1 normally, up to 3 for something you truly need or care about.`;
-
-export const ACTION_REVIEW_SYSTEM_PROMPT = `You review a Sim's chosen next action for obvious mistakes before it executes.
-Given the situation, the numbered options, and the Sim's choice, reply with ONLY a JSON object: {"choice": <option number to execute>}
-DEFAULT TO THE SIM'S OWN CHOICE. Override to a different option only on a clear mistake: the choice ignores a DESPERATE need, repeats something that just failed, or is wildly wrong for the relationship or the hour. Reply {"choice": 0} only when every option is clearly wrong and the Sim should simply carry on as they are.`;
+// The Full Autonomy tick and action prompts now live in the stage registry
+// (pipeline/prompts). They are re-exported here so every existing importer and test keeps
+// working while call sites migrate to promptFor(stageId, ...).
+export { TICK_MONOLOGUE_SYSTEM_PROMPT, TICK_SCORES_SYSTEM_PROMPT } from '../pipeline/prompts/cognition';
+export {
+  ACTION_OPTIONS_SYSTEM_PROMPT,
+  ACTION_CHOICE_SYSTEM_PROMPT,
+  ACTION_REVIEW_SYSTEM_PROMPT,
+} from '../pipeline/prompts/action';
 
 function clampScore(value: unknown): number | undefined {
   const num = typeof value === 'string' ? Number(value) : value;
@@ -187,7 +158,9 @@ export function parseActionChoice(raw: string): { choice: number; motivation?: s
   }
   const rawRetries = typeof body.retries === 'string' ? Number(body.retries) : body.retries;
   const retries =
-    typeof rawRetries === 'number' && !Number.isNaN(rawRetries) ? Math.min(3, Math.max(0, Math.round(rawRetries))) : undefined;
+    typeof rawRetries === 'number' && !Number.isNaN(rawRetries)
+      ? Math.min(3, Math.max(0, Math.round(rawRetries)))
+      : undefined;
   return {
     choice: Math.round(choice),
     motivation: typeof body.motivation === 'string' ? body.motivation : undefined,

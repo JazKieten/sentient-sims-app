@@ -1,10 +1,12 @@
 import log from 'electron-log';
+import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
 import { AIActionType } from '../models/AIActionType';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { SimStateEntry } from '../models/SimStateReport';
 import { sendPlayerVoiceStatusToMod, sendPopUpNotification } from '../util/notifyRenderer';
 import { firstJsonBlock } from '../util/formatCognitionPrompt';
+import { COMMAND_SYSTEM_PROMPT } from '../pipeline/prompts/utility';
 
 // V-8: the direct-command hotkey. Speech is an ORDER for the player's active sim, not talk:
 // one cheap one-shot maps the utterance onto the sim's currently OFFERED vocabulary (same
@@ -12,13 +14,6 @@ import { firstJsonBlock } from '../util/formatCognitionPrompt';
 // normal cognition dispatch path at critical priority as source 'player_command'. The mod's
 // age gate and preflight still apply, so a command can come back 'ineligible' and is
 // reported honestly. An utterance that maps to nothing is a toast, never a guess.
-
-const COMMAND_SYSTEM_PROMPT = `You translate one spoken order from the player into ONE action for their Sim in The Sims 4.
-Reply with ONLY a JSON object: {"action": "<action key from the OFFERED lists>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "confidence": <0-1>}
-Rules:
-- The action MUST be an action key from the OFFERED lists in the situation. Never invent an action, a target, or an id.
-- Social actions need a target_sim_id from the OFFERED people; pick the person the order names, else the closest.
-- If nothing offered matches the order, reply {"action": null, "confidence": 0}.`;
 
 export class VoiceCommandService {
   private readonly ctx: ApiContext;
@@ -67,6 +62,8 @@ export class VoiceCommandService {
         120,
         undefined,
         AIActionType.VOICE_COMMAND,
+        undefined,
+        { stageId: StageId.VOICE_COMMAND },
       );
       const parsed = firstJsonBlock(shot.text) as
         | { action?: string | null; target_sim_id?: string; target_object_id?: string; confidence?: number }
@@ -107,7 +104,9 @@ export class VoiceCommandService {
       return true;
     } catch (error) {
       log.warn('[VoiceCommand] dispatch refused', error);
-      sendPopUpNotification(`Voice command could not be sent to the game: ${error instanceof Error ? error.message : String(error)}`);
+      sendPopUpNotification(
+        `Voice command could not be sent to the game: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return false;
     }
   }

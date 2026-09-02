@@ -1,10 +1,12 @@
 import log from 'electron-log';
+import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
 import { DailyPlan, DailyPlanGoalReview, DailyPlanSource, GoalVerdict } from '../models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from '../models/SimStateReport';
 import { DISCRETIONARY_ACTIONS, DISCRETIONARY_GROUPS, ROMANCE_ACTIONS, isRomanceAge } from '../models/ActionLoadout';
 import { AIActionType } from '../models/AIActionType';
 import { describePlanGoal } from '../util/formatCognitionPrompt';
+import { buildLazyPlanSystemPrompt } from '../pipeline/prompts/consolidation';
 
 // Each game day a household sim carries a plan: 1-2 goals picked FROM THE GAME'S OWN
 // objectives (the mod's goal_pool — aspiration steps, promotion requirements, daily
@@ -50,15 +52,32 @@ export type PlannerOutput = {
 
 // The social keys the planner may count as lot-served whenever anyone is around
 const SOCIAL_KEYS = [
-  'chat', 'ask_about_day', 'ask_about_career', 'get_to_know', 'deep_conversation', 'compliment_outfit',
-  'gossip', 'apologize', 'tell_joke', 'tell_funny_story', 'hug', 'flirt', 'kiss', 'insult', 'invite_in',
+  'chat',
+  'ask_about_day',
+  'ask_about_career',
+  'get_to_know',
+  'deep_conversation',
+  'compliment_outfit',
+  'gossip',
+  'apologize',
+  'tell_joke',
+  'tell_funny_story',
+  'hug',
+  'flirt',
+  'kiss',
+  'insult',
+  'invite_in',
 ];
 
 // G-6: tolerant goal-id binding. Exact match was silent about the shapes the model
 // actually returns: trailing spaces, different case, "id: X", the LABEL instead of the
 // id, or the label's leading words. 6/6 sleep rows in the playtest DB had goals: [].
 export function bindGoalId(raw: string, pool: GoalPoolEntry[]): GoalPoolEntry | undefined {
-  const cleaned = raw.trim().replace(/^id:\s*/i, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  const cleaned = raw
+    .trim()
+    .replace(/^id:\s*/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .trim();
   if (!cleaned) {
     return undefined;
   }
@@ -256,7 +275,10 @@ export class DailyPlanService {
       typeof raw.persona === 'string' && raw.persona.trim().length > 1
         ? raw.persona
             .trim()
-            .replace(/^tomorrow[,:]?\s+(i'll|i'm|i)(?=\s|$)/i, (_match, pronoun: string) => pronoun.charAt(0).toUpperCase() + pronoun.slice(1))
+            .replace(
+              /^tomorrow[,:]?\s+(i'll|i'm|i)(?=\s|$)/i,
+              (_match, pronoun: string) => pronoun.charAt(0).toUpperCase() + pronoun.slice(1),
+            )
             .replace(/^tomorrow[,:]?\s+/i, '')
             .replace(/^\s+/, '')
             .replace(/^[a-z]/, (letter) => letter.toUpperCase())
@@ -323,7 +345,11 @@ export class DailyPlanService {
         // Trim the last model pick that serves no goal
         for (let index = deduped.length - 1; index >= 0; index -= 1) {
           if (!serving.has(deduped[index])) {
-            rejected.push({ field: 'loadout', value: deduped[index], reason: `trimmed to make room for goal-serving key ${key}` });
+            rejected.push({
+              field: 'loadout',
+              value: deduped[index],
+              reason: `trimmed to make room for goal-serving key ${key}`,
+            });
             deduped.splice(index, 1);
             deduped.push(key);
             return;
@@ -337,7 +363,11 @@ export class DailyPlanService {
         loadout = deduped;
       } else if (deduped.length > 0) {
         deduped.forEach((key) => {
-          rejected.push({ field: 'loadout', value: key, reason: `only ${deduped.length} keys survived (< ${MIN_LOADOUT}); loadout dropped` });
+          rejected.push({
+            field: 'loadout',
+            value: key,
+            reason: `only ${deduped.length} keys survived (< ${MIN_LOADOUT}); loadout dropped`,
+          });
         });
       }
     } else if (raw.loadout !== undefined) {
@@ -352,10 +382,14 @@ export class DailyPlanService {
       );
     }
     if (Array.isArray(raw.goals) && raw.goals.length === 0) {
-      log.info(`[DailyPlan] validate: ${simLabel ?? 'sim'} planner returned an EMPTY goals array (pool had ${pool.length} ids)`);
+      log.info(
+        `[DailyPlan] validate: ${simLabel ?? 'sim'} planner returned an EMPTY goals array (pool had ${pool.length} ids)`,
+      );
     }
     if (raw.goals === undefined) {
-      log.info(`[DailyPlan] validate: ${simLabel ?? 'sim'} planner output had NO goals field (pool had ${pool.length} ids)`);
+      log.info(
+        `[DailyPlan] validate: ${simLabel ?? 'sim'} planner output had NO goals field (pool had ${pool.length} ids)`,
+      );
     }
 
     return { goals, persona, loadout, rejected: rejected.length > 0 ? rejected : undefined };
@@ -561,12 +595,7 @@ export class DailyPlanService {
       const ageBlocked = entry.self?.age_blocked;
       const loadoutSize = this.ctx.settings.dailyLoadoutSize;
 
-      const systemPrompt = `You are the inner voice of one Sim in The Sims 4, setting intentions for the rest of today.
-Reply with ONLY a JSON object:
-{"goals": ["<goal id>"], "loadout": ["<action key>"], "persona": "one sentence"}
-- "goals": 1 or 2 ids chosen ONLY from GOAL OPTIONS — what this Sim genuinely cares about finishing today. Prefer goals that list [serve it with] verbs.
-- "loadout": exactly ${loadoutSize} action keys chosen ONLY from ACTION STYLES — the activities and ways of relating this Sim will reach for today. It MUST include the verbs that serve the chosen goals.
-- "persona": one short first-person sentence of stage direction — who this Sim wants to be today (their character, not a task).`;
+      const systemPrompt = buildLazyPlanSystemPrompt(loadoutSize);
 
       const hourLine =
         entry.self?.needs !== undefined
@@ -603,6 +632,8 @@ Reply with ONLY a JSON object:
           400,
           undefined,
           AIActionType.DAILY_PLAN,
+          undefined,
+          { stageId: StageId.CONSOLIDATION_PLAN },
         );
         const parsed = parsePlannerJson(shot.text);
         if (parsed) {

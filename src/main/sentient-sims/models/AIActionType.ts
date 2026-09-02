@@ -34,6 +34,9 @@ export enum AIActionType {
   ASK_TRIAGE = 'ask_triage',
   ASK_ACTION_MATCH = 'ask_action_match',
   ASK_DECISION = 'ask_decision',
+  // The salience tag written onto every stored memory. It had no action type of its own,
+  // so it fell into the GENERATE slot and was routed by whatever the chat tab was set to.
+  MEMORY_IMPORTANCE = 'memory_importance',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -60,6 +63,7 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.ASK_TRIAGE,
   AIActionType.ASK_ACTION_MATCH,
   AIActionType.ASK_DECISION,
+  AIActionType.MEMORY_IMPORTANCE,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -113,6 +117,8 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Ask: Action Match';
     case AIActionType.ASK_DECISION:
       return 'Ask: Decision';
+    case AIActionType.MEMORY_IMPORTANCE:
+      return 'Memory Importance';
     default:
       return actionType;
   }
@@ -157,7 +163,7 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
     case AIActionType.DAILY_PLAN:
       return 'Nightly goals, persona and action loadout per sim';
     case AIActionType.VOICE_COMMAND:
-      return 'Maps a spoken order onto the sim\'s offered actions (cheap model recommended)';
+      return "Maps a spoken order onto the sim's offered actions (cheap model recommended)";
     case AIActionType.DESCRIPTION_DEFAULT:
       return 'Writes a first description for sims and locations that have none';
     case AIActionType.ASK_TRIAGE:
@@ -166,6 +172,8 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return "Matches a Voice/Chat request onto the sim's full offered vocabulary (cheap model recommended)";
     case AIActionType.ASK_DECISION:
       return 'The sim decides in character whether to do what was asked, and why';
+    case AIActionType.MEMORY_IMPORTANCE:
+      return 'Rates how memorable each stored memory is, for retrieval (cheap model recommended)';
     default:
       return '';
   }

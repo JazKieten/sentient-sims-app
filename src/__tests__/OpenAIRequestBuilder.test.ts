@@ -55,9 +55,9 @@ describe('OpenAIRequestBuilder.buildOneShotOpenAIRequest', () => {
     expect(request.promptOverflow).toEqual({
       budgetTokens: 400,
       requestedTokens: 'system'.length + payload.length + 1,
-      droppedTokens: expect.any(Number) as unknown as number,
+      // 394 of the 601 requested tokens fit (400 budget less the 6-token system prompt)
+      droppedTokens: 207,
     });
-    expect(request.promptOverflow?.droppedTokens).toBeGreaterThan(0);
   });
 
   it('keeps a floor of user text even when the system prompt alone blows the budget', () => {

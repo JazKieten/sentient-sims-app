@@ -12,6 +12,7 @@ import { defaultOpenAITTSSettings, OpenAITTSSettings } from '../models/OpenAITTS
 import { ApiType, ApiTypeFromValue } from '../models/ApiType';
 import { AIProviderConfig, autoConfigId, newAutoConfig, sanitizeProviderConfigs } from '../models/AIProviderConfig';
 import { AIActionOverrides } from '../models/AIActionType';
+import { sanitizeStagePromptOverrides, StagePromptOverrides } from '../pipeline/prompts';
 import { defaultEmbeddingModelFor } from '../models/EmbeddingModels';
 import {
   defaultElevenLabsEndpoint,
@@ -428,6 +429,10 @@ export function defaultStore(cwd?: string) {
         default: '',
       },
       [SettingsEnum.AI_ACTION_PROVIDER_OVERRIDES.toString()]: {
+        type: 'object',
+        default: {},
+      },
+      [SettingsEnum.STAGE_PROMPT_OVERRIDES.toString()]: {
         type: 'object',
         default: {},
       },
@@ -1036,6 +1041,16 @@ export class SettingsService {
 
   set aiActionProviderOverrides(value: AIActionOverrides) {
     this.set(SettingsEnum.AI_ACTION_PROVIDER_OVERRIDES, value);
+  }
+
+  // A player-set replacement for one pipeline stage's system prompt, keyed by StageId.
+  // Unknown keys and blank text are dropped rather than sent to a provider.
+  get stagePromptOverrides(): StagePromptOverrides {
+    return sanitizeStagePromptOverrides(this.get(SettingsEnum.STAGE_PROMPT_OVERRIDES));
+  }
+
+  set stagePromptOverrides(value: StagePromptOverrides) {
+    this.set(SettingsEnum.STAGE_PROMPT_OVERRIDES, sanitizeStagePromptOverrides(value));
   }
 
   get gameAppPath(): string {

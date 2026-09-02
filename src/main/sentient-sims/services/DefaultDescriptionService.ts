@@ -1,10 +1,15 @@
 import log from 'electron-log';
+import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
 import { AIActionType } from '../models/AIActionType';
 import { SentientSim } from '../models/SentientSim';
 import { LocationEntity } from '../db/entities/LocationEntity';
 import { LotBlock } from '../models/SimStateReport';
 import { cleanupAIOutput, formatSentientSim } from '../formatter/PromptFormatter';
+import {
+  LOCATION_DESCRIPTION_SYSTEM_PROMPT as LOCATION_SYSTEM_PROMPT,
+  SIM_DESCRIPTION_SYSTEM_PROMPT as SIM_SYSTEM_PROMPT,
+} from '../pipeline/prompts/utility';
 
 // V-6: nobody should meet a character called "The Residence". A sim or a location that has
 // never been described gets ONE cheap fire-and-forget one-shot written from what the game
@@ -14,21 +19,6 @@ import { cleanupAIOutput, formatSentientSim } from '../formatter/PromptFormatter
 // if the description is still empty (sim) or still the stock default (location). Nothing
 // here blocks a generation — callers fire and forget, and a failure just means the old
 // default text is used for another tick.
-
-const SIM_SYSTEM_PROMPT = `You write a short character description for one Sim in The Sims 4, for use as story context.
-Write 2-3 sentences of plain prose in the third person, present tense, about who this Sim is: their personality, how they come across to others, and what they care about.
-Rules:
-- Use ONLY what the facts below support. Never invent family, jobs, history, or events.
-- Do not restate the fact list, do not use bullet points, and do not mention traits, moods or game mechanics by name.
-- Do not describe what they are doing right now — moods pass, this description is permanent.
-- Reply with the description text only.`;
-
-const LOCATION_SYSTEM_PROMPT = `You write a short description of one place in The Sims 4, for use as story context.
-Write 2-3 sentences of plain prose in the third person, present tense, describing the place: what kind of place it is and what it feels like to be there.
-Rules:
-- Use ONLY what the facts below support. Never invent rooms, owners, or history that is not listed.
-- Do not use bullet points and do not mention game mechanics by name.
-- Reply with the description text only.`;
 
 // A generated description is a one-shot per entity per app run: a miss that fails (no API
 // key, provider down, refusal) must not re-queue on every single prompt build.
@@ -110,6 +100,8 @@ export class DefaultDescriptionService {
       MAX_DESCRIPTION_TOKENS,
       undefined,
       AIActionType.DESCRIPTION_DEFAULT,
+      undefined,
+      { stageId: StageId.DESCRIPTION_DEFAULT },
     );
     const description = cleanupAIOutput(oneShot.text).trim();
     if (description.length < 20) {
@@ -130,6 +122,8 @@ export class DefaultDescriptionService {
       MAX_DESCRIPTION_TOKENS,
       undefined,
       AIActionType.DESCRIPTION_DEFAULT,
+      undefined,
+      { stageId: StageId.DESCRIPTION_DEFAULT },
     );
     const description = cleanupAIOutput(oneShot.text).trim();
     if (description.length < 20) {

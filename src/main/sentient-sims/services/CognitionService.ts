@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { StageId } from '../pipeline/stages';
 import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
@@ -787,7 +788,11 @@ export class CognitionService {
     const planBlock =
       plan && (plan.goals.length > 0 || plan.persona)
         ? {
-            goals: plan.goals.map((goal) => ({ label: goal.label, action_keys: goal.action_keys, reachable: goal.reachable })),
+            goals: plan.goals.map((goal) => ({
+              label: goal.label,
+              action_keys: goal.action_keys,
+              reachable: goal.reachable,
+            })),
             persona: plan.persona,
           }
         : undefined;
@@ -844,6 +849,8 @@ export class CognitionService {
           120,
           undefined,
           AIActionType.COGNITION,
+          undefined,
+          { stageId: StageId.DEFAULT_MODE_MONOLOGUE },
         ),
       );
       tickExchanges.push(monologue.exchange);
@@ -863,6 +870,8 @@ export class CognitionService {
           120,
           undefined,
           AIActionType.COGNITION,
+          undefined,
+          { stageId: StageId.LIMBIC_SALIENCE },
         ),
       );
       tickExchanges.push(scored.exchange);
@@ -915,7 +924,9 @@ export class CognitionService {
     const runningKey = entry.activity?.running_action_key;
     if (runningKey && runningKey === intent.action) {
       this.stats.continues += 1;
-      log.info(`[Cognition] sim ${simId} is already doing '${runningKey}' (autonomy); '${intent.action}' counted as continue`);
+      log.info(
+        `[Cognition] sim ${simId} is already doing '${runningKey}' (autonomy); '${intent.action}' counted as continue`,
+      );
       this.toCooldown(simId);
       return;
     }
@@ -1019,6 +1030,8 @@ export class CognitionService {
           400,
           undefined,
           AIActionType.ACTION_SCENE,
+          undefined,
+          { stageId: StageId.BASAL_GANGLIA_OPTIONS },
         ),
       );
       exchanges.push(optionsShot.exchange);
@@ -1082,6 +1095,8 @@ export class CognitionService {
             150,
             undefined,
             AIActionType.ACTION_SCENE,
+            undefined,
+            { stageId: StageId.BASAL_GANGLIA_CHOICE },
           ),
         );
         exchanges.push(choiceShot.exchange);
@@ -1103,6 +1118,8 @@ export class CognitionService {
           60,
           undefined,
           AIActionType.ACTION_SCENE,
+          undefined,
+          { stageId: StageId.PREFRONTAL_REVIEW },
         ),
       );
       exchanges.push(reviewShot.exchange);
@@ -1225,8 +1242,7 @@ export class CognitionService {
 
   private armPendingTimeout(simId: string, runtime: SimRuntime, entry: SimStateEntry, intent: CognitionIntent) {
     const distance = this.targetDistance(entry, intent) ?? 10;
-    const baseMs =
-      intent.action && LONG_RUNNING_ACTIONS.has(intent.action) ? LONG_RUNNING_PENDING_MS : PENDING_BASE_MS;
+    const baseMs = intent.action && LONG_RUNNING_ACTIONS.has(intent.action) ? LONG_RUNNING_PENDING_MS : PENDING_BASE_MS;
     const timeoutMs = Math.max(baseMs, 2 * distance * MS_PER_METER + PENDING_BASE_MS / 2);
     runtime.pendingTimer = setTimeout(() => {
       if (runtime.phase !== 'PENDING_OUTCOME') {
@@ -1286,15 +1302,25 @@ export class CognitionService {
     if (!action || action !== event.action) {
       return false;
     }
-    if ((runtime.suppressedUntil.get(action) ?? 0) > Date.now() || (runtime.fixIneligibleUntil.get(action) ?? 0) > Date.now()) {
+    if (
+      (runtime.suppressedUntil.get(action) ?? 0) > Date.now() ||
+      (runtime.fixIneligibleUntil.get(action) ?? 0) > Date.now()
+    ) {
       return false;
     }
     pending.retriesLeft -= 1;
     this.clearPending(runtime);
     runtime.phase = 'COOLDOWN';
     runtime.cooldownUntil = Date.now() + RETRY_DELAY_MS;
-    pushdiag(event.request_id, 'retry', { sim_id: simId, action, cause: event.cause, retries_left: pending.retriesLeft });
-    log.info(`[Cognition] sim ${simId} '${action}' died to transient '${event.cause}'; retrying (${pending.retriesLeft} left)`);
+    pushdiag(event.request_id, 'retry', {
+      sim_id: simId,
+      action,
+      cause: event.cause,
+      retries_left: pending.retriesLeft,
+    });
+    log.info(
+      `[Cognition] sim ${simId} '${action}' died to transient '${event.cause}'; retrying (${pending.retriesLeft} left)`,
+    );
     const timer = setTimeout(() => {
       try {
         if (runtime.phase !== 'COOLDOWN' || this.ctx.actionDispatcher.getInFlight?.(simId)) {

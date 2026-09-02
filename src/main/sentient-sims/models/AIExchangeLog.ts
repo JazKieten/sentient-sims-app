@@ -16,6 +16,8 @@ export type AIExchangeSummary = {
   responsePreview: string;
   // Set once the memory this call produced has been written
   memoryId?: string;
+  // Present when the prompt did not fit its token budget and the user message was truncated
+  promptOverflow?: { budgetTokens: number; requestedTokens: number; droppedTokens: number };
   error?: string;
 };
 

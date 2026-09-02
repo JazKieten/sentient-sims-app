@@ -1289,11 +1289,15 @@ If the scene is already good, return it unchanged.`;
     interactionActionType?: AIActionType,
   ): Promise<{ exchange: LLMExchange; text: string }> {
     const providerConfig = this.ctx.providerConfigs.getConfigForDirectedStage(actionType, interactionActionType);
+    // The context budget belongs to the model, not to this call site: a hardcoded 3900 threw
+    // away most of a 16k window on the big models and silently cut the payload on every one.
+    const resolvedModel = model ?? providerConfig.model;
+    const modelSettings = await this.ctx.modelSettings.getModelSettings(resolvedModel, providerConfig.apiType);
     let oneShotRequest: OneShotRequest = {
       systemPrompt,
       messages: [userText],
       maxResponseTokens,
-      maxTokens: 3900,
+      maxTokens: modelSettings.max_tokens,
     };
 
     getInputFormatters(providerConfig.apiType).forEach((formatter) => {
@@ -1303,7 +1307,7 @@ If the scene is already good, return it unchanged.`;
     const openAIRequestBuilder = new OpenAIRequestBuilder(this.ctx.getTokenCounter(providerConfig.apiType));
     const openAIRequest = openAIRequestBuilder.buildOneShotOpenAIRequest(oneShotRequest);
     // An explicit model (scenario tester's per-stage picks) wins over the action's provider config
-    openAIRequest.model = model ?? providerConfig.model;
+    openAIRequest.model = resolvedModel;
     openAIRequest.apiType = providerConfig.apiType;
     const response = await this.ctx.aiExchangeLog.runLabeled(label, actionType, () =>
       this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),

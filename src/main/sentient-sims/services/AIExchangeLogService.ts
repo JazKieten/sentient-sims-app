@@ -90,6 +90,7 @@ export class AIExchangeLogService {
       responsePreview,
       responseText: params.responseText,
       request: params.request,
+      promptOverflow: params.request.promptOverflow,
       error: params.error,
     });
 
@@ -130,6 +131,7 @@ export class AIExchangeLogService {
         promptChars: entry.promptChars,
         responsePreview: entry.responsePreview,
         memoryId: entry.memoryId,
+        promptOverflow: entry.promptOverflow,
         error: entry.error,
       }));
   }

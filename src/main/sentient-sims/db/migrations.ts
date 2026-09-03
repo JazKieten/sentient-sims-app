@@ -313,6 +313,63 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       db.prepare('CREATE INDEX action_outcome_memory_id ON action_outcome(memory_id)').run();
       db.prepare('CREATE INDEX action_outcome_verdict ON action_outcome(verdict)').run();
     },
+    // The semantic fact store (Phase 3.1 H2): what each sim knows about themselves and
+    // about everyone else, so a sim can answer "who are your parents" correctly instead of
+    // inventing an answer from whatever happened to be in the prompt.
+    //
+    // Bi-temporal and invalidate-never-delete (the Graphiti/AtomMem pattern): a fact that
+    // stops being true gets valid_to_day set, it is not removed, because "she used to be
+    // married to him" is itself worth knowing and because a deleted row cannot explain a
+    // belief. A row with object_sim_id is an EDGE, which makes this table a property graph
+    // without a graph database.
+    //
+    // source is the trust ladder: game > player > reflection > told/inferred, enforced in
+    // SemanticMemoryService.canSupersede. A sim told a lie stores it as `told` with low
+    // confidence and the game fact still wins in <KNOWN_FACTS>.
+    //
+    // provenance_memory_id is TEXT with no foreign key, same rules as 016/017: memory ids
+    // are 64-bit game handles that travel as strings, and a fact should still explain
+    // itself after the memory row behind it is pruned.
+    '018-create-sim-fact': (db: Database) => {
+      db.prepare(
+        `
+          CREATE TABLE sim_fact (
+            id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT ,
+            subject_sim_id       TEXT NOT NULL       ,
+            predicate            TEXT NOT NULL       ,
+            object_text          TEXT     ,
+            object_sim_id        TEXT     ,
+            source               TEXT NOT NULL       ,
+            confidence           REAL NOT NULL       ,
+            valid_from_day       INTEGER     ,
+            valid_to_day         INTEGER     ,
+            provenance_memory_id TEXT     ,
+            superseded_by        INTEGER     ,
+            created_at           TEXT NOT NULL
+          );
+        `,
+      ).run();
+      // The hot read is "every current fact about this sim", so the partial-shaped index
+      // leads with the subject and the validity window.
+      db.prepare('CREATE INDEX sim_fact_subject ON sim_fact(subject_sim_id, valid_to_day)').run();
+      db.prepare('CREATE INDEX sim_fact_object ON sim_fact(object_sim_id, valid_to_day)').run();
+      db.prepare('CREATE INDEX sim_fact_predicate ON sim_fact(subject_sim_id, predicate, valid_to_day)').run();
+      db.prepare('CREATE INDEX sim_fact_provenance ON sim_fact(provenance_memory_id)').run();
+      // The last dossier the mod sent, kept whole. The hash is how ingestion skips a
+      // dossier that has not changed, and the json is the oracle the self-knowledge
+      // battery grades answers against (H5) — a fact row cannot hold a relationship score.
+      db.prepare(
+        `
+          CREATE TABLE sim_dossier (
+            sim_id               TEXT NOT NULL  PRIMARY KEY  ,
+            hash                 TEXT NOT NULL       ,
+            json                 TEXT NOT NULL       ,
+            updated_day          INTEGER     ,
+            updated_at           TEXT NOT NULL
+          );
+        `,
+      ).run();
+    },
   }),
 );
 

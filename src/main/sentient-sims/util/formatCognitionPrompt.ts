@@ -7,6 +7,7 @@ import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
 import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout';
+import { relationshipWords } from './relationshipWords';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
@@ -17,23 +18,6 @@ function pretty(text: string): string {
 const ROMANTIC_SOCIALS = new Set(['flirt', 'kiss']);
 const MEAN_SOCIALS = new Set(['insult']);
 
-// Relationship bits the game names in ways worth repeating verbatim (married, engaged,
-// enemies...) read badly raw — keep only the recognizable word
-function prettyBit(bit: string): string | undefined {
-  const lowered = bit.toLowerCase();
-  // SocialContext_* bits are transient conversation-tone states (every casual
-  // acquaintance carries Awkwardness_Casual), not relationship lore — never render them
-  if (lowered.includes('socialcontext')) {
-    return undefined;
-  }
-  for (const word of ['married', 'engaged', 'enem', 'unfaithful', 'awkward']) {
-    if (lowered.includes(word)) {
-      return word === 'enem' ? 'enemies' : word;
-    }
-  }
-  return undefined;
-}
-
 // "Nancy Landgraab (sim_id 123, friend, a romantic spark)" — the lore layer that lets a
 // social pick match the relationship (get_to_know a stranger, flirt at a spark, not both)
 function describeTarget(simId: string, target: SimTargetInfo): string {
@@ -43,28 +27,8 @@ function describeTarget(simId: string, target: SimTargetInfo): string {
   if (target.age !== undefined && !isRomanceAge(target.age)) {
     parts.push(`a ${target.age.toLowerCase()} — keep talk age-appropriate`);
   }
-  if (!target.hasMet) {
-    parts.push('a stranger — chat to break the ice');
-  } else {
-    const friendship = target.friendship ?? 0;
-    if (friendship >= 50) {
-      parts.push('a good friend');
-    } else if (friendship >= 15) {
-      parts.push('a friend');
-    } else if (friendship <= -15) {
-      parts.push('on bad terms with you');
-    } else {
-      parts.push('an acquaintance');
-    }
-    const romance = target.romance ?? 0;
-    if (romance >= 40) {
-      parts.push('romantic');
-    } else if (romance >= 10) {
-      parts.push('a romantic spark');
-    }
-    const bits = (target.bits ?? []).map(prettyBit).filter((bit): bit is string => Boolean(bit));
-    parts.push(...new Set(bits));
-  }
+  // The bands live in util/relationshipWords so <KNOWN_FACTS> says the same words
+  parts.push(...relationshipWords(target));
   return `${target.name || 'someone'} (${parts.join(', ')})`;
 }
 

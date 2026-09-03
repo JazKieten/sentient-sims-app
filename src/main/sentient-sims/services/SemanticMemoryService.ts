@@ -1,0 +1,346 @@
+import log from 'electron-log';
+import { SimFactRecord, SimFactRepository } from '../db/SimFactRepository';
+import { SimDossier } from '../models/SimDossier';
+import { dossierNames, dossierToFacts, factKey } from '../pipeline/facts/dossierFacts';
+import { canSupersede, FactPredicate, FactSource, isSingleValued } from '../pipeline/facts/predicates';
+import { renderKnownFacts } from '../util/renderKnownFacts';
+
+export type AddFactInput = {
+  subjectSimId: string;
+  predicate: string;
+  objectText?: string;
+  objectSimId?: string;
+  source: FactSource;
+  confidence?: number;
+  provenanceMemoryId?: string;
+  day?: number;
+};
+
+export type RecallOptions = {
+  mentionedSimIds?: string[];
+  today?: number;
+  maxChars?: number;
+};
+
+const DEFAULT_CONFIDENCE: Record<FactSource, number> = {
+  game: 1,
+  player: 0.9,
+  reflection: 0.6,
+  told: 0.4,
+  inferred: 0.4,
+};
+
+/**
+ * The hippocampus (Phase 3.1). Owns the semantic fact store: ingests the mod's dossier as
+ * ground truth, accepts facts from elsewhere at lower trust, and renders what a sim knows
+ * into <KNOWN_FACTS> for the prompt.
+ *
+ * The rule that gives the whole thing its value: a fact the sim was TOLD never overrides
+ * what the game says. A player can walk up and claim to be someone's mother; that gets
+ * stored, with its source and low confidence, and the real mother still appears in the
+ * facts block.
+ */
+export class SemanticMemoryService {
+  private readonly facts: SimFactRepository;
+
+  private readonly namesFor: (simIds: string[]) => Record<string, string>;
+
+  constructor(facts: SimFactRepository, namesFor: (simIds: string[]) => Record<string, string>) {
+    this.facts = facts;
+    this.namesFor = namesFor;
+  }
+
+  isLoaded(): boolean {
+    return this.facts.isLoaded();
+  }
+
+  /**
+   * Reconcile one sim's `game` facts against a fresh dossier. Returns what changed.
+   *
+   * The hash gate is the cheap path and the common one: the mod only POSTs on a
+   * structural change, but a zone load and a sleep push both re-send unconditionally, and
+   * re-deriving forty facts to insert none of them is waste.
+   */
+  ingestDossier(
+    dossier: SimDossier,
+    options: { hash?: string; day?: number } = {},
+  ): {
+    inserted: number;
+    retired: number;
+    skipped: boolean;
+  } {
+    const unchanged = { inserted: 0, retired: 0, skipped: true };
+    if (!this.isLoaded() || !dossier.sim_id) {
+      return unchanged;
+    }
+    const simId = dossier.sim_id;
+    const hash = options.hash ?? JSON.stringify(dossier).length.toString(36);
+    const stored = this.facts.getDossier(simId);
+    const day = options.day;
+
+    if (stored?.hash !== hash) {
+      const derived = dossierToFacts(dossier);
+      const derivedKeys = new Set(derived.map(factKey));
+      const current = this.facts.getCurrentFacts(simId).filter((fact) => fact.source === 'game');
+      const currentKeys = new Map(current.map((fact) => [factKey(fact), fact]));
+
+      let inserted = 0;
+      let retired = 0;
+      for (const fact of derived) {
+        if (currentKeys.has(factKey(fact))) {
+          continue;
+        }
+        const id = this.facts.insert({
+          subjectSimId: simId,
+          predicate: fact.predicate,
+          objectText: fact.objectText,
+          objectSimId: fact.objectSimId,
+          source: 'game',
+          confidence: DEFAULT_CONFIDENCE.game,
+          validFromDay: day,
+          createdAt: new Date().toISOString(),
+        });
+        inserted += 1;
+        // A game fact retires whatever contradicted it, whoever said it. This is where a
+        // told lie loses: it stays in the table with its valid_to_day set, so the Facts
+        // dialog can still show that the sim was told it and when it stopped counting.
+        if (isSingleValued(fact.predicate)) {
+          retired += this.retireContradicting(simId, fact.predicate, fact.objectText, fact.objectSimId, id, day);
+        }
+      }
+      // Facts the dossier no longer asserts: a divorce, a moved-out sibling, a dropped
+      // trait. Retired, never deleted.
+      for (const [key, fact] of currentKeys) {
+        if (!derivedKeys.has(key) && fact.id !== undefined) {
+          this.facts.invalidate(fact.id, day);
+          retired += 1;
+        }
+      }
+
+      this.facts.saveDossier({
+        simId,
+        hash,
+        json: JSON.stringify(dossier),
+        updatedDay: day,
+        updatedAt: new Date().toISOString(),
+      });
+      return { inserted, retired, skipped: false };
+    }
+
+    // Same structure, but the scores inside may have moved and the battery grades against
+    // this json, so keep it current even when no fact changed.
+    this.facts.saveDossier({
+      simId,
+      hash,
+      json: JSON.stringify(dossier),
+      updatedDay: day,
+      updatedAt: new Date().toISOString(),
+    });
+    return unchanged;
+  }
+
+  private retireContradicting(
+    simId: string,
+    predicate: string,
+    objectText: string | undefined,
+    objectSimId: string | undefined,
+    supersededBy: number,
+    day?: number,
+  ): number {
+    let retired = 0;
+    for (const existing of this.facts.findContradicting(simId, predicate)) {
+      if (existing.id === undefined || existing.id === supersededBy) {
+        continue;
+      }
+      const sameObject = existing.objectText === objectText && existing.objectSimId === objectSimId;
+      if (sameObject) {
+        continue;
+      }
+      if (!canSupersede('game', existing.source)) {
+        continue;
+      }
+      this.facts.invalidate(existing.id, day, supersededBy);
+      retired += 1;
+    }
+    return retired;
+  }
+
+  /**
+   * Store one fact from somewhere other than the game. Returns the new row id, or
+   * undefined when the fact was refused (a lower-trust source contradicting a game fact
+   * is still stored, but it never retires the game fact).
+   */
+  addFact(input: AddFactInput): number | undefined {
+    if (!this.isLoaded() || !input.subjectSimId || !input.predicate) {
+      return undefined;
+    }
+    const confidence = input.confidence ?? DEFAULT_CONFIDENCE[input.source];
+    const id = this.facts.insert({
+      subjectSimId: input.subjectSimId,
+      predicate: input.predicate,
+      objectText: input.objectText,
+      objectSimId: input.objectSimId,
+      source: input.source,
+      confidence,
+      validFromDay: input.day,
+      provenanceMemoryId: input.provenanceMemoryId,
+      createdAt: new Date().toISOString(),
+    });
+    if (isSingleValued(input.predicate)) {
+      for (const existing of this.facts.findContradicting(input.subjectSimId, input.predicate)) {
+        if (existing.id === undefined || existing.id === id) {
+          continue;
+        }
+        const sameObject = existing.objectText === input.objectText && existing.objectSimId === input.objectSimId;
+        if (sameObject || !canSupersede(input.source, existing.source)) {
+          continue;
+        }
+        this.facts.invalidate(existing.id, input.day, id);
+      }
+    }
+    return id;
+  }
+
+  invalidateFact(id: number, day?: number) {
+    if (this.isLoaded()) {
+      this.facts.invalidate(id, day);
+    }
+  }
+
+  /**
+   * What this sim knows, as a <KNOWN_FACTS> block. Empty string when there is nothing to
+   * say, so a caller can concatenate it unconditionally and the prompt is byte-identical
+   * to today's when the store is empty.
+   */
+  recall(simId: string, options: RecallOptions = {}): string {
+    if (!this.isLoaded() || !simId) {
+      return '';
+    }
+    try {
+      const selfFacts = this.facts.getCurrentFacts(simId);
+      if (selfFacts.length === 0) {
+        return '';
+      }
+      const dossier = this.readDossier(simId);
+      // The dossier speaks the mod's snake_case; the word bands are the app's camelCase.
+      // Passing the raw edge through read every known sim as a stranger, because
+      // relationshipWords saw hasMet undefined - caught by the KNOWN_FACTS test.
+      const scores = new Map(
+        (dossier?.relationships ?? []).map(
+          (edge) =>
+            [
+              edge.sim_id,
+              {
+                hasMet: edge.has_met,
+                friendship: edge.friendship,
+                romance: edge.romance,
+                bits: edge.bits,
+              },
+            ] as const,
+        ),
+      );
+
+      const mentioned = [...new Set(options.mentionedSimIds ?? [])].filter((id) => id && id !== simId);
+      const names = { ...dossierNames(dossier ?? { sim_id: simId }) };
+      const missing = mentioned.filter((id) => !names[id]);
+      if (missing.length > 0) {
+        Object.assign(names, this.namesFor(missing));
+      }
+
+      const people = mentioned.map((otherId) => ({
+        simId: otherId,
+        name: names[otherId],
+        facts: selfFacts.filter((fact) => fact.objectSimId === otherId),
+        relationship: scores.get(otherId),
+      }));
+
+      // Hearsay is rendered separately and flagged as possibly untrue. Attribution comes
+      // from the memory the fact was extracted from, which H3's encoder fills in; until
+      // then a told fact simply carries no speaker rather than a fabricated one.
+      const told = this.facts.getRecentTold(simId, 3).map((fact) => ({
+        text: this.tellingLine(fact, names),
+        saidBy: this.speakerFor(fact),
+        confidence: fact.confidence,
+      }));
+
+      return renderKnownFacts({
+        // The relationship rows are rendered in the people section; leaving them in the
+        // self list too would print "X is your parent" twice for everyone present.
+        selfFacts: selfFacts.filter((fact) => !fact.objectSimId || !mentioned.includes(fact.objectSimId)),
+        people,
+        told,
+        names,
+        maxChars: options.maxChars,
+      });
+    } catch (err) {
+      log.error('Failed to build KNOWN_FACTS', err);
+      return '';
+    }
+  }
+
+  // Set by the caller that owns memory lookups; left unset the speaker is simply omitted.
+  speakerLookup?: (memoryId: string) => string | undefined;
+
+  private speakerFor(fact: SimFactRecord): string | undefined {
+    if (!fact.provenanceMemoryId || !this.speakerLookup) {
+      return undefined;
+    }
+    try {
+      return this.speakerLookup(fact.provenanceMemoryId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private tellingLine(fact: SimFactRecord, names: Record<string, string>): string {
+    const object = fact.objectSimId ? (names[fact.objectSimId] ?? `sim ${fact.objectSimId}`) : (fact.objectText ?? '');
+    return `${fact.predicate.replace(/_/g, ' ')}: ${object}`;
+  }
+
+  readDossier(simId: string): SimDossier | undefined {
+    if (!this.isLoaded()) {
+      return undefined;
+    }
+    const stored = this.facts.getDossier(simId);
+    if (!stored) {
+      return undefined;
+    }
+    try {
+      return JSON.parse(stored.json) as SimDossier;
+    } catch {
+      return undefined;
+    }
+  }
+
+  getCurrentFacts(simId: string, options: { about?: string } = {}): SimFactRecord[] {
+    return this.isLoaded() ? this.facts.getCurrentFacts(simId, options) : [];
+  }
+
+  getHistory(simId: string): SimFactRecord[] {
+    return this.isLoaded() ? this.facts.getHistory(simId) : [];
+  }
+
+  pathBetween(simA: string, simB: string, maxHops = 2): SimFactRecord[] {
+    return this.isLoaded() ? this.facts.pathBetween(simA, simB, maxHops) : [];
+  }
+
+  getFact(id: number): SimFactRecord | undefined {
+    return this.isLoaded() ? this.facts.getFact(id) : undefined;
+  }
+
+  // Who is named in a fact, for rendering and for the explain route.
+  namesForIds(simIds: string[]): Record<string, string> {
+    return this.namesFor(simIds);
+  }
+
+  // The family relationship word for one pair, used by the battery's graders.
+  familyBitBetween(simId: string, otherId: string): string | undefined {
+    if (!this.isLoaded()) {
+      return undefined;
+    }
+    const bit = this.facts
+      .getCurrentFacts(simId, { about: otherId })
+      .find((fact) => fact.predicate === FactPredicate.FAMILY_BIT);
+    return bit?.objectText;
+  }
+}

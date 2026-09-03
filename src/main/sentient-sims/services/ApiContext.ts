@@ -23,6 +23,8 @@ import { DailyPlanRepository } from '../db/DailyPlanRepository';
 import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
 import { ActionOutcomeRepository } from '../db/ActionOutcomeRepository';
+import { SimFactRepository } from '../db/SimFactRepository';
+import { SemanticMemoryService } from './SemanticMemoryService';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -266,6 +268,7 @@ export class ApiContext {
   private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
   private readonly _outcomeVerdictService: OutcomeVerdictService;
+  private readonly _semanticMemoryService: SemanticMemoryService;
   private readonly _transcriptionService: TranscriptionService;
 
   private readonly _twitchAuthService: TwitchAuthService;
@@ -292,6 +295,7 @@ export class ApiContext {
   private readonly _aiExchangeRepository: AIExchangeRepository;
   private readonly _memoryTraceRepository: MemoryTraceRepository;
   private readonly _actionOutcomeRepository: ActionOutcomeRepository;
+  private readonly _simFactRepository: SimFactRepository;
 
   // --- AI Services ---
   private readonly _sentientSimsAIService: SentientSimsAIService;
@@ -357,6 +361,7 @@ export class ApiContext {
     this._aiExchangeRepository = new AIExchangeRepository(this._db);
     this._memoryTraceRepository = new MemoryTraceRepository(this._db);
     this._actionOutcomeRepository = new ActionOutcomeRepository(this._db);
+    this._simFactRepository = new SimFactRepository(this._db);
 
     this._sceneService = new SceneService();
     this._actionDispatcherService = new ActionDispatcherService();
@@ -384,6 +389,23 @@ export class ApiContext {
     this._aiExchangeLogService = new AIExchangeLogService(this._aiExchangeRepository);
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
     this._outcomeVerdictService = new OutcomeVerdictService(this._actionOutcomeRepository);
+    // Names come from the participant table rather than being passed around: the fact
+    // store holds ids, and every rendering of a fact needs a name for them.
+    this._semanticMemoryService = new SemanticMemoryService(this._simFactRepository, (simIds) => {
+      const names: Record<string, string> = {};
+      try {
+        const found = this._participantRepository.getParticipantNames(simIds);
+        simIds.forEach((simId, index) => {
+          const name = found[index];
+          if (name) {
+            names[simId] = name;
+          }
+        });
+      } catch {
+        // No database loaded, or unknown ids - the renderer falls back to 'sim <id>'
+      }
+      return names;
+    });
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);
@@ -621,6 +643,14 @@ export class ApiContext {
 
   get actionOutcomeRepository(): ActionOutcomeRepository {
     return this._actionOutcomeRepository;
+  }
+
+  get simFactRepository(): SimFactRepository {
+    return this._simFactRepository;
+  }
+
+  get semanticMemory(): SemanticMemoryService {
+    return this._semanticMemoryService;
   }
 
   private get sentientSimsAIService(): SentientSimsAIService {

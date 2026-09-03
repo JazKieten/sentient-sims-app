@@ -7,6 +7,7 @@ import { ModRequestPerception, ModWebsocketMessageType } from '../models/ModWebs
 import { PerceptionSnapshot } from '../models/PerceptionSnapshot';
 import { SceneState } from '../services/SceneService';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
+import { DossierReport } from '../models/SimDossier';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
@@ -123,6 +124,44 @@ export class CognitionController {
       return res.json({ ok: true, seq: report.seq });
     } catch (err) {
       log.error('Error handling state report', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
+  // Phase 3.1 H1/H2: ground truth about who each sim IS. The mod hash-gates these, so a
+  // report arriving at all usually means something structural changed; ingestion diffs it
+  // against the sim's current `game` facts and retires what is no longer true.
+  postDossier = (req: Request, res: Response) => {
+    try {
+      const report = req.body as Partial<DossierReport>;
+      const dossiers = Array.isArray(report.dossiers) ? report.dossiers : undefined;
+      if (!dossiers) {
+        return res.status(400).json({ error: 'dossiers[] is required' });
+      }
+      // The mod sends the clock with the report; fall back to the state cache for an
+      // older mod build that does not.
+      const day = report.clock?.absolute_day ?? this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+      let inserted = 0;
+      let retired = 0;
+      let ingested = 0;
+      for (const dossier of dossiers) {
+        if (!dossier.sim_id) {
+          continue;
+        }
+        const result = this.ctx.semanticMemory.ingestDossier(dossier, { day });
+        inserted += result.inserted;
+        retired += result.retired;
+        if (!result.skipped) {
+          ingested += 1;
+        }
+      }
+      log.info(
+        `Dossier report seq=${report.seq ?? '?'} reason=${report.reason ?? '?'}: ` +
+          `${ingested}/${dossiers.length} ingested, ${inserted} facts added, ${retired} retired`,
+      );
+      return res.json({ ok: true, seq: report.seq, ingested, inserted, retired });
+    } catch (err) {
+      log.error('Error handling dossier report', err);
       return res.status(500).json({ error: errorMessage(err) });
     }
   };

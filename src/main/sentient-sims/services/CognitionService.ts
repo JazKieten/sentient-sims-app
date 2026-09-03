@@ -1119,7 +1119,7 @@ export class CognitionService {
           undefined,
           AIActionType.ACTION_SCENE,
           undefined,
-          { stageId: StageId.PREFRONTAL_REVIEW },
+          { stageId: StageId.BASAL_GANGLIA_REVIEW },
         ),
       );
       exchanges.push(reviewShot.exchange);

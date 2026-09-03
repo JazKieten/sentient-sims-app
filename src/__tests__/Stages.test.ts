@@ -74,6 +74,19 @@ describe('pipeline stage registry', () => {
     expect(stageForLegacy(AIActionType.GENERATE)).toBeUndefined();
   });
 
+  it('gives call sites with different output contracts different stage ids', () => {
+    // One override replaces one stage's whole system prompt, so the {"choice": N} action
+    // review, the `name: line` scene review and the free-text scene repair cannot share an
+    // id; nor can the five-field sleep plan and the three-field mid-day plan.
+    expect(legacyForStage(StageId.BASAL_GANGLIA_REVIEW)).toBe(AIActionType.ACTION_SCENE);
+    expect(legacyForStage(StageId.PREFRONTAL_REVIEW)).toBe(AIActionType.DIRECTED_SCENE_REVIEWER);
+    expect(legacyForStage(StageId.PREFRONTAL_REVIEW_TEXT)).toBe(AIActionType.DIRECTED_SCENE_REVIEWER);
+    expect(legacyForStage(StageId.CONSOLIDATION_PLAN_MIDDAY)).toBe(AIActionType.DAILY_PLAN);
+    // The reverse map still resolves a legacy type to the stage its call site used first
+    expect(stageForLegacy(AIActionType.ACTION_SCENE)?.id).toBe(StageId.BASAL_GANGLIA_OPTIONS);
+    expect(stageForLegacy(AIActionType.DAILY_PLAN)?.id).toBe(StageId.CONSOLIDATION_PLAN);
+  });
+
   it('resolves a definition by id and rejects an unknown one', () => {
     expect(stageDefinition(StageId.BROCA_SPEECH).brainName).toBe("Broca's area");
     expect(() => stageDefinition('amygdala_hijack' as StageId)).toThrow('Unknown pipeline stage');

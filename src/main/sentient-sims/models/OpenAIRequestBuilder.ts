@@ -233,8 +233,13 @@ export class OpenAIRequestBuilder {
       guidedChoice: oneShotRequest.guidedChoice,
     };
 
+    // Overflow is flagged whenever the request that goes out is over budget, not only when
+    // user text was cut: a system prompt that alone fills the window (the director briefing
+    // carries the whole scene context there) still leaves the floor's worth of user text in
+    // place with nothing dropped, and that request is just as oversized.
     const droppedTokens = requestedUserTokens - userInputCount;
-    if (droppedTokens > 0) {
+    const sentTokens = reservedTokens + userInputCount;
+    if (droppedTokens > 0 || sentTokens > oneShotRequest.maxTokens) {
       request.promptOverflow = {
         budgetTokens: oneShotRequest.maxTokens,
         requestedTokens: reservedTokens + requestedUserTokens,
@@ -242,7 +247,8 @@ export class OpenAIRequestBuilder {
       };
       log.warn(
         `prompt_overflow: one-shot prompt needed ${reservedTokens + requestedUserTokens} tokens against a ` +
-          `${oneShotRequest.maxTokens} budget; truncated ${droppedTokens} tokens off the user message`,
+          `${oneShotRequest.maxTokens} budget; truncated ${droppedTokens} tokens off the user message, ` +
+          `sending ${sentTokens}`,
       );
     }
 

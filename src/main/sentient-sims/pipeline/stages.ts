@@ -8,6 +8,12 @@ import { AIActionType } from '../models/AIActionType';
 // Nothing here changes behaviour on its own. Every stage that exists today keeps its
 // legacy AIActionType as an alias, so `aiActionProviderOverrides` set by a player in the
 // settings UI keeps routing exactly the calls it routed before.
+//
+// One stage id = one output contract. A `stagePromptOverrides` entry replaces the whole
+// system prompt for its stage, so two call sites may share an id only when the same
+// replacement text would satisfy both of their parsers. Where the parsers differ (the
+// action review's `{"choice": N}` against the scene review's `name: line` rows, the sleep
+// consolidation's five-field JSON against the mid-day plan's three) the stage is split.
 
 export enum StageId {
   // Sensory cortex — game ground truth in (state report + dossier). No LLM.
@@ -27,10 +33,15 @@ export enum StageId {
   // Basal ganglia — action selection over the OFFERED vocabulary.
   BASAL_GANGLIA_OPTIONS = 'basal_ganglia_options',
   BASAL_GANGLIA_CHOICE = 'basal_ganglia_choice',
+  // Basal ganglia — the sanity check over the chosen action ({"choice": N} JSON).
+  BASAL_GANGLIA_REVIEW = 'basal_ganglia_review',
   // Broca's area — the spoken line (and the thought under it).
   BROCA_SPEECH = 'broca_speech',
-  // Ventrolateral prefrontal cortex — reviewing a line or a choice before it commits.
+  // Ventrolateral prefrontal cortex — reviewing the delivered lines before they air
+  // (numbered `name: line` rows in, the same rows out).
   PREFRONTAL_REVIEW = 'prefrontal_review',
+  // The older free-text repair over a whole generated scene (the non-directed path).
+  PREFRONTAL_REVIEW_TEXT = 'prefrontal_review_text',
   // Wernicke's area — understanding what was asked.
   WERNICKE_TRIAGE = 'wernicke_triage',
   WERNICKE_MATCH = 'wernicke_match',
@@ -39,6 +50,8 @@ export enum StageId {
   // Hippocampal replay during sleep — the diary and tomorrow's plan.
   CONSOLIDATION_REFLECT = 'consolidation_reflect',
   CONSOLIDATION_PLAN = 'consolidation_plan',
+  // The lazy plan: a Sim who woke without one sets intentions for the rest of today.
+  CONSOLIDATION_PLAN_MIDDAY = 'consolidation_plan_midday',
   // Utilities that are not part of any Sim's mind.
   VOICE_COMMAND = 'voice_command',
   DESCRIPTION_DEFAULT = 'description_default',
@@ -132,6 +145,14 @@ export const STAGES: StageDefinition[] = [
     usesLLM: true,
   },
   {
+    id: StageId.BASAL_GANGLIA_REVIEW,
+    brainName: 'Basal ganglia',
+    job: 'Checking the chosen action for an obvious mistake before it executes',
+    legacyActionType: AIActionType.ACTION_SCENE,
+    defaultMaxResponseTokens: 60,
+    usesLLM: true,
+  },
+  {
     id: StageId.BROCA_SPEECH,
     brainName: "Broca's area",
     job: 'The line spoken out loud, and the thought running under it',
@@ -142,9 +163,17 @@ export const STAGES: StageDefinition[] = [
   {
     id: StageId.PREFRONTAL_REVIEW,
     brainName: 'Ventrolateral prefrontal cortex',
-    job: 'Checking a line or a choice before it commits',
+    job: 'Checking the delivered lines before they air',
     legacyActionType: AIActionType.DIRECTED_SCENE_REVIEWER,
     defaultMaxResponseTokens: 400,
+    usesLLM: true,
+  },
+  {
+    id: StageId.PREFRONTAL_REVIEW_TEXT,
+    brainName: 'Ventrolateral prefrontal cortex',
+    job: 'Repairing a whole generated scene as free text (the non-directed path)',
+    legacyActionType: AIActionType.DIRECTED_SCENE_REVIEWER,
+    defaultMaxResponseTokens: 300,
     usesLLM: true,
   },
   {
@@ -183,6 +212,14 @@ export const STAGES: StageDefinition[] = [
     brainName: 'Hippocampal replay (sleep)',
     job: "Goal review and tomorrow's goals, loadout and persona",
     legacyActionType: AIActionType.DAILY_PLAN,
+    usesLLM: true,
+  },
+  {
+    id: StageId.CONSOLIDATION_PLAN_MIDDAY,
+    brainName: 'Hippocampal replay (waking)',
+    job: 'Goals, loadout and persona for the rest of today, when the Sim woke without a plan',
+    legacyActionType: AIActionType.DAILY_PLAN,
+    defaultMaxResponseTokens: 400,
     usesLLM: true,
   },
   {

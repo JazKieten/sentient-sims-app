@@ -1250,7 +1250,7 @@ export class AIService {
       undefined,
       AIActionType.DIRECTED_SCENE_REVIEWER,
       interactionActionType,
-      { stageId: StageId.PREFRONTAL_REVIEW },
+      { stageId: StageId.PREFRONTAL_REVIEW_TEXT },
     );
     this.logExchange(oneShot.exchange);
     const reviewed = cleanupAIOutput(oneShot.text);
@@ -1269,12 +1269,13 @@ export class AIService {
     // honours an override set on the interaction (see getConfigForDirectedStage)
     interactionActionType?: AIActionType,
     // Which pipeline stage this call IS. An options bag rather than a ninth positional:
-    // 3.2 adds simId here so a stage can resolve against one Sim'''s Sentience.
+    // 3.2 adds simId here so a stage can resolve against one Sim's Sentience.
     options?: { stageId?: StageId },
   ): Promise<{ exchange: LLMExchange; text: string }> {
     const providerConfig = this.ctx.providerConfigs.getConfigForDirectedStage(actionType, interactionActionType);
     // The context budget belongs to the model, not to this call site: a hardcoded 3900 threw
     // away most of a 16k window on the big models and silently cut the payload on every one.
+    // The reply has to fit in the same window, so its budget is reserved off the top.
     const resolvedModel = model ?? providerConfig.model;
     const modelSettings = await this.ctx.modelSettings.getModelSettings(resolvedModel, providerConfig.apiType);
     // A stage the player has overridden sends their prompt instead of the built one
@@ -1285,7 +1286,7 @@ export class AIService {
       systemPrompt: resolvedSystemPrompt,
       messages: [userText],
       maxResponseTokens,
-      maxTokens: modelSettings.max_tokens,
+      maxTokens: Math.max(modelSettings.max_tokens - maxResponseTokens, 0),
     };
 
     getInputFormatters(providerConfig.apiType).forEach((formatter) => {
@@ -2058,10 +2059,13 @@ export class AIService {
     const providerConfig = this.ctx.providerConfigs.getConfigForAction(actionType);
     const apiType: ApiType = providerConfig.apiType;
 
-    const systemPrompt = defaultClassificationPrompt.replaceAll(
-      '{classifiers}',
-      classificationRequest.classifiers.join(', '),
-    );
+    // The override seam sits before the classifier substitution, so an overriding prompt
+    // can still carry the {classifiers} placeholder and get the live list in it.
+    const systemPrompt = promptFor(
+      StageId.CLASSIFICATION,
+      defaultClassificationPrompt,
+      this.ctx.settings.stagePromptOverrides,
+    ).replaceAll('{classifiers}', classificationRequest.classifiers.join(', '));
 
     let oneShotRequest: OneShotRequest = {
       systemPrompt,
@@ -2153,8 +2157,11 @@ Write me a buff description based on the conversation so that ${buffRequest.name
 `;
 
     let oneShotRequest: OneShotRequest = {
-      systemPrompt:
+      systemPrompt: promptFor(
+        StageId.BUFF,
         'Response to the request without extra commentary or formatting, only return the answer to the request.',
+        this.ctx.settings.stagePromptOverrides,
+      ),
       messages: buffRequest.messages,
       userPreResponse: systemPrompt,
       assistantPreResponse: `Buff Title: ${buffRequest.mood}\nBuff Description: ${buffRequest.name} is feeling ${buffRequest.mood} because`,

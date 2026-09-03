@@ -633,7 +633,7 @@ export class DailyPlanService {
           undefined,
           AIActionType.DAILY_PLAN,
           undefined,
-          { stageId: StageId.CONSOLIDATION_PLAN },
+          { stageId: StageId.CONSOLIDATION_PLAN_MIDDAY },
         );
         const parsed = parsePlannerJson(shot.text);
         if (parsed) {

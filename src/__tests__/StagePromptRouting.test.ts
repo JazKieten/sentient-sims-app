@@ -7,6 +7,8 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { OpenAIService } from 'main/sentient-sims/services/OpenAIService';
 import { StageId } from 'main/sentient-sims/pipeline/stages';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
+import { AllModelSettings } from 'main/sentient-sims/modelSettings';
+import { OpenAIRequestBuilder } from 'main/sentient-sims/models/OpenAIRequestBuilder';
 import { mockApiContext } from './util';
 
 // The registry is only worth having if a stage id actually reaches the provider seam and a
@@ -114,5 +116,35 @@ describe('stage prompt routing', () => {
     );
 
     expect(systemPromptSent()).toBe('the built prompt');
+  });
+
+  it('applies a classification override and still substitutes the classifier list', async () => {
+    // Classification and the buff description do not go through runOneShot, so the seam
+    // has to be present at their own call sites or an override is accepted and ignored.
+    ctx.settings.stagePromptOverrides = { [StageId.CLASSIFICATION]: 'Pick one of: {classifiers}.' };
+
+    await ctx.ai.runClassification({ name: 'mood', classifiers: ['happy', 'sad'], messages: ['a chat'] });
+
+    expect(systemPromptSent()).toBe('Pick one of: happy, sad.');
+  });
+
+  it('applies a buff override at the buff description call site', async () => {
+    ctx.settings.stagePromptOverrides = { [StageId.BUFF]: 'Answer plainly.' };
+
+    await ctx.ai.runBuffDescription({ name: 'Alice', mood: 'happy', messages: ['a chat'] });
+
+    expect(systemPromptSent()).toBe('Answer plainly.');
+  });
+
+  it('reserves the response budget out of the context window', async () => {
+    // The reply has to fit in the same window as the prompt, so the one-shot budget handed
+    // to the builder is the model's context minus the response budget, not the whole context.
+    const build = vi.spyOn(OpenAIRequestBuilder.prototype, 'buildOneShotOpenAIRequest');
+    const window = AllModelSettings['gpt-4o-mini'].max_tokens;
+
+    await ctx.ai.runOneShot('Chat', 'sys', 'input', 400);
+
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls[0][0].maxTokens).toBe(window - 400);
   });
 });

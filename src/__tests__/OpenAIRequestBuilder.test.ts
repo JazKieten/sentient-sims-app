@@ -75,6 +75,24 @@ describe('OpenAIRequestBuilder.buildOneShotOpenAIRequest', () => {
     expect(request.promptOverflow?.droppedTokens).toBe(5000 + 1 - MIN_ONE_SHOT_USER_TOKENS);
   });
 
+  it('flags an overflow when the system prompt alone is over budget and nothing was cut', () => {
+    // The director briefing carries the whole scene context in the system prompt; the user
+    // text is small and fits inside the floor, so nothing is dropped — but the request is
+    // still oversized and the exchange log has to say so.
+    const request = build({
+      systemPrompt: 'z'.repeat(500),
+      messages: ['short'],
+      maxTokens: 100,
+    });
+
+    expect(request.messages[1].content).toBe('short');
+    expect(request.promptOverflow).toEqual({
+      budgetTokens: 100,
+      requestedTokens: 500 + 'short\n'.length,
+      droppedTokens: 0,
+    });
+  });
+
   it('keeps the newest messages whole and cuts only the one that straddles the budget', () => {
     const request = build({
       systemPrompt: 's',

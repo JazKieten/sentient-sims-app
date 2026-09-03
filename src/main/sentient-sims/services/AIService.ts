@@ -86,6 +86,7 @@ import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
 import { parsePlannerJson, extractDiaryProse, DailyPlanService } from './DailyPlanService';
+import { assertDiaryIsProse, repairDiary } from '../bench/tier0';
 import { SceneState } from './SceneService';
 import { MemoryTrace } from '../models/MemoryTrace';
 import { pngToPaintingDds } from '../image/paintingDds';
@@ -646,6 +647,21 @@ export class AIService {
         pipeline: 'scene_reflection',
         exchanges: [reflection.exchange],
       });
+
+      // Tier-0 (F5): a diary must be prose. Every known path already strips the planner
+      // JSON, so a violation here means a new one appeared — repair it, and if the repair
+      // cannot produce prose either, store nothing rather than poisoning <PAST_REFLECTIONS>
+      // at this lot forever.
+      const proseViolation = assertDiaryIsProse(text);
+      if (proseViolation) {
+        log.error(`[Tier0] diary_is_prose failed for scene ${previousScene.sceneId}: ${proseViolation.detail}`);
+        text = cleanupAIOutput(repairDiary(text));
+        const stillBroken = assertDiaryIsProse(text);
+        if (stillBroken) {
+          log.error(`[Tier0] diary could not be repaired (${stillBroken.detail}); dropping the reflection`);
+          return;
+        }
+      }
 
       if (text.length <= 1) {
         log.error(`[Reflection] Empty reflection produced for scene ${previousScene.sceneId}`);

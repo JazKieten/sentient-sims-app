@@ -325,6 +325,13 @@ export function defaultStore(cwd?: string) {
         // through to the ordinary voice/chat reply
         default: true,
       },
+      [SettingsEnum.OUTCOME_INSTANT_SUCCESS_MS.toString()]: {
+        type: 'number',
+        // The live phantom answered in 126ms. A real push that reaches RUNNING inside 1.5s
+        // is possible (the sim is already standing at the object), which is why 'never seen
+        // running' is required alongside this window.
+        default: 1500,
+      },
       [SettingsEnum.SCENE_MAX_ROUNDS.toString()]: {
         type: 'number',
         default: 3,
@@ -1217,6 +1224,10 @@ export class SettingsService {
 
   get askActionsEnabled(): boolean {
     return this.get(SettingsEnum.ASK_ACTIONS_ENABLED) as boolean;
+  }
+
+  get outcomeInstantSuccessMs(): number {
+    return this.get(SettingsEnum.OUTCOME_INSTANT_SUCCESS_MS) as number;
   }
 
   get generatedDefaultDescriptions(): boolean {

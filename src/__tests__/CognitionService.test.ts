@@ -303,6 +303,89 @@ describe('CognitionService', () => {
     vi.useRealTimers();
   });
 
+  // F5: a success nothing confirmed must not act like a success. Before this, the phantom
+  // closed the sim's pending state as a clean win, which also lifted any suppression the
+  // verb was sitting under — so the next tick could re-pick the action that never happened.
+  it('treats a suspect success as unresolved, not as a win', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'success',
+      request_id: 'req-1',
+      action: 'grab_snack',
+      verdict: 'suspect',
+      decided_at: 'dispatch',
+    });
+
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+    expect(cognition.getStats().suspectOutcomes).toBe(1);
+
+    // The verb sits out the benign window instead of being immediately re-picked
+    cache.ingest(idleSimReport(2));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it('still closes a confirmed success as a win', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'success',
+      request_id: 'req-1',
+      action: 'grab_snack',
+      verdict: 'confirmed',
+      decided_at: 'finished',
+      ran: true,
+    });
+
+    expect(cognition.getStats().suspectOutcomes).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    cache.ingest(idleSimReport(2));
+    await settle();
+    expect(dispatched).toHaveLength(2);
+    vi.useRealTimers();
+  });
+
+  it('does not lift a timeout suppression for a late success nothing confirmed', async () => {
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });
+    cache.ingest(idleSimReport(1));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(95_000);
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+
+    // Same shape as the guitar case that earned the lift (a long action answering late),
+    // except this one never ran — so the suppression stays and the verb is not re-offered
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'success',
+      request_id: 'req-1',
+      action: 'grab_snack',
+      verdict: 'suspect',
+      decided_at: 'finished',
+      ran: false,
+      late: true,
+    });
+
+    cache.ingest(idleSimReport(2));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(cognition.getStats().suspectOutcomes).toBe(1);
+    vi.useRealTimers();
+  });
+
   it('lifts the timeout suppression when the action reports success late', async () => {
     vi.useFakeTimers();
     const { cache, cognition, dispatched } = buildCtx({ optionsJson: SNACK_ONLY_OPTIONS });

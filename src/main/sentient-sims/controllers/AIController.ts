@@ -15,6 +15,8 @@ import {
 } from '../services/GenerationQueueService';
 import { ApiTypeFromValue } from '../models/ApiType';
 import { ImageGenerationRequest } from '../models/ImageGeneration';
+import { OutcomeVerdict } from '../services/OutcomeVerdictService';
+import { runTier0 } from '../bench/tier0';
 
 export class AIController {
   private readonly ctx: ApiContext;
@@ -177,6 +179,35 @@ export class AIController {
       return;
     }
     res.json(exchange);
+  };
+
+  // F5: the graded outcome log for the loaded save, newest first. `verdict=suspect` is
+  // the query the night watch and the bench ask — "did the action loop lie during this
+  // window?" — which used to need someone reading the log as it scrolled past.
+  @CatchErrors()
+  getOutcomes = (req: Request, res: Response) => {
+    const { sim_id: simId, verdict, limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : undefined;
+    res.json(
+      this.ctx.outcomeVerdict.list({
+        simId: typeof simId === 'string' ? simId : undefined,
+        verdict: typeof verdict === 'string' ? (verdict as OutcomeVerdict) : undefined,
+        limit: parsedLimit && parsedLimit > 0 ? parsedLimit : undefined,
+      }),
+    );
+  };
+
+  // Tier-0 run-validity gate over the loaded save: machinery text stored as a diary, and
+  // phantom successes written as truth. An empty array means the save is scoreable.
+  @CatchErrors()
+  getTier0 = (_req: Request, res: Response) => {
+    const diaries = this.ctx.memoryRepository.getRecentReflections(2000).map((memory) => ({
+      id: memory.id,
+      // Reflection rows are stored name-prefixed ("<Name> (diary): ...")
+      text: (memory.content ?? '').replace(/^.*?\(diary\):\s*/, ''),
+    }));
+    const outcomes = this.ctx.outcomeVerdict.list({ limit: 5000 });
+    res.json({ violations: runTier0({ diaries, outcomes }), diaries: diaries.length, outcomes: outcomes.length });
   };
 
   @CatchErrors()

@@ -15,9 +15,22 @@ export type PendingDispatch = {
   dispatchedAt: number;
 };
 
+// A dispatch the dispatcher has already let go of, kept just long enough to grade an
+// outcome that arrives afterwards (F5). Without it a late outcome is indistinguishable
+// from an outcome for a dispatch that never existed: both look up as undefined, so the
+// controller cannot say how old the claim is or whether anything was still waiting on it.
+export type ClosedDispatch = PendingDispatch & {
+  closedAt: number;
+  closedBy: 'outcome' | 'release' | 'expire';
+};
+
 // Interactions that get canceled before ever running produce no outcome from the mod, so
 // pending dispatches are dropped after this long rather than accumulating forever
 const PENDING_TTL_MS = 10 * 60 * 1000;
+
+// How many closed dispatches to remember. Outcomes land within seconds of their close in
+// every observed case, so this is a small ring, not a log.
+const CLOSED_MEMORY = 200;
 
 // One greppable line per decision point on the dispatch path, mirroring the mod's
 // `PUSHDIAG rid=<id> stage=... k=v` lines (ss_interaction_push.pushdiag). Grep both logs
@@ -47,9 +60,41 @@ export class ActionDispatcherService {
   // deliberating, but the dispatcher enforces it as the last line of defense.
   private readonly inFlightBySim = new Map<string, string>();
 
+  // Insertion-ordered, capped at CLOSED_MEMORY (F5)
+  private readonly recentlyClosed = new Map<string, ClosedDispatch>();
+
   getInFlight(simId: string): PendingDispatch | undefined {
     const requestId = this.inFlightBySim.get(simId);
     return requestId ? this.pending.get(requestId) : undefined;
+  }
+
+  // The dispatch behind a request id whether or not it is still in flight. An outcome
+  // that arrives after the pending timeout released the request still has a dispatch to
+  // be graded against; resolve() alone answers undefined for it and loses that.
+  lookup(requestId: string | undefined): PendingDispatch | ClosedDispatch | undefined {
+    if (!requestId) {
+      return undefined;
+    }
+    return this.pending.get(requestId) ?? this.recentlyClosed.get(requestId);
+  }
+
+  // True when the request was already closed before this outcome arrived — the honest
+  // definition of 'late'. The old one ('the sim's runtime is not PENDING_OUTCOME') also
+  // fired for every ask and debug dispatch, which the runtime never owned in the first
+  // place.
+  wasClosed(requestId: string | undefined): boolean {
+    return requestId !== undefined && this.recentlyClosed.has(requestId);
+  }
+
+  private remember(entry: PendingDispatch, closedBy: ClosedDispatch['closedBy']) {
+    this.recentlyClosed.set(entry.requestId, { ...entry, closedAt: Date.now(), closedBy });
+    while (this.recentlyClosed.size > CLOSED_MEMORY) {
+      const oldest = this.recentlyClosed.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      this.recentlyClosed.delete(oldest.value);
+    }
   }
 
   dispatch(intent: ActionIntent): string {
@@ -130,12 +175,16 @@ export class ActionDispatcherService {
         this.sendToMod(cancel);
       }
     }
-    this.resolve(requestId);
+    this.resolve(requestId, 'release');
   }
 
   // Claims the pending dispatch for an arriving outcome. Removes it, so a duplicate outcome
-  // report for the same request_id comes back undefined.
-  resolve(requestId: string | undefined): PendingDispatch | undefined {
+  // report for the same request_id comes back undefined — but the dispatch is remembered
+  // in recentlyClosed so a late outcome can still be graded against it.
+  resolve(
+    requestId: string | undefined,
+    closedBy: ClosedDispatch['closedBy'] = 'outcome',
+  ): PendingDispatch | undefined {
     if (!requestId) {
       return undefined;
     }
@@ -145,6 +194,7 @@ export class ActionDispatcherService {
       if (this.inFlightBySim.get(entry.intent.sim_id) === requestId) {
         this.inFlightBySim.delete(entry.intent.sim_id);
       }
+      this.remember(entry, closedBy);
     }
     return entry;
   }
@@ -164,6 +214,7 @@ export class ActionDispatcherService {
         if (this.inFlightBySim.get(entry.intent.sim_id) === id) {
           this.inFlightBySim.delete(entry.intent.sim_id);
         }
+        this.remember(entry, 'expire');
       }
     });
   }

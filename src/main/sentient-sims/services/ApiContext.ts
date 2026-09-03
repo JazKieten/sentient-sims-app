@@ -22,6 +22,7 @@ import { VoiceController } from '../controllers/VoiceController';
 import { DailyPlanRepository } from '../db/DailyPlanRepository';
 import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
+import { ActionOutcomeRepository } from '../db/ActionOutcomeRepository';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -65,6 +66,7 @@ import { MappingService } from './MappingService';
 import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
 import { MemoryTraceService } from './MemoryTraceService';
+import { OutcomeVerdictService } from './OutcomeVerdictService';
 import { AIExchangeLogService } from './AIExchangeLogService';
 import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
@@ -263,6 +265,7 @@ export class ApiContext {
   private readonly _memoryRetrievalService: MemoryRetrievalService;
   private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
+  private readonly _outcomeVerdictService: OutcomeVerdictService;
   private readonly _transcriptionService: TranscriptionService;
 
   private readonly _twitchAuthService: TwitchAuthService;
@@ -288,6 +291,7 @@ export class ApiContext {
   private readonly _dailyPlanRepository: DailyPlanRepository;
   private readonly _aiExchangeRepository: AIExchangeRepository;
   private readonly _memoryTraceRepository: MemoryTraceRepository;
+  private readonly _actionOutcomeRepository: ActionOutcomeRepository;
 
   // --- AI Services ---
   private readonly _sentientSimsAIService: SentientSimsAIService;
@@ -352,6 +356,7 @@ export class ApiContext {
     this._dailyPlanRepository = new DailyPlanRepository(this._db);
     this._aiExchangeRepository = new AIExchangeRepository(this._db);
     this._memoryTraceRepository = new MemoryTraceRepository(this._db);
+    this._actionOutcomeRepository = new ActionOutcomeRepository(this._db);
 
     this._sceneService = new SceneService();
     this._actionDispatcherService = new ActionDispatcherService();
@@ -378,6 +383,7 @@ export class ApiContext {
     this._twitchAuthService = new TwitchAuthService(this);
     this._aiExchangeLogService = new AIExchangeLogService(this._aiExchangeRepository);
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
+    this._outcomeVerdictService = new OutcomeVerdictService(this._actionOutcomeRepository);
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);
@@ -553,6 +559,10 @@ export class ApiContext {
     return this._aiExchangeLogService;
   }
 
+  get outcomeVerdict(): OutcomeVerdictService {
+    return this._outcomeVerdictService;
+  }
+
   get interactionSemanticSearch(): InteractionSemanticSearchService {
     return this._interactionSemanticSearchService;
   }
@@ -607,6 +617,10 @@ export class ApiContext {
 
   get memoryTraceRepository(): MemoryTraceRepository {
     return this._memoryTraceRepository;
+  }
+
+  get actionOutcomeRepository(): ActionOutcomeRepository {
+    return this._actionOutcomeRepository;
   }
 
   private get sentientSimsAIService(): SentientSimsAIService {

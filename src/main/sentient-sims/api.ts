@@ -32,6 +32,9 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/ai/v2/tts', ctx.controller.ai.tts);
   expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.ai.getExchange);
   expressApp.get('/ai/exchanges', ctx.controller.ai.getExchanges);
+  // F5: graded outcomes for the loaded save, and the tier-0 run-validity gate over it
+  expressApp.get('/ai/outcomes', ctx.controller.ai.getOutcomes);
+  expressApp.get('/bench/tier0', ctx.controller.ai.getTier0);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);

@@ -139,6 +139,165 @@ describe('cognition routes', () => {
     );
   });
 
+  // F5: the phantom, end to end. On 2026-08-26 a sim wedged in a shower transition loop
+  // was told 'take_shower succeeded' 126ms after dispatch, with nothing registered in the
+  // game. That sentence went into a permanent memory row and into later prompts.
+  it('never writes a dispatch-time success with no claim as a success', async () => {
+    createdMemories.length = 0;
+
+    const outcome = await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'take_shower',
+      outcome: 'success',
+      decided_at: 'dispatch',
+      push_id: null,
+      ran: null,
+      location_id: 5,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, verdict: 'suspect' });
+    expect(createdMemories[0].memory.observation).toBe(
+      "Marisol Rocca tried 'take_shower'; the game accepted it but nothing confirmed it happened.",
+    );
+    // 'succeeded' is what retrieval and the scene filters key on — it must not appear
+    expect(createdMemories[0].memory.observation).not.toContain('succeeded');
+  });
+
+  it('writes an outcome the game decided as a plain success', async () => {
+    createdMemories.length = 0;
+
+    const outcome = await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'take_shower',
+      interaction_name: 'shower_TakeShower',
+      outcome: 'success',
+      decided_at: 'finished',
+      push_id: '4242',
+      ran: true,
+      location_id: 5,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, verdict: 'confirmed' });
+    expect(createdMemories[0].memory.observation).toBe("Marisol Rocca tried 'take_shower' and it succeeded.");
+  });
+
+  it('keeps a dispatch-time success that names its claim', async () => {
+    createdMemories.length = 0;
+
+    // 'sit' never completes, so the successful push IS the outcome. The prose is not
+    // hedged; the verdict records that nothing confirmed it.
+    const outcome = await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'sit',
+      outcome: 'success',
+      decided_at: 'dispatch',
+      claim: 'instant_verb',
+      location_id: 5,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, verdict: 'claimed' });
+    expect(createdMemories[0].memory.observation).toBe("Marisol Rocca tried 'sit' and it succeeded.");
+  });
+
+  it('grades an outcome from a mod with no provenance exactly as before', async () => {
+    createdMemories.length = 0;
+
+    const outcome = await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'grab_snack',
+      outcome: 'success',
+      location_id: 5,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, verdict: 'unknown' });
+    expect(createdMemories[0].memory.observation).toBe("Marisol Rocca tried 'grab_snack' and it succeeded.");
+  });
+
+  it('flags a success the sim is too wedged to have had', async () => {
+    createdMemories.length = 0;
+    // The mod's stuck watchdog says this sim's pushes are starving behind a shower SI,
+    // and the outcome reports that same SI as what the sim is still running. Stubbed
+    // rather than ingested: the cache is shared across this file and drops stale seqs.
+    const blocked = vi
+      .spyOn(ctx.simStateCache, 'getSim')
+      .mockReturnValue({ sim_id: '123', sims: [], objects: [], activity: { blocked_by: 'shower_TakeShower' } });
+
+    const outcome = await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'grab_snack',
+      outcome: 'success',
+      decided_at: 'dispatch',
+      claim: 'merged_social',
+      sim_running: 'shower_TakeShower',
+      location_id: 5,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, verdict: 'suspect' });
+    expect(createdMemories[0].memory.observation).toContain('nothing confirmed it happened');
+    blocked.mockRestore();
+  });
+
+  // F5: 'late' now means the DISPATCHER had already let go of this request. The old flag
+  // meant 'the sim's runtime is not PENDING_OUTCOME', which was equally true for every ask
+  // and debug dispatch the runtime never owned — one name over two different facts.
+  it('grades an outcome that arrives after the dispatch was released as late', async () => {
+    createdMemories.length = 0;
+    const enqueue = await post('/cognition/debug/enqueue', {
+      sim_id: '123',
+      action: 'play_guitar',
+      source: 'cognition',
+    });
+    const requestId = enqueue.request_id as string;
+
+    // The pending timeout gave up on it
+    ctx.actionDispatcher.release(requestId);
+    expect(ctx.actionDispatcher.wasClosed(requestId)).toBe(true);
+    // ...but the dispatch is still there to grade against
+    expect(ctx.actionDispatcher.lookup(requestId)?.intent.action).toBe('play_guitar');
+
+    // The mod answers late: it left the action running and it really did succeed
+    const real = await post('/cognition/outcome', {
+      request_id: requestId,
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'play_guitar',
+      outcome: 'success',
+      decided_at: 'app_cancel',
+      ran: true,
+      location_id: 5,
+    });
+    expect(real).toMatchObject({ ok: true, verdict: 'confirmed' });
+    expect(createdMemories[0].memory.observation).toContain('succeeded');
+
+    // A late success for something that never ran is a different story
+    const enqueue2 = await post('/cognition/debug/enqueue', {
+      sim_id: '123',
+      action: 'play_guitar',
+      source: 'cognition',
+    });
+    const requestId2 = enqueue2.request_id as string;
+    ctx.actionDispatcher.release(requestId2);
+    createdMemories.length = 0;
+
+    const phantom = await post('/cognition/outcome', {
+      request_id: requestId2,
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'play_guitar',
+      outcome: 'success',
+      decided_at: 'finished',
+      ran: false,
+      location_id: 5,
+    });
+    expect(phantom).toMatchObject({ ok: true, verdict: 'suspect' });
+    expect(createdMemories[0].memory.observation).toContain('nothing confirmed it happened');
+  });
+
   it('requests a perception snapshot and formats the reply', async () => {
     sentToMod.length = 0;
 

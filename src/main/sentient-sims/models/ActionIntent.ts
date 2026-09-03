@@ -39,4 +39,26 @@ export type InteractionOutcomeEvent = {
   cause?: string;
   recovery_action?: string;
   location_id?: number;
+
+  // --- F5 provenance (ss_interaction_push._stamp_provenance). All optional: an older
+  // mod build sends none of them, and an outcome with none is graded 'unknown', which
+  // behaves exactly as before F5.
+
+  // Where the verdict was made. Only 'dispatch' is a claim; everything else means the
+  // game (or a mod watcher of it) decided.
+  decided_at?: 'dispatch' | 'finished' | 'finishing' | 'sweep' | 'app_cancel' | 'watchdog';
+  // Why a dispatch-time report is entitled to claim what it claims. A dispatch-time
+  // SUCCESS with no claim is the phantom shape (live 2026-08-26).
+  claim?: 'instant_verb' | 'handler' | 'benign_failure' | 'merged_social' | 'merged_food_chain';
+  // The mod's push-registry key. Null means nothing was ever tracked in the game.
+  push_id?: string | null;
+  // Whether the interaction is known to have reached RUNNING. Null = never observed.
+  ran?: boolean | null;
+  // FinishingType the game reported, when a finisher saw it
+  finishing?: string;
+  // The SI the sim was actually running when the outcome was reported. Compared against
+  // the state report's activity.blocked_by: a success reported while the sim is still
+  // wedged in the head SI that starved the push is not a success.
+  sim_running?: string;
+  game_clock?: { absolute_day?: number; hour?: number; minute?: number };
 };

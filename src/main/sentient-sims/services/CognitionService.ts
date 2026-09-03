@@ -6,6 +6,7 @@ import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
+import { GradedOutcomeEvent } from './OutcomeVerdictService';
 import { AIActionType } from '../models/AIActionType';
 import { LLMExchange } from '../models/InteractionEventResult';
 import {
@@ -266,6 +267,8 @@ export type CognitionStats = {
   continues: number;
   invalidIntents: number;
   timeouts: number;
+  // F5: successes the evidence contradicted. A run with any of these is not a clean run.
+  suspectOutcomes: number;
 };
 
 export class CognitionService {
@@ -280,6 +283,7 @@ export class CognitionService {
     continues: 0,
     invalidIntents: 0,
     timeouts: 0,
+    suspectOutcomes: 0,
   };
 
   constructor(ctx: ApiContext) {
@@ -383,7 +387,7 @@ export class CognitionService {
 
   // Closes the in-flight state. Wired from CognitionController.postOutcome so success
   // is only ever declared by the mod's outcome report — never by dispatch acceptance.
-  onOutcome(event: InteractionOutcomeEvent) {
+  onOutcome(event: GradedOutcomeEvent) {
     const runtime = this.runtimes.get(event.sim_id);
     if (!runtime) {
       return;
@@ -391,12 +395,21 @@ export class CognitionService {
     if (event.request_id && runtime.pendingRequestId && event.request_id !== runtime.pendingRequestId) {
       return;
     }
+    const suspect = event.outcome === 'success' && event.verdict === 'suspect';
     if (runtime.phase !== 'PENDING_OUTCOME') {
       pushdiag(event.request_id, 'outcome', {
         sim_id: event.sim_id,
         action: event.action,
         outcome: event.outcome,
-        late: true,
+        // F5: 'late' now means the DISPATCHER had already closed the request. The old
+        // flag meant 'this runtime is not PENDING_OUTCOME', which was also true for every
+        // ask and debug dispatch the runtime never owned — two different facts under one
+        // name, and the phantom report wore it.
+        late: event.late ?? true,
+        unowned: event.unowned,
+        verdict: event.verdict,
+        age_ms: event.dispatch_age_ms,
+        decided_at: event.decided_at,
         phase: runtime.phase,
         cause: event.cause,
         reason: event.reason,
@@ -408,9 +421,41 @@ export class CognitionService {
       // told a Sim mid-song that playing guitar was "NOT possible right now, do not
       // choose" while her only goal that day was to practise an instrument (observed
       // live 2026-08-10). Lift it; never extend one from here.
-      if (event.outcome === 'success' && event.action && !ONE_SHOT_ACTIONS.has(event.action)) {
+      if (event.outcome === 'success' && !suspect && event.action && !ONE_SHOT_ACTIONS.has(event.action)) {
         runtime.suppressedUntil.delete(event.action);
       }
+      if (suspect && event.action) {
+        // Nothing confirmed this. Lifting the suppression here would put a verb the world
+        // may still be refusing straight back in front of the model.
+        this.stats.suspectOutcomes += 1;
+      }
+      return;
+    }
+    if (suspect) {
+      // A success the evidence contradicts closes the pending state like a benign cancel:
+      // the sim is freed to think again, but the verb sits out the short window so the
+      // next tick cannot immediately re-pick the thing that just failed to happen.
+      this.stats.suspectOutcomes += 1;
+      runtime.pendingIntent = undefined;
+      if (event.action) {
+        runtime.suppressedUntil.set(event.action, Date.now() + BENIGN_CLOSE_SUPPRESS_MS);
+      }
+      this.clearPending(runtime);
+      this.toCooldown(event.sim_id);
+      log.info(
+        `[Cognition] sim ${event.sim_id} '${event.action ?? ''}' reported success but nothing confirmed it; treating as unresolved`,
+      );
+      pushdiag(event.request_id, 'outcome', {
+        sim_id: event.sim_id,
+        action: event.action,
+        outcome: event.outcome,
+        verdict: 'suspect',
+        decided_at: event.decided_at,
+        claim: event.claim,
+        ran: event.ran,
+        sim_running: event.sim_running,
+        age_ms: event.dispatch_age_ms,
+      });
       return;
     }
     if (this.maybeRetryTransient(event, runtime)) {

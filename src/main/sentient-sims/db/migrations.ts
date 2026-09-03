@@ -275,6 +275,44 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         `,
       ).run();
     },
+    // Every outcome the mod reported, with the verdict the app graded it as (Phase 3.0 F5).
+    // The outcome memory row is what cognition reads; this is the provenance behind it, so
+    // "did a phantom success get written during this probe?" is a query instead of a memory
+    // of watching the log. Same memory_id rules as 016 (TEXT, no foreign key). game_clock
+    // holds JSON; ran/late/unowned are 0/1 with NULL meaning "never observed" for ran.
+    '017-create-action-outcome': (db: Database) => {
+      db.prepare(
+        `
+          CREATE TABLE action_outcome (
+            id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT ,
+            at                   TEXT NOT NULL       ,
+            request_id           TEXT     ,
+            sim_id               TEXT NOT NULL       ,
+            action               TEXT     ,
+            interaction_name     TEXT     ,
+            outcome              TEXT NOT NULL       ,
+            verdict              TEXT NOT NULL       ,
+            decided_at           TEXT     ,
+            claim                TEXT     ,
+            push_id              TEXT     ,
+            ran                  INTEGER     ,
+            finishing            TEXT     ,
+            sim_running          TEXT     ,
+            game_clock           TEXT     ,
+            dispatch_age_ms      INTEGER     ,
+            late                 INTEGER NOT NULL    ,
+            unowned              INTEGER NOT NULL    ,
+            source               TEXT     ,
+            cause                TEXT     ,
+            reason               TEXT     ,
+            memory_id            TEXT
+          );
+        `,
+      ).run();
+      db.prepare('CREATE INDEX action_outcome_request_id ON action_outcome(request_id)').run();
+      db.prepare('CREATE INDEX action_outcome_memory_id ON action_outcome(memory_id)').run();
+      db.prepare('CREATE INDEX action_outcome_verdict ON action_outcome(verdict)').run();
+    },
   }),
 );
 

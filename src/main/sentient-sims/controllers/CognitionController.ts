@@ -9,6 +9,7 @@ import { SceneState } from '../services/SceneService';
 import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
+import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -72,13 +73,22 @@ export function humanizeOutcomeReason(reason: string): string {
 // nothing else, so four sims sat at hygiene <= -94 beside a broken shower while
 // cognition only ever *thought* about the repair service. Naming the fix in the memory
 // is how retrieval and the next tick learn it.
+//
+// F5: a suspect success never gets the word 'succeeded'. This row is permanent, it is
+// retrieved into later prompts, and a sim who reads that a wedged action worked learns
+// something false about their own agency. It says what actually happened instead: the
+// game accepted the push and nothing confirmed anything after that.
 export function outcomeObservation(
   attempt: string,
   outcome: InteractionOutcomeEvent['outcome'],
   reason?: string,
   recoveryAction?: string,
+  verdict: OutcomeVerdict = 'unknown',
 ): string {
   const because = reason ? ` (${humanizeOutcomeReason(reason)})` : '';
+  if (outcome === 'success' && verdict === 'suspect') {
+    return `${attempt}; the game accepted it but nothing confirmed it happened${because}.`;
+  }
   const fix =
     recoveryAction && outcome !== 'success' ? ` Doing '${recoveryAction}' first would clear this.` : '';
   return `${attempt} and it ${outcomeVerb(outcome)}${because}.${fix}`;
@@ -139,8 +149,25 @@ export class CognitionController {
         return res.status(400).json({ error: 'sim_id and outcome are required' });
       }
 
+      // Grade BEFORE resolving: resolve() moves the dispatch into the dispatcher's
+      // recently-closed ring, which is exactly what 'late' is read from.
+      const known = this.ctx.actionDispatcher.lookup(event.request_id);
+      const late = this.ctx.actionDispatcher.wasClosed(event.request_id);
+      const dispatchAgeMs = known ? Date.now() - known.dispatchedAt : undefined;
+      const source = known?.intent.source;
+      // An ask or a debug dispatch is not cognition's to close; the old 'late' flag
+      // conflated those with a genuinely late answer.
+      const unowned = source !== undefined && source !== 'cognition';
+      const verdict = this.ctx.outcomeVerdict.grade(event as InteractionOutcomeEvent, {
+        dispatchAgeMs,
+        late,
+        blockedBy: this.ctx.simStateCache.getSim(event.sim_id)?.activity?.blocked_by,
+        instantSuccessMs: this.ctx.settings.outcomeInstantSuccessMs,
+      });
+
       const pending = this.ctx.actionDispatcher.resolve(event.request_id);
-      const action = pending?.intent.action ?? event.action ?? event.interaction_name ?? 'an interaction';
+      const action =
+        pending?.intent.action ?? known?.intent.action ?? event.action ?? event.interaction_name ?? 'an interaction';
       // The mod can't always resolve names (the sim may already be gone); fall back to the
       // participant DB before writing a raw id into a permanent memory row
       const actor = event.sim_name || this.lookupParticipantName(event.sim_id) || `Sim ${event.sim_id}`;
@@ -149,7 +176,7 @@ export class CognitionController {
         this.lookupParticipantName(event.target_sim_id) ||
         (event.target_sim_id ? `Sim ${event.target_sim_id}` : undefined);
       const attempt = target ? `${actor} tried '${action}' with ${target}` : `${actor} tried '${action}'`;
-      const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action);
+      const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action, verdict);
 
       const participants: ParticipantDTO[] = [{ id: event.sim_id }];
       if (event.target_sim_id) {
@@ -175,17 +202,48 @@ export class CognitionController {
         { notifyMod: false },
       );
 
+      // The provenance behind the memory row: what was claimed, where it was decided,
+      // and how it was graded (F5). Best-effort — no save loaded means no row, and the
+      // outcome still reaches cognition.
+      this.ctx.outcomeVerdict.record({
+        at: new Date().toISOString(),
+        requestId: event.request_id,
+        simId: event.sim_id,
+        action,
+        interactionName: event.interaction_name,
+        outcome: event.outcome,
+        verdict,
+        decidedAt: event.decided_at,
+        claim: event.claim,
+        pushId: event.push_id ?? undefined,
+        ran: event.ran ?? undefined,
+        finishing: event.finishing,
+        simRunning: event.sim_running,
+        gameClock: event.game_clock,
+        dispatchAgeMs,
+        late,
+        unowned,
+        source,
+        cause: event.cause,
+        reason: event.reason,
+        memoryId: memory?.id,
+      });
+
       // Close the sim's PENDING_OUTCOME state — success is only ever declared here,
-      // never at dispatch time
+      // never at dispatch time, and a suspect success is not declared at all
       this.ctx.cognitionService.onOutcome({
         ...event,
         sim_id: event.sim_id,
         outcome: event.outcome,
         action,
+        verdict,
+        late,
+        unowned,
+        dispatch_age_ms: dispatchAgeMs,
       });
 
-      log.info(`[Cognition] outcome ${event.request_id ?? '(uncorrelated)'}: ${observation}`);
-      return res.json({ ok: true, correlated: pending !== undefined, memory_id: memory?.id });
+      log.info(`[Cognition] outcome ${event.request_id ?? '(uncorrelated)'} [${verdict}]: ${observation}`);
+      return res.json({ ok: true, correlated: pending !== undefined, verdict, memory_id: memory?.id });
     } catch (err) {
       log.error('Error handling cognition outcome', err);
       return res.status(500).json({ error: errorMessage(err) });

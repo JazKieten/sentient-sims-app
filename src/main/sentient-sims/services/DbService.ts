@@ -113,6 +113,9 @@ export class DbService {
     // the rows already stored there before anything new is recorded against it.
     this.ctx.aiExchangeLog.onDatabaseLoaded();
 
+    // Same bounding pass for the graded outcomes this save holds (F5)
+    this.ctx.outcomeVerdict.pruneOnLoad();
+
     // Loading a save jumps the game state, so any in-progress scene no longer describes reality.
     this.ctx.generationQueue.flushToFallback();
     this.ctx.sceneService.reset();

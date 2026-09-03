@@ -1,3 +1,4 @@
+import { StageId } from '../pipeline/stages';
 import { AIActionType } from './AIActionType';
 import { ApiType } from './ApiType';
 import { OpenAICompatibleRequest } from './OpenAICompatibleRequest';
@@ -9,6 +10,9 @@ export type AIExchangeSummary = {
   at: string;
   label: string;
   actionType?: AIActionType;
+  // Which pipeline stage this call was. Set wherever the call site knows it; the bench reads
+  // rows by stage, which an action type cannot express (one carries up to three stages).
+  stageId?: StageId;
   apiType?: ApiType;
   model?: string;
   durationMs: number;

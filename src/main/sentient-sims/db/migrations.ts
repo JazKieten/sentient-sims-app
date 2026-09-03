@@ -231,6 +231,50 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       db.prepare('DROP TABLE participant_voice').run();
       db.prepare('ALTER TABLE participant_voice_typed RENAME TO participant_voice').run();
     },
+    // Every provider call (ai_exchange) and the pipeline trace behind each memory
+    // (memory_trace), persisted so the bench and the watches can read prompts back after an
+    // app restart (Phase 3.0 F4); both were in-memory rings that died with the process.
+    // memory_id is TEXT with no foreign key: memory ids are 64-bit game handles that travel
+    // as strings everywhere in the app, createMemory uses INSERT OR REPLACE (a REPLACE-delete
+    // fires ON DELETE CASCADE — see 013), and a deleted memory should still leave its
+    // provenance readable. request, prompt_overflow, review and exchanges hold JSON;
+    // memory_trace.exchanges references ai_exchange rows by id instead of storing a second
+    // copy of each prompt.
+    '016-create-ai-exchange-and-memory-trace': (db: Database) => {
+      db.prepare(
+        `
+          CREATE TABLE ai_exchange (
+            id                   INTEGER NOT NULL  PRIMARY KEY  ,
+            at                   TEXT NOT NULL       ,
+            label                TEXT NOT NULL       ,
+            action_type          TEXT     ,
+            stage_id             TEXT     ,
+            api_type             TEXT     ,
+            model                TEXT     ,
+            duration_ms          INTEGER NOT NULL    ,
+            prompt_chars         INTEGER NOT NULL    ,
+            response_preview     TEXT NOT NULL       ,
+            response_text        TEXT NOT NULL       ,
+            request              TEXT NOT NULL       ,
+            prompt_overflow      TEXT     ,
+            error                TEXT     ,
+            memory_id            TEXT
+          );
+        `,
+      ).run();
+      db.prepare('CREATE INDEX ai_exchange_memory_id ON ai_exchange(memory_id)').run();
+      db.prepare(
+        `
+          CREATE TABLE memory_trace (
+            memory_id            TEXT NOT NULL  PRIMARY KEY  ,
+            pipeline             TEXT NOT NULL       ,
+            director_direction   TEXT     ,
+            review               TEXT     ,
+            exchanges            TEXT NOT NULL
+          );
+        `,
+      ).run();
+    },
   }),
 );
 

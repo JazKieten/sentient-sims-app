@@ -20,6 +20,8 @@ import { UpdateController } from '../controllers/UpdateController';
 import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
 import { DailyPlanRepository } from '../db/DailyPlanRepository';
+import { AIExchangeRepository } from '../db/AIExchangeRepository';
+import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -284,6 +286,8 @@ export class ApiContext {
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
   private readonly _dailyPlanRepository: DailyPlanRepository;
+  private readonly _aiExchangeRepository: AIExchangeRepository;
+  private readonly _memoryTraceRepository: MemoryTraceRepository;
 
   // --- AI Services ---
   private readonly _sentientSimsAIService: SentientSimsAIService;
@@ -346,6 +350,8 @@ export class ApiContext {
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
     this._dailyPlanRepository = new DailyPlanRepository(this._db);
+    this._aiExchangeRepository = new AIExchangeRepository(this._db);
+    this._memoryTraceRepository = new MemoryTraceRepository(this._db);
 
     this._sceneService = new SceneService();
     this._actionDispatcherService = new ActionDispatcherService();
@@ -370,8 +376,8 @@ export class ApiContext {
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._twitchAuthService = new TwitchAuthService(this);
-    this._aiExchangeLogService = new AIExchangeLogService();
-    this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService);
+    this._aiExchangeLogService = new AIExchangeLogService(this._aiExchangeRepository);
+    this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);
@@ -593,6 +599,14 @@ export class ApiContext {
 
   get dailyPlanRepository(): DailyPlanRepository {
     return this._dailyPlanRepository;
+  }
+
+  get aiExchangeRepository(): AIExchangeRepository {
+    return this._aiExchangeRepository;
+  }
+
+  get memoryTraceRepository(): MemoryTraceRepository {
+    return this._memoryTraceRepository;
   }
 
   private get sentientSimsAIService(): SentientSimsAIService {

@@ -1298,8 +1298,11 @@ export class AIService {
     // An explicit model (scenario tester's per-stage picks) wins over the action's provider config
     openAIRequest.model = resolvedModel;
     openAIRequest.apiType = providerConfig.apiType;
-    const response = await this.ctx.aiExchangeLog.runLabeled(label, actionType, () =>
-      this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
+    const response = await this.ctx.aiExchangeLog.runLabeled(
+      label,
+      actionType,
+      () => this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
+      options?.stageId,
     );
     return { exchange: { label, request: openAIRequest, responseText: response.text }, text: response.text };
   }
@@ -2088,6 +2091,7 @@ export class AIService {
       `Classification: ${classificationRequest.name}`,
       actionType,
       () => this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest),
+      StageId.CLASSIFICATION,
     );
 
     const output = cleanAIClassificationOutput(response.text);
@@ -2182,6 +2186,7 @@ Write me a buff description based on the conversation so that ${buffRequest.name
       `Buff Description: ${buffRequest.name}`,
       AIActionType.BUFF,
       () => this.ctx.getGenerationService(apiType).sentientSimsGenerate(openAIRequest),
+      StageId.BUFF,
     );
 
     const output = `${buffRequest.name} is feeling ${buffRequest.mood} because ${cleanupAIOutput(response.text)}`;

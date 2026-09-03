@@ -109,6 +109,10 @@ export class DbService {
 
     this.databaseSession = databaseSession;
 
+    // The AI exchange log is persisted in this save (F4), so its ids have to continue above
+    // the rows already stored there before anything new is recorded against it.
+    this.ctx.aiExchangeLog.onDatabaseLoaded();
+
     // Loading a save jumps the game state, so any in-progress scene no longer describes reality.
     this.ctx.generationQueue.flushToFallback();
     this.ctx.sceneService.reset();

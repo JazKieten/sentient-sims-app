@@ -162,6 +162,10 @@ export function buildCognitionUserPrompt(
   // Filtered out of the rendered social lists (object/lot channels are narrowed upstream).
   // Never listed as "NOT possible": a hidden key is ABSENT from the prompt, not named.
   hiddenActions?: Set<string>,
+  // <KNOWN_FACTS> (Phase 3.1 H3): what this sim actually knows about itself and the
+  // people here, from the semantic store. Empty string when the store has nothing, so
+  // the prompt is byte-identical to the pre-3.1 one until facts exist.
+  factsBlock?: string,
 ): string {
   const sections: string[] = [];
   // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
@@ -259,6 +263,12 @@ export function buildCognitionUserPrompt(
     if (lotLines.length > 0) {
       sections.push(lotLines.join(' '));
     }
+  }
+
+  // Facts before memories: what is TRUE anchors how the recalled episodes are read, and
+  // a fact block that gets truncated away is worse than a short one that survives.
+  if (factsBlock) {
+    sections.push(factsBlock);
   }
 
   if (memoriesBlock) {

@@ -56,6 +56,9 @@ export enum SettingsEnum {
   AI_ACTION_PROVIDER_OVERRIDES = 'aiActionProviderOverrides',
   // Per-stage system prompt overrides, keyed by pipeline StageId
   STAGE_PROMPT_OVERRIDES = 'stagePromptOverrides',
+  // How many memories retrieval scores per query (Phase 3.1 H3). Raised from the old
+  // hardcoded 500 now that the entity-focus window makes a wider pool useful.
+  MEMORY_RETRIEVAL_CANDIDATE_LIMIT = 'memoryRetrievalCandidateLimit',
   // Cognition (Block 9): the autonomous per-sim tick loop
   COGNITION_ENABLED = 'cognitionEnabled',
   COGNITION_AUTONOMY_LEVEL = 'cognitionAutonomyLevel', // off | suggest | full

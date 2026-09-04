@@ -370,6 +370,15 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         `,
       ).run();
     },
+    // The game day a memory was made on (Phase 3.1 H3). memory.timestamp is real UTC, so
+    // recency decay measured a sim's memories in wall-clock hours: at speed 3 a whole sim
+    // week passes in real minutes, and everything looked equally fresh. A day here lets
+    // retrieval decay on the clock the sim actually lives in. NULL for every row written
+    // before this migration and for any row written with no state report loaded, in which
+    // case retrieval falls back to real time exactly as before.
+    '019-memory-index-game-day': (db: Database) => {
+      db.prepare('ALTER TABLE memory_index ADD COLUMN game_day INTEGER').run();
+    },
   }),
 );
 

@@ -107,6 +107,9 @@ function buildCtx(options: CtxOptions = {}) {
     memoryRetrieval: {
       retrieve: () => Promise.resolve([]),
     },
+    semanticMemory: {
+      recall: () => '',
+    },
     dailyPlan: {
       activePlan: () => options.plan,
       needsLazyPlan: () => options.needsLazyPlan ?? false,

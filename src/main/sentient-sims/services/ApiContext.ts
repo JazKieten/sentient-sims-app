@@ -406,6 +406,13 @@ export class ApiContext {
       }
       return names;
     });
+    this._memoryRepository.setGameDayProvider(() => {
+      try {
+        return this._simStateCache.getReport()?.lot?.clock?.absolute_day;
+      } catch {
+        return undefined;
+      }
+    });
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);

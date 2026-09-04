@@ -278,12 +278,28 @@ export class AskActionService {
     const heardAs = this.ctx.settings.playerVoicePersonaName
       ? 'someone only you can hear'
       : 'a voice only you can hear';
+    // A consent decision turns on who is asking and who it involves: refusing to flirt
+    // with your own child is a fact question, not a mood question. The target is the
+    // focus so the block carries the relationship that matters here.
+    let factsBlock: string;
+    try {
+      factsBlock = this.ctx.semanticMemory.recall(sim.sim_id, {
+        mentionedSimIds: matched.intent.target_sim_id ? [matched.intent.target_sim_id] : [],
+      });
+    } catch {
+      // Deciding without the facts block is the pre-3.1 behaviour, and a refusal that
+      // never happens because recall threw is worse than one made without them
+      factsBlock = '';
+    }
     const decisionSystemPrompt = buildAskDecisionSystemPrompt({
       simName: sim.name,
       speaker: playerLine.speaker,
       heardAs,
       speakerIs,
-      sceneContext,
+      sceneContext: factsBlock
+        ? `${factsBlock}
+${sceneContext}`
+        : sceneContext,
     });
 
     const target = matched.intent.target_sim_id

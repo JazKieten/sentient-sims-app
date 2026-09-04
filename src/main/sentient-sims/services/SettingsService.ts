@@ -443,6 +443,10 @@ export function defaultStore(cwd?: string) {
         type: 'object',
         default: {},
       },
+      [SettingsEnum.MEMORY_RETRIEVAL_CANDIDATE_LIMIT.toString()]: {
+        type: 'number',
+        default: 1000,
+      },
       [SettingsEnum.GAME_APP_PATH.toString()]: {
         type: 'string',
         default: defaultGameAppPath,
@@ -1150,6 +1154,12 @@ export class SettingsService {
 
   set sentientSimsAIEmbeddingModel(value: string) {
     this.set(SettingsEnum.SENTIENTSIMSAI_EMBEDDING_MODEL, value);
+  }
+
+  get memoryRetrievalCandidateLimit(): number {
+    const limit = this.get(SettingsEnum.MEMORY_RETRIEVAL_CANDIDATE_LIMIT) as number;
+    // A zero or a negative would silently disable retrieval altogether
+    return Number.isFinite(limit) && limit > 0 ? limit : 1000;
   }
 
   get cognitionEnabled(): boolean {

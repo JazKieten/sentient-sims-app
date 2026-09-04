@@ -574,8 +574,26 @@ export class AIService {
         .map((message) => message.content)
         .join('\n');
 
+      // What the sim actually knows, so a diary cannot invent a sibling. Only the pov
+      // sim has a point of view to recall from; a povless reflection stays as it was.
+      // The try/catch is the guard: a context without a fact store (tests, the bench
+      // harness) throws here, and a diary written without facts beats no diary at all.
+      let factsBlock = '';
+      try {
+        factsBlock = pov ? this.ctx.semanticMemory.recall(pov.simId, { mentionedSimIds: participantIds }) : '';
+      } catch {
+        factsBlock = '';
+      }
       const reflectionContext = {
-        identity: pov ? `You are ${pov.simName}. ` : '',
+        identity: pov
+          ? `You are ${pov.simName}. ${
+              factsBlock
+                ? `
+${factsBlock}
+`
+                : ''
+            }`
+          : '',
         boundary,
         locationName: location.name,
         namesList,

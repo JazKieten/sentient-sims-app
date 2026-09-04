@@ -178,7 +178,8 @@ describe('MemoryIndexRepository', () => {
     const columns = (db.prepare('PRAGMA table_info(memory_index)').all() as { name: string }[]).map(
       (column) => column.name,
     );
-    expect(columns).toEqual(['memory_id', 'importance', 'owner_participant_id']);
+    // game_day joined the index in 019 so retrieval can decay on the sim's own clock
+    expect(columns).toEqual(['memory_id', 'importance', 'owner_participant_id', 'game_day']);
   });
 });
 

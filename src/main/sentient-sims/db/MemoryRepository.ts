@@ -24,6 +24,14 @@ export class MemoryRepository extends Repository {
   // memory_index) hooks in via this callback, wired up by ApiContext. Must never throw.
   private onMemoryUpserted?: (memory: MemoryEntity) => void;
 
+  // Supplied by ApiContext (which owns the state cache); the repository must not reach
+  // into services itself. Never throws - a missing day just means no stamp.
+  private gameDayProvider?: () => number | undefined;
+
+  setGameDayProvider(provider: () => number | undefined) {
+    this.gameDayProvider = provider;
+  }
+
   setOnMemoryUpserted(callback: (memory: MemoryEntity) => void) {
     this.onMemoryUpserted = callback;
   }
@@ -435,6 +443,23 @@ export class MemoryRepository extends Repository {
           participant_id: participant.id,
         });
       });
+
+      // The game day this memory was made on, so retrieval can decay on the clock the
+      // sim lives in rather than on wall-clock hours. Written for EVERY memory, not just
+      // ones carrying an index, because "how long ago was this for the sim" is not a
+      // property only private rows have. Undefined with no state report loaded (the
+      // scenario tester, tests, the main menu) and retrieval falls back to real time.
+      const gameDay = this.gameDayProvider?.();
+      if (gameDay !== undefined) {
+        this.dbService
+          .getDb()
+          .prepare(
+            `INSERT INTO memory_index(memory_id, game_day)
+             VALUES(?, ?)
+             ON CONFLICT(memory_id) DO UPDATE SET game_day = COALESCE(memory_index.game_day, excluded.game_day)`,
+          )
+          .run([updateMemoryResult.lastInsertRowid, gameDay]);
+      }
 
       if (createMemoryRequest.index) {
         // Inside the transaction so a private row is never observable without its owner.

@@ -11,16 +11,18 @@ type MemoryIndexRow = {
 
 type MemoryWithIndexRow = MemoryRow & {
   importance?: bigint | null;
+  game_day?: bigint | null;
   embedding?: Buffer | null;
   embedding_model?: string | null;
   owner_participant_id?: bigint | null;
 };
 
 function toMemoryWithIndex(row: MemoryWithIndexRow): MemoryWithIndex {
-  const { importance, ...rest } = row;
+  const { importance, game_day: gameDay, ...rest } = row;
   return {
     ...toMemoryEntity(rest),
     importance: importance === null || importance === undefined ? importance : Number(importance),
+    game_day: gameDay === null || gameDay === undefined ? gameDay : Number(gameDay),
   };
 }
 
@@ -102,6 +104,13 @@ export class MemoryIndexRepository extends Repository {
     limit: number,
     embeddingModel: string,
     ownerScope: string[] = [],
+    // Phase 3.1 H3: a second, smaller window restricted to memories involving these
+    // people. Without it a question about Nancy could only ever surface Nancy memories
+    // that happen to fall inside the newest-N window, so an old but highly relevant row
+    // was unreachable no matter how well it scored. Unioned, not substituted: the recent
+    // window is still what ordinary deliberation runs on.
+    focusParticipantIds: string[] = [],
+    focusLimit = 200,
   ): MemoryWithIndex[] {
     if (participantIds.length === 0) {
       return [];
@@ -112,13 +121,16 @@ export class MemoryIndexRepository extends Repository {
     const ownerFilter = ownerScope.length
       ? `AND (memory_index.owner_participant_id IS NULL OR memory_index.owner_participant_id IN (${ownerPlaceholders}))`
       : 'AND memory_index.owner_participant_id IS NULL';
-    const query = `
-      SELECT DISTINCT memory.*, memory_index.importance, memory_embedding.embedding, memory_embedding.embedding_model,
-        memory_index.owner_participant_id
+    const columns = `memory.*, memory_index.importance, memory_embedding.embedding, memory_embedding.embedding_model,
+        memory_index.owner_participant_id, memory_index.game_day`;
+    const joins = `
       FROM memory
       INNER JOIN memory_participants ON memory.id = memory_participants.memory_id
       LEFT JOIN memory_index ON memory_index.memory_id = memory.id
-      LEFT JOIN memory_embedding ON memory_embedding.memory_id = memory.id AND memory_embedding.embedding_model = ?
+      LEFT JOIN memory_embedding ON memory_embedding.memory_id = memory.id AND memory_embedding.embedding_model = ?`;
+    const query = `
+      SELECT DISTINCT ${columns}
+      ${joins}
       WHERE memory_participants.participant_id IN (${placeholders})
         ${ownerFilter}
       ORDER BY memory.timestamp DESC, memory.id DESC
@@ -133,6 +145,38 @@ export class MemoryIndexRepository extends Repository {
       .prepare(query)
       .safeIntegers()
       .all([embeddingModel, ...bigIntParticipantIds, ...bigIntOwnerScope, limit]) as MemoryWithIndexRow[];
+
+    const focusIds = focusParticipantIds.filter((focusId) => !participantIds.includes(focusId));
+    if (focusIds.length > 0) {
+      const focusPlaceholders = focusIds.map(() => '?').join(', ');
+      // Same owner rules: the focus window must not become a way to read another sim's
+      // private monologue by naming them.
+      const focusQuery = `
+        SELECT DISTINCT ${columns}
+        ${joins}
+        WHERE memory_participants.participant_id IN (${focusPlaceholders})
+          ${ownerFilter}
+        ORDER BY memory.timestamp DESC, memory.id DESC
+        LIMIT ?;
+      `;
+      const focusRows = this.dbService
+        .getDb()
+        .prepare(focusQuery)
+        .safeIntegers()
+        .all([
+          embeddingModel,
+          ...focusIds.map((focusId) => BigInt(focusId)),
+          ...bigIntOwnerScope,
+          focusLimit,
+        ]) as MemoryWithIndexRow[];
+      const seen = new Set(rows.map((row) => String(row.id)));
+      for (const row of focusRows) {
+        if (!seen.has(String(row.id))) {
+          seen.add(String(row.id));
+          rows.push(row);
+        }
+      }
+    }
     return rows.map(toMemoryWithIndex);
   }
 

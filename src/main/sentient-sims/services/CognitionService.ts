@@ -829,7 +829,10 @@ export class CognitionService {
         ? report
         : { ...report, lot: { ...report.lot, action_keys: lotActionKeys.length > 0 ? lotActionKeys : undefined } };
 
-    const memoriesBlock = await this.relevantMemoriesBlock(entryView);
+    const memoriesBlock = await this.relevantMemoriesBlock(entryView, absoluteDay);
+    // hippocampus_recall: the semantic half of memory. Perceived sims are the focus, so
+    // a tick about the person standing in front of you carries what you know about them.
+    const factsBlock = this.knownFactsBlock(simId, entry, absoluteDay);
     const planBlock =
       plan && (plan.goals.length > 0 || plan.persona)
         ? {
@@ -859,6 +862,7 @@ export class CognitionService {
       [...suppressed],
       planBlock,
       hiddenActions,
+      factsBlock,
     );
 
     const simLabel = entry.sim_name ?? simId;
@@ -1251,9 +1255,24 @@ export class CognitionService {
     }
   }
 
+  // A facts lookup must never be able to stop a sim from thinking. Deliberation without
+  // <KNOWN_FACTS> is the pre-3.1 behaviour, which is a fine degradation; deliberation
+  // that throws is a sim standing still.
+  private knownFactsBlock(simId: string, entry: SimStateEntry, today?: number): string {
+    try {
+      return this.ctx.semanticMemory.recall(simId, {
+        mentionedSimIds: entry.sims.map((other) => other.sim_id),
+        today,
+      });
+    } catch (error) {
+      log.warn(`[Cognition] fact recall failed for sim ${simId}; deliberating without facts`, error);
+      return '';
+    }
+  }
+
   // Retrieval is always on since 4.0.6 (the embedding provider config decides how it
   // scores); a Noop embedder still ranks by importance and recency.
-  private async relevantMemoriesBlock(entry: SimStateEntry): Promise<string | undefined> {
+  private async relevantMemoriesBlock(entry: SimStateEntry, today?: number): Promise<string | undefined> {
     try {
       const perceivedNames = (entry.sims ?? [])
         .map((perceived) => perceived.name)
@@ -1267,6 +1286,12 @@ export class CognitionService {
         excludeMemoryIds: [],
         // Deliberation is this sim's own head: only their private rows may surface
         ownerScope: [entry.sim_id],
+        // The people actually here are what this tick is about: an old memory of the
+        // sim standing in front of you should be reachable even when the recent window
+        // is full of unrelated ticks.
+        focusParticipantIds: entry.sims.map((perceived) => perceived.sim_id),
+        // Decay on the clock the sim lives in
+        today,
         // Echo-chamber brake: at most one of the sim's own tick-thoughts may surface —
         // fresh thoughts win on recency and were feeding the monologue its own words
         // back (35/39 rows one topic, measured live 2026-08-09)

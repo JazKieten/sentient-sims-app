@@ -328,9 +328,21 @@ export class SemanticMemoryService {
     return this.isLoaded() ? this.facts.getFact(id) : undefined;
   }
 
-  // Who is named in a fact, for rendering and for the explain route.
+  // Who is named in a fact, for rendering and for the explain route. The participant
+  // table is the first source, but a sim only gets a row there once a memory involves
+  // them - and a fact about someone the sim has merely met can predate that. Their own
+  // dossier knows the name, so it stands in rather than the route showing a bare id.
   namesForIds(simIds: string[]): Record<string, string> {
-    return this.namesFor(simIds);
+    const names = this.namesFor(simIds);
+    for (const simId of simIds) {
+      if (!names[simId]) {
+        const name = this.readDossier(simId)?.name;
+        if (name) {
+          names[simId] = name;
+        }
+      }
+    }
+    return names;
   }
 
   // The family relationship word for one pair, used by the battery's graders.

@@ -125,6 +125,15 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/cognition/perception', ctx.controller.cognition.postPerception);
   expressApp.post('/cognition/state', ctx.controller.cognition.postState);
   expressApp.post('/cognition/dossier', ctx.controller.cognition.postDossier);
+
+  // Phase 3.1 H4: the semantic facts, readable and correctable. The explain and path
+  // routes are the provenance surface the watches and the MCP tools ask through.
+  expressApp.get('/facts/predicates', ctx.controller.simFacts.getPredicates);
+  expressApp.get('/facts/:factId/explain', ctx.controller.simFacts.getExplain);
+  expressApp.get('/sims/:id/facts', ctx.controller.simFacts.getFacts);
+  expressApp.get('/sims/:id/facts/path/:otherId', ctx.controller.simFacts.getFactPath);
+  expressApp.post('/sims/:id/facts', ctx.controller.simFacts.addFact);
+  expressApp.delete('/sims/:id/facts/:factId', ctx.controller.simFacts.retireFact);
   expressApp.post('/cognition/sleep-boundary', ctx.controller.cognition.postSleepBoundary);
   expressApp.post('/cognition/debug/enqueue', ctx.controller.cognition.debugEnqueue);
   expressApp.post('/cognition/debug/perception', ctx.controller.cognition.debugRequestPerception);

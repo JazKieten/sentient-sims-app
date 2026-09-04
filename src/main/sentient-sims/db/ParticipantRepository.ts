@@ -137,6 +137,31 @@ export class ParticipantRepository extends Repository {
     return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
   }
 
+  // Ids mapped to names. getParticipantNames returns a bare list in database order with
+  // the unknown ones dropped, so a caller cannot line it up with the ids it asked about -
+  // zipping the two by index silently renames people, which is how the facts routes
+  // reported one Sim's child under another Sim's name (found live 2026-09-03).
+  getParticipantNameMap(ids: string[]): Record<string, string> {
+    if (ids.length === 0) {
+      return {};
+    }
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = this.dbService
+      .getDb()
+      .prepare(`SELECT id, name FROM participant WHERE id IN (${placeholders})`)
+      .safeIntegers()
+      .all(ids.map((id) => BigInt(id))) as { id: bigint; name: string | null }[];
+
+    const names: Record<string, string> = {};
+    for (const row of rows) {
+      if (row.name) {
+        names[row.id.toString()] = row.name;
+      }
+    }
+    return names;
+  }
+
   updateParticipant(participant: ParticipantDTO) {
     const result = this.dbService
       .getDb()

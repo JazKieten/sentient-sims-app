@@ -2,6 +2,7 @@ import { AIController } from '../controllers/AIController';
 import { AnimationsController } from '../controllers/AnimationsController';
 import { AssetsController } from '../controllers/AssetsController';
 import { CognitionController } from '../controllers/CognitionController';
+import { SimFactsController } from '../controllers/SimFactsController';
 import { DbController } from '../controllers/DbController';
 import { DebugController } from '../controllers/DebugController';
 import { FileController } from '../controllers/FileController';
@@ -119,6 +120,7 @@ class ControllerContext {
   private readonly _newsController: NewsController;
   private readonly _optionsController: OptionsController;
   private readonly _cognitionController: CognitionController;
+  private readonly _simFactsController: SimFactsController;
   private readonly _paintingsController: PaintingsController;
 
   constructor(ctx: ApiContext) {
@@ -142,6 +144,7 @@ class ControllerContext {
     this._newsController = new NewsController(ctx);
     this._optionsController = new OptionsController(ctx);
     this._cognitionController = new CognitionController(ctx);
+    this._simFactsController = new SimFactsController(ctx);
     this._paintingsController = new PaintingsController(ctx);
   }
 
@@ -223,6 +226,10 @@ class ControllerContext {
 
   get cognition(): CognitionController {
     return this._cognitionController;
+  }
+
+  get simFacts(): SimFactsController {
+    return this._simFactsController;
   }
 
   get paintings(): PaintingsController {
@@ -392,19 +399,12 @@ export class ApiContext {
     // Names come from the participant table rather than being passed around: the fact
     // store holds ids, and every rendering of a fact needs a name for them.
     this._semanticMemoryService = new SemanticMemoryService(this._simFactRepository, (simIds) => {
-      const names: Record<string, string> = {};
       try {
-        const found = this._participantRepository.getParticipantNames(simIds);
-        simIds.forEach((simId, index) => {
-          const name = found[index];
-          if (name) {
-            names[simId] = name;
-          }
-        });
+        return this._participantRepository.getParticipantNameMap(simIds);
       } catch {
         // No database loaded, or unknown ids - the renderer falls back to 'sim <id>'
+        return {};
       }
-      return names;
     });
     this._memoryRepository.setGameDayProvider(() => {
       try {

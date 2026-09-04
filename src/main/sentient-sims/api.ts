@@ -35,6 +35,7 @@ export function runApi(ctx: ApiContext) {
   // F5: graded outcomes for the loaded save, and the tier-0 run-validity gate over it
   expressApp.get('/ai/outcomes', ctx.controller.ai.getOutcomes);
   expressApp.get('/bench/tier0', ctx.controller.ai.getTier0);
+  expressApp.post('/bench/self-knowledge/:simId', ctx.controller.ai.selfKnowledge);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);

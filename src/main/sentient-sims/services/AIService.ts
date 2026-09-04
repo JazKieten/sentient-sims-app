@@ -1534,10 +1534,20 @@ ${factsBlock}
     const monologueBySim = new Map<string, string>();
     for (let i = 0; i < performers.length; i += 1) {
       const sim = performers[i];
+      let actorFacts: string;
+      try {
+        actorFacts = this.ctx.semanticMemory.recall(sim.sim_id, {
+          mentionedSimIds: performers.filter((other) => other !== sim).map((other) => other.sim_id),
+        });
+      } catch {
+        // Speaking without facts is the pre-3.1 behaviour; a silent Sim is not
+        actorFacts = '';
+      }
       const actorSystemPrompt = buildSpeechSystemPrompt({
         simName: sim.name,
         actorPrompt: actorPrompts.get(sim.name) ?? '',
         monologueOnly,
+        factsBlock: actorFacts,
       });
 
       const conversationSoFar = toTranscript(sceneLines);

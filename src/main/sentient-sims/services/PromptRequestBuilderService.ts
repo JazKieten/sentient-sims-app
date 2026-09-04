@@ -21,6 +21,10 @@ import { ApiContext } from './ApiContext';
 import { postureDescriptions, PostureType } from '../descriptions/postureDescriptions';
 import { ObjectDescription, objectDescriptions } from '../descriptions/objectDescriptions';
 
+// Per-Sim fact blocks are separated by a newline, so a model reading the prompt sees them
+// as separate points of view rather than one run-on list.
+const FACT_BLOCK_SEPARATOR = '\n';
+
 export type GenerationOptions = {
   action?: string;
   preAction?: string;
@@ -273,6 +277,35 @@ export class PromptRequestBuilderService {
     } catch (error) {
       log.error('[Memory] Retrieval failed, continuing without relevant memories', error);
       return [];
+    }
+  }
+
+  /**
+   * One facts block per Sim in the scene, each written from that Sim's point of view and
+   * labelled with their name. A single shared block would be a small omniscient director
+   * again: an actor would see what the other Sim privately knows.
+   *
+   * Never throws - a scene with no facts is the pre-3.1 prompt, which is a fine
+   * degradation; a scene that fails to build is a silent Sim.
+   */
+  private knownFactsForScene(event: SSEvent): string | undefined {
+    try {
+      const others = event.sentient_sims.map((sim) => sim.sim_id);
+      const blocks = event.sentient_sims
+        .map((sim) => {
+          const facts = this.ctx.semanticMemory.recall(sim.sim_id, {
+            mentionedSimIds: others.filter((id) => id !== sim.sim_id),
+          });
+          // Multi-Sim scenes need to say whose facts these are; a solo scene does not.
+          return facts && event.sentient_sims.length > 1
+            ? facts.replace('<KNOWN_FACTS>', `<KNOWN_FACTS speaker="${sim.name}">`)
+            : facts;
+        })
+        .filter(Boolean);
+      return blocks.length > 0 ? blocks.join(FACT_BLOCK_SEPARATOR) : undefined;
+    } catch (error) {
+      log.warn('[Facts] scene fact recall failed; building the scene without facts', error);
+      return undefined;
     }
   }
 
@@ -562,6 +595,16 @@ export class PromptRequestBuilderService {
     const relevantMemoriesBlock = this.buildRelevantMemoriesBlock(relevantMemories);
     if (relevantMemoriesBlock) {
       sims.push(relevantMemoriesBlock);
+    }
+
+    // <KNOWN_FACTS> for the Sims in this scene (Phase 3.1). Without it the actor path was
+    // the one place a Sim spoke with no ground truth at all, and it showed: asked who he
+    // lived with, Travis named two people who do not exist (self-knowledge battery,
+    // 2026-09-03, 1/9). Facts go BEFORE the memories block for the same reason as in the
+    // tick - what is true should survive a truncation that costs a recollection.
+    const factsBlock = this.knownFactsForScene(event);
+    if (factsBlock) {
+      sims.splice(relevantMemoriesBlock ? sims.length - 1 : sims.length, 0, factsBlock);
     }
 
     const currentScene = this.ctx.sceneService.getCurrentScene();

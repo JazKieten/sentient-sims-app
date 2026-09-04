@@ -63,10 +63,21 @@ export type SpeechPromptContext = {
   // The director's private briefing for this Sim, or the raw scene context as a fallback
   actorPrompt: string;
   monologueOnly: boolean;
+  // This Sim's own <KNOWN_FACTS> (Phase 3.1). The director's briefing is a paraphrase and
+  // cannot be relied on to carry them: measured live 2026-09-03, the briefing had the
+  // facts and the actor did not, and the actor is the one who speaks. Empty when the
+  // store has nothing, which reproduces the pre-3.1 prompt exactly.
+  factsBlock?: string;
 };
 
 export function buildSpeechSystemPrompt(context: SpeechPromptContext): string {
-  const { simName, actorPrompt, monologueOnly } = context;
+  const { simName, monologueOnly, factsBlock } = context;
+  // Facts first: what is true about this Sim frames the briefing, not the other way round
+  const actorPrompt = factsBlock
+    ? `${factsBlock}
+
+${context.actorPrompt}`
+    : context.actorPrompt;
 
   if (monologueOnly) {
     return `${actorPrompt}

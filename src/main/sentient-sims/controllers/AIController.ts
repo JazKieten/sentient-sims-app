@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import log from 'electron-log';
-import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
+import { InteractionEvents, SSEventType, SSEvent } from '../models/InteractionEvents';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { playTTS, sendChatGeneration } from '../util/notifyRenderer';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
@@ -17,6 +17,7 @@ import { ApiTypeFromValue } from '../models/ApiType';
 import { ImageGenerationRequest } from '../models/ImageGeneration';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 import { runTier0 } from '../bench/tier0';
+import { BatteryQuestion, buildQuestions, gradeBattery } from '../bench/selfKnowledge';
 
 export class AIController {
   private readonly ctx: ApiContext;
@@ -121,6 +122,63 @@ export class AIController {
     if (result.text) {
       sendChatGeneration(result);
     }
+  };
+
+  /**
+   * The self-and-relationship battery (Phase 3.1 H5): ten questions a Sim should be able
+   * to answer about itself, put through the same path as overlay chat and graded against
+   * the dossier the mod reported.
+   *
+   * The event comes from the mod, because only the mod can build a real one - the caller
+   * is the game or a dev helper, not a synthetic fixture. Answers go through
+   * runDirectedGeneration with a playerLine, which is the only way into the chat path
+   * (the directed-scene route cannot set one).
+   */
+  @CatchErrors()
+  selfKnowledge = async (req: Request, res: Response) => {
+    const simId = Array.isArray(req.params.simId) ? req.params.simId[0] : req.params.simId;
+    const body = req.body as { event?: SSEvent; only?: string[]; speaker?: string };
+    const dossier = this.ctx.semanticMemory.readDossier(simId);
+    if (!dossier) {
+      return res.status(404).json({
+        error: `no dossier stored for sim ${simId}; the mod reports one on zone load and on change`,
+      });
+    }
+    if (!body.event || body.event.sentient_sims.length === 0) {
+      return res.status(400).json({ error: 'event with one sentient sim is required' });
+    }
+
+    // "What did you do earlier today" is graded against real rows, so it is only asked
+    // when there are some.
+    const todaysMemories = this.ctx.memoryRepository
+      .getRecentReflectionsForParticipants([simId], 5)
+      .map((memory) => memory.content ?? '')
+      .filter(Boolean);
+
+    const all = buildQuestions(dossier, todaysMemories);
+    const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;
+    const speaker = body.speaker || this.ctx.settings.playerSpeakerName || 'Someone';
+
+    const answers: { question: BatteryQuestion; answer: string }[] = [];
+    for (const question of questions) {
+      // Sequential on purpose: the battery is a conversation, and asking a Sim ten things
+      // at once would let each answer be written without the others in the transcript.
+
+      const result = await this.ctx.ai.runDirectedGeneration(body.event, {
+        playerLine: { speaker, text: question.question },
+        // The battery is a measurement, not a scene: its answers must not become memories
+        // the Sim then remembers having said.
+        saveMemory: false,
+      });
+      answers.push({ question, answer: result.text ?? '' });
+    }
+
+    const graded = gradeBattery(simId, dossier.name, answers);
+    log.info(
+      `[Bench] self-knowledge for ${dossier.name ?? simId}: ${graded.passed}/${graded.total}` +
+        (graded.contradictions.length > 0 ? `, ${graded.contradictions.length} contradiction(s)` : ''),
+    );
+    return res.json(graded);
   };
 
   @CatchErrors()

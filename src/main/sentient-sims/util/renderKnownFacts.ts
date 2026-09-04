@@ -6,9 +6,24 @@
 // relationship lines into every tick, and the failure mode of a bloated facts block is
 // the one F2 was written for: the user message gets truncated away. Self facts first
 // (they are short and always relevant), then the people actually present or mentioned,
-// then hearsay.
+// then the people who matter to this sim wherever they are, then hearsay.
+//
+// Three things this block says that it did not before 2026-09-03, each of them a live
+// battery failure (FIX-PLAN-2026-09-03.md §A):
+// - ABSENCE. An empty genealogy is an answer, not a gap: a sim whose dossier records no
+//   parents has no parents, and saying nothing left "do you have siblings" to be answered
+//   from vibes. Absence is only stated when a dossier was actually ingested, so a sim the
+//   store knows nothing about still says nothing.
+// - NAMES. A sim alone in a scene had no name anywhere in its prompt, so "who do you live
+//   with" was answered with the household's name ("BFF") because that was the only name
+//   it had. The household line names the housemates and "People in your life" carries
+//   family and closest friends whoever is present.
+// - ENGLISH. "you are elder" and "you work as Culinary (level 4)" are the game's words,
+//   not a person's: one sim read "adult" as "early twenties" and another turned a Culinary
+//   career into mixing drinks at a bar.
 
 import { FactPredicate } from '../pipeline/facts/predicates';
+import { lifeStagePhrase } from './lifeStageWords';
 import { relationshipWords } from './relationshipWords';
 
 export type RenderableFact = {
@@ -20,23 +35,40 @@ export type RenderableFact = {
   validFromDay?: number;
 };
 
+export type RenderablePerson = {
+  simId: string;
+  name?: string;
+  facts: RenderableFact[];
+  relationship?: { hasMet?: boolean; friendship?: number; romance?: number; bits?: string[] };
+};
+
 export type RenderKnownFactsInput = {
+  // EVERY current fact about the sim, edges included. The renderer needs the whole set to
+  // measure absence: "no siblings on record" cannot be read off a list that was filtered.
   selfFacts: RenderableFact[];
   // one entry per person worth describing, already narrowed to who is here or mentioned
-  people: {
-    simId: string;
-    name?: string;
-    facts: RenderableFact[];
-    relationship?: { hasMet?: boolean; friendship?: number; romance?: number; bits?: string[] };
-  }[];
+  people: RenderablePerson[];
+  // The people in this sim's life regardless of who is present: family, partners and the
+  // closest friends. Never overlaps `people` - the caller puts each person in one list.
+  lifePeople?: RenderablePerson[];
   told: { text: string; saidBy?: string; confidence: number }[];
   // A name can genuinely be missing (an unmet sim mentioned by id), so the fallbacks
   // below are real - the type has to admit it or the checker calls them dead code.
   names: Record<string, string | undefined>;
+  // Whether a dossier for this sim has been ingested. Absence lines are rendered only when
+  // it has: "no parents on record" is a claim about the game's records, and a sim with no
+  // dossier row has no records rather than empty ones.
+  hasDossier?: boolean;
   maxChars?: number;
 };
 
-export const DEFAULT_FACTS_MAX_CHARS = 1000;
+// Raised from 1000 when the block gained the absence lines and the people-in-your-life
+// section: at 1000 a sim with a large family lost the section that was added to help it.
+export const DEFAULT_FACTS_MAX_CHARS = 1400;
+
+// The people section is a prompt, not a census: past about six the block stops being read
+// and starts being skimmed. The caller does the picking; this is the ceiling.
+export const MAX_LIFE_PEOPLE = 6;
 
 function pretty(value: string): string {
   return value
@@ -49,6 +81,14 @@ function pretty(value: string): string {
     .replace(/_/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .trim();
+}
+
+// "Travis Scott, Mackenzie Scott and Ariel Scott"
+function joinWords(values: string[], conjunction: 'and' | 'or'): string {
+  if (values.length <= 1) {
+    return values[0] ?? '';
+  }
+  return `${values.slice(0, -1).join(', ')} ${conjunction} ${values[values.length - 1]}`;
 }
 
 // 'family_Target_IsSonOrDaughterOf_Actor' -> 'their child'. The bit is written from the
@@ -77,11 +117,22 @@ export function familyBitWords(bit: string): string {
   return table[lowered] ?? `their ${pretty(role).toLowerCase()}`;
 }
 
+// The game stores a career as a tuning name plus the level the diff cares about
+// ('career_Adult_Culinary (level 4)'). The level's actual job title (Line Cook, Mixologist)
+// is a LocalizedString the mod cannot read without the string table, so the track is the
+// best available - said as a career rather than as a job title, which is what stopped a
+// Culinary sim from inventing a bartending job.
+export function jobWords(objectText: string): string {
+  const match = /^(.*?)\s*\(level (\d+)\)\s*$/.exec(objectText);
+  const track = pretty(match ? match[1] : objectText);
+  return match ? `you work in the ${track} career, level ${match[2]}` : `you work in the ${track} career`;
+}
+
 function selfLine(fact: RenderableFact, names: Record<string, string | undefined>): string | undefined {
   const name = (id?: string) => (id ? (names[id] ?? `sim ${id}`) : undefined);
   switch (fact.predicate) {
     case FactPredicate.AGE_STAGE:
-      return fact.objectText ? `you are ${fact.objectText.toLowerCase()}` : undefined;
+      return fact.objectText ? `you are ${lifeStagePhrase(fact.objectText)}` : undefined;
     case FactPredicate.GENDER:
       return fact.objectText ? `you are ${fact.objectText.toLowerCase()}` : undefined;
     case FactPredicate.PRONOUNS:
@@ -90,12 +141,10 @@ function selfLine(fact: RenderableFact, names: Record<string, string | undefined
       return fact.objectText && fact.objectText !== 'HUMAN' ? `you are a ${fact.objectText.toLowerCase()}` : undefined;
     case FactPredicate.DEATH_TYPE:
       return `you are dead (${pretty(fact.objectText ?? '')})`;
-    case FactPredicate.HOUSEHOLD:
-      return fact.objectText ? `you live with the ${fact.objectText} household` : undefined;
     case FactPredicate.ASPIRATION:
       return fact.objectText ? `your aspiration is ${pretty(fact.objectText)}` : undefined;
     case FactPredicate.JOB:
-      return fact.objectText ? `you work as ${pretty(fact.objectText)}` : undefined;
+      return fact.objectText ? jobWords(fact.objectText) : undefined;
     case FactPredicate.PARENT:
       return `${name(fact.objectSimId)} is your parent`;
     case FactPredicate.CHILD:
@@ -115,6 +164,57 @@ function selfLine(fact: RenderableFact, names: Record<string, string | undefined
   }
 }
 
+// Household and its members are one sentence, not a name plus a silent list of ids: the
+// members were rendered nowhere at all before, which is how a sim living with three named
+// people answered "who do you live with" with the household's name.
+function householdLine(facts: RenderableFact[], names: Record<string, string | undefined>): string | undefined {
+  const household = facts.find((fact) => fact.predicate === FactPredicate.HOUSEHOLD)?.objectText;
+  const members = facts
+    .filter((fact) => fact.predicate === FactPredicate.HOUSEHOLD_MEMBER && fact.objectSimId)
+    .map((fact) => names[fact.objectSimId as string] ?? `sim ${fact.objectSimId as string}`);
+  if (members.length > 0) {
+    return household
+      ? `you live with ${joinWords(members, 'and')} (the ${household} household)`
+      : `you live with ${joinWords(members, 'and')}`;
+  }
+  if (household) {
+    // A one-sim household is a real answer, and so is a household whose members the
+    // dossier could not name
+    return `you live with the ${household} household`;
+  }
+  return undefined;
+}
+
+const FAMILY_ROLE_LABELS: [string, string][] = [
+  [FactPredicate.PARENT, 'parents'],
+  [FactPredicate.SIBLING, 'siblings'],
+  [FactPredicate.CHILD, 'children'],
+];
+
+const PARTNER_PREDICATES = [FactPredicate.SPOUSE, FactPredicate.FIANCE, FactPredicate.STEADY];
+
+// What the game records that this sim does NOT have. Only called when a dossier has been
+// ingested, so every line here is "the records say no", never "we have no records".
+function absenceLines(facts: RenderableFact[]): string[] {
+  const lines: string[] = [];
+  const has = (predicate: string) => facts.some((fact) => fact.predicate === predicate);
+
+  const missing = FAMILY_ROLE_LABELS.filter(([predicate]) => !has(predicate)).map(([, label]) => label);
+  if (missing.length > 0) {
+    lines.push(`you have no ${joinWords(missing, 'or')} on record`);
+  }
+  if (!PARTNER_PREDICATES.some(has)) {
+    lines.push('you are not married or seeing anyone');
+  }
+  if (!has(FactPredicate.JOB)) {
+    // An elder with no career has retired rather than never worked, and that is the word
+    // a person uses for it
+    const stage = facts.find((fact) => fact.predicate === FactPredicate.AGE_STAGE)?.objectText?.toUpperCase();
+    lines.push(stage === 'ELDER' ? 'you are retired' : 'you have no job');
+  }
+  return lines;
+}
+
 // Traits, likes, dislikes and fears are lists, so they read far better collapsed into one
 // line each than as one bullet per value.
 function collectList(facts: RenderableFact[], predicate: string): string[] {
@@ -129,14 +229,57 @@ function joinList(values: string[], limit = 6): string {
   return kept.join(', ') + suffix;
 }
 
+function personLine(person: RenderablePerson, names: Record<string, string | undefined>): string | undefined {
+  const name = person.name ?? names[person.simId] ?? `sim ${person.simId}`;
+  const parts: string[] = [];
+  // The family bit is the precise word ("their child"), so it beats the score band
+  const familyBit = person.facts.find((fact) => fact.predicate === FactPredicate.FAMILY_BIT)?.objectText;
+  if (familyBit) {
+    parts.push(familyBitWords(familyBit).replace('their ', 'your '));
+  }
+  for (const fact of person.facts) {
+    const line = selfLine(fact, names);
+    // reuse the self wording but from the other direction: "X is your parent"
+    if (line && line.includes('your') && fact.predicate !== FactPredicate.FAMILY_BIT) {
+      const role = line.replace(`${name} is `, '').replace('you are engaged to ', 'engaged to ');
+      if (role !== line) {
+        parts.push(role);
+      }
+    }
+  }
+  if (person.facts.some((fact) => fact.predicate === FactPredicate.HOUSEHOLD_MEMBER)) {
+    parts.push('you live together');
+  }
+  if (person.relationship) {
+    parts.push(...relationshipWords(person.relationship));
+  }
+  const unique = [...new Set(parts.filter(Boolean))];
+  return unique.length > 0 ? `- ${name}: ${unique.join(', ')}` : undefined;
+}
+
 export function renderKnownFacts(input: RenderKnownFactsInput): string {
   const lines: string[] = [];
+  const lifePeople = (input.lifePeople ?? []).slice(0, MAX_LIFE_PEOPLE);
+  // Anyone described in a people section is not also described as a bare self edge: the
+  // section line says "your child, a good friend", the self line would say it again
+  const describedElsewhere = new Set([...input.people, ...lifePeople].map((person) => person.simId));
+
   const selfLines: string[] = [];
   for (const fact of input.selfFacts) {
+    if (fact.objectSimId && describedElsewhere.has(fact.objectSimId)) {
+      continue;
+    }
     const line = selfLine(fact, input.names);
     if (line) {
       selfLines.push(line);
     }
+  }
+  const household = householdLine(input.selfFacts, input.names);
+  if (household) {
+    selfLines.push(household);
+  }
+  if (input.hasDossier) {
+    selfLines.push(...absenceLines(input.selfFacts));
   }
   for (const [predicate, label] of [
     [FactPredicate.TRAIT, 'your personality'],
@@ -154,36 +297,20 @@ export function renderKnownFacts(input: RenderKnownFactsInput): string {
     lines.push(...selfLines.map((line) => `- ${line}`));
   }
 
-  const peopleLines: string[] = [];
-  for (const person of input.people) {
-    const name = person.name ?? input.names[person.simId] ?? `sim ${person.simId}`;
-    const parts: string[] = [];
-    // The family bit is the precise word ("their child"), so it beats the score band
-    const familyBit = person.facts.find((fact) => fact.predicate === FactPredicate.FAMILY_BIT)?.objectText;
-    if (familyBit) {
-      parts.push(familyBitWords(familyBit).replace('their ', 'your '));
-    }
-    for (const fact of person.facts) {
-      const line = selfLine(fact, input.names);
-      // reuse the self wording but from the other direction: "X is your parent"
-      if (line && line.includes('your') && fact.predicate !== FactPredicate.FAMILY_BIT) {
-        const role = line.replace(`${name} is `, '').replace('you are engaged to ', 'engaged to ');
-        if (role !== line) {
-          parts.push(role);
-        }
-      }
-    }
-    if (person.relationship) {
-      parts.push(...relationshipWords(person.relationship));
-    }
-    const unique = [...new Set(parts.filter(Boolean))];
-    if (unique.length > 0) {
-      peopleLines.push(`- ${name}: ${unique.join(', ')}`);
-    }
-  }
+  const peopleLines = input.people
+    .map((person) => personLine(person, input.names))
+    .filter((line): line is string => Boolean(line));
   if (peopleLines.length > 0) {
     lines.push('About people here or mentioned:');
     lines.push(...peopleLines);
+  }
+
+  const lifeLines = lifePeople
+    .map((person) => personLine(person, input.names))
+    .filter((line): line is string => Boolean(line));
+  if (lifeLines.length > 0) {
+    lines.push('People in your life:');
+    lines.push(...lifeLines);
   }
 
   if (input.told.length > 0) {

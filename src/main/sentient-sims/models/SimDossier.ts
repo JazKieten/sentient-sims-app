@@ -54,6 +54,11 @@ export type SimDossier = {
   likes?: string[];
   dislikes?: string[];
   aspiration?: { track?: string; aspiration?: string; objective?: string };
+  // `career` is the track's tuning class name (career_Adult_Culinary) and `level` the
+  // user-facing level. The job TITLE for that level (Line Cook, Mixologist) is a
+  // LocalizedString the mod cannot resolve without the game's string table, so the track
+  // is as specific as the app can get - rendered as "the Culinary career, level 4" rather
+  // than as a job title, since a sim handed a bare "Culinary (level 4)" invented one.
   careers?: { career?: string; level?: number; performance?: number; at_work?: boolean; next_shift?: string }[];
   top_skills?: { skill?: string; level?: number; raw?: number }[];
   relationships?: DossierRelationship[];

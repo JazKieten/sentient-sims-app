@@ -3,7 +3,7 @@ import { SimFactRecord, SimFactRepository } from '../db/SimFactRepository';
 import { SimDossier } from '../models/SimDossier';
 import { dossierNames, dossierToFacts, factKey } from '../pipeline/facts/dossierFacts';
 import { canSupersede, FactPredicate, FactSource, isSingleValued } from '../pipeline/facts/predicates';
-import { renderKnownFacts } from '../util/renderKnownFacts';
+import { MAX_LIFE_PEOPLE, renderKnownFacts } from '../util/renderKnownFacts';
 
 export type AddFactInput = {
   subjectSimId: string;
@@ -21,6 +21,23 @@ export type RecallOptions = {
   today?: number;
   maxChars?: number;
 };
+
+// Everyone the game ties this sim to by blood or partnership. These never need a score to
+// earn their place in the facts block.
+const FAMILY_AND_PARTNER_PREDICATES: ReadonlySet<string> = new Set([
+  FactPredicate.PARENT,
+  FactPredicate.CHILD,
+  FactPredicate.SIBLING,
+  FactPredicate.GRANDPARENT,
+  FactPredicate.SPOUSE,
+  FactPredicate.FIANCE,
+  FactPredicate.STEADY,
+]);
+
+// The bands relationshipWords already uses: 15 is "a friend", 10 is a romantic spark.
+const LIFE_FRIENDSHIP_FLOOR = 15;
+const LIFE_ROMANCE_FLOOR = 10;
+const LIFE_FRIEND_COUNT = 3;
 
 const DEFAULT_CONFIDENCE: Record<FactSource, number> = {
   game: 1,
@@ -241,18 +258,24 @@ export class SemanticMemoryService {
       );
 
       const mentioned = [...new Set(options.mentionedSimIds ?? [])].filter((id) => id && id !== simId);
+      // The people who matter to this sim wherever they happen to be standing. A sim alone
+      // in a scene had nobody in its prompt at all, so "who are you closest to" was
+      // answered from nothing (live 2026-09-03).
+      const lifeIds = this.lifePeopleIds(simId, selfFacts, dossier, new Set(mentioned));
       const names = { ...dossierNames(dossier ?? { sim_id: simId }) };
-      const missing = mentioned.filter((id) => !names[id]);
+      const missing = [...mentioned, ...lifeIds].filter((id) => !names[id]);
       if (missing.length > 0) {
         Object.assign(names, this.namesFor(missing));
       }
 
-      const people = mentioned.map((otherId) => ({
+      const describe = (otherId: string) => ({
         simId: otherId,
         name: names[otherId],
         facts: selfFacts.filter((fact) => fact.objectSimId === otherId),
         relationship: scores.get(otherId),
-      }));
+      });
+      const people = mentioned.map(describe);
+      const lifePeople = lifeIds.map(describe);
 
       // Hearsay is rendered separately and flagged as possibly untrue. Attribution comes
       // from the memory the fact was extracted from, which H3's encoder fills in; until
@@ -264,18 +287,67 @@ export class SemanticMemoryService {
       }));
 
       return renderKnownFacts({
-        // The relationship rows are rendered in the people section; leaving them in the
-        // self list too would print "X is your parent" twice for everyone present.
-        selfFacts: selfFacts.filter((fact) => !fact.objectSimId || !mentioned.includes(fact.objectSimId)),
+        // Every fact, edges included: the renderer drops an edge it has already described
+        // in a people section, and it needs the whole set to state what is ABSENT.
+        selfFacts,
         people,
+        lifePeople,
         told,
         names,
+        // Absence is only worth stating when the game's record of this sim was actually
+        // read. No dossier row means no records, which is not the same as empty ones.
+        hasDossier: Boolean(dossier),
         maxChars: options.maxChars,
       });
     } catch (err) {
       log.error('Failed to build KNOWN_FACTS', err);
       return '';
     }
+  }
+
+  /**
+   * Who belongs in "People in your life": everyone the game ties this sim to by family or
+   * partnership, then the closest few friends and the one strongest romance.
+   *
+   * Family first and unconditionally - a parent the sim never speaks to is still their
+   * parent, and the friendship floor would drop them. The friend and romance thresholds
+   * are the same bands relationshipWords uses, so nobody appears here described as an
+   * acquaintance the prompt did not think worth mentioning.
+   */
+  private lifePeopleIds(
+    simId: string,
+    selfFacts: SimFactRecord[],
+    dossier: SimDossier | undefined,
+    exclude: Set<string>,
+  ): string[] {
+    const ids: string[] = [];
+    const take = (id?: string) => {
+      if (id && id !== simId && !exclude.has(id) && !ids.includes(id)) {
+        ids.push(id);
+      }
+    };
+
+    for (const fact of selfFacts) {
+      if (FAMILY_AND_PARTNER_PREDICATES.has(fact.predicate)) {
+        take(fact.objectSimId);
+      }
+    }
+
+    const met = (dossier?.relationships ?? []).filter((edge) => edge.has_met);
+    [...met]
+      .filter((edge) => (edge.friendship ?? 0) >= LIFE_FRIENDSHIP_FLOOR)
+      .sort((a, b) => (b.friendship ?? 0) - (a.friendship ?? 0))
+      .slice(0, LIFE_FRIEND_COUNT)
+      .forEach((edge) => {
+        take(edge.sim_id);
+      });
+    const romance = [...met]
+      .filter((edge) => Math.abs(edge.romance ?? 0) >= LIFE_ROMANCE_FLOOR)
+      .sort((a, b) => Math.abs(b.romance ?? 0) - Math.abs(a.romance ?? 0))
+      .at(0);
+    take(romance?.sim_id);
+
+    return ids.slice(0, MAX_LIFE_PEOPLE);
   }
 
   // Set by the caller that owns memory lookups; left unset the speaker is simply omitted.

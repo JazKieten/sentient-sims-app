@@ -159,11 +159,68 @@ describe('semantic memory', () => {
     ctx.semanticMemory.ingestDossier(dossier(), { hash: 'h1', day: 10 });
     const block = ctx.semanticMemory.recall('100', { mentionedSimIds: ['200'] });
     expect(block).toContain('<KNOWN_FACTS>');
-    expect(block).toContain('you are elder');
+    expect(block).toContain('you are an elder (retirement age)');
     expect(block).toContain('Mackenzie Scott');
     // The family word beats the score band, and the score band still appears
     expect(block).toContain('your child');
     expect(block).toContain('a good friend');
+  });
+
+  it('names the people in a sim life when nobody else is in the scene', () => {
+    // The 3.1 fix-A failure: a single-Sim event carries no mentioned sims and no
+    // <RELATIONSHIPS> block, so before this the sim had no name anywhere in its prompt and
+    // answered "who are you closest to" with the household's name (live 2026-09-03).
+    ctx.semanticMemory.ingestDossier(
+      dossier({
+        household: { id: '900', name: 'BFF', member_ids: ['100', '200', '300'] },
+        relationships: [
+          { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 100, romance: 0 },
+          { sim_id: '300', name: 'Liberty Lee', has_met: true, friendship: 55, romance: 0 },
+          { sim_id: '400', name: 'Alice Landgraab', has_met: true, friendship: 2, romance: 0 },
+        ],
+      }),
+      { hash: 'h1', day: 10 },
+    );
+
+    const block = ctx.semanticMemory.recall('100');
+    expect(block).toContain('People in your life:');
+    // family, and the closest friend who is not family
+    expect(block).toContain('Mackenzie Scott');
+    expect(block).toContain('Liberty Lee');
+    // a bare acquaintance does not earn a line
+    expect(block).not.toContain('Alice Landgraab');
+    // ...and the household is named with its members, not just its name
+    expect(block).toContain('you live with Mackenzie Scott and Liberty Lee (the BFF household)');
+  });
+
+  it('states the absences the game records, once a dossier has been ingested', () => {
+    ctx.semanticMemory.ingestDossier(
+      dossier({ family: { parents: [], siblings: [], children: [], grandparents: [], steady_ids: [] } }),
+      { hash: 'h1', day: 10 },
+    );
+    const block = ctx.semanticMemory.recall('100');
+    expect(block).toContain('you have no parents, siblings or children on record');
+    expect(block).toContain('you are not married or seeing anyone');
+    expect(block).toContain('you are retired');
+  });
+
+  it('keeps a sim who knows forty people inside the prompt budget', () => {
+    const relationships = [
+      { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 100, romance: 0 },
+      ...Array.from({ length: 40 }, (_, index) => ({
+        sim_id: `${1000 + index}`,
+        name: `Person Number${index}`,
+        has_met: true,
+        friendship: 60 - index,
+        romance: 0,
+      })),
+    ];
+    ctx.semanticMemory.ingestDossier(dossier({ relationships }), { hash: 'h1', day: 10 });
+
+    const block = ctx.semanticMemory.recall('100');
+    expect(block.length).toBeLessThan(1600);
+    // The child is family, so they are in the section however many friends there are
+    expect(block).toContain('Mackenzie Scott');
   });
 
   it('recall is empty for a sim with no facts, so the prompt is unchanged', () => {

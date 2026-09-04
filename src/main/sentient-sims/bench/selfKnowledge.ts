@@ -13,6 +13,7 @@
 // denial - that is the adversarial half of the battery, where confabulation shows up.
 
 import { SimDossier } from '../models/SimDossier';
+import { lifeStageAcceptWords } from '../util/lifeStageWords';
 
 export type GradeMode = 'names' | 'denial' | 'text' | 'manual';
 
@@ -130,36 +131,10 @@ const DENIAL_PHRASES = [
   'i am not',
 ];
 
-// How each life stage sounds in a sentence. The game's word for it is not one a person
-// says out loud, and grading on the tuning name failed every correct answer.
-const AGE_WORDS: Record<string, string[]> = {
-  BABY: ['baby', 'infant'],
-  INFANT: ['infant', 'baby'],
-  TODDLER: ['toddler', 'little', 'two', 'three'],
-  CHILD: ['child', 'kid', 'little', 'school'],
-  TEEN: ['teen', 'teenager', 'high school', 'seventeen', 'sixteen'],
-  YOUNGADULT: ['young adult', 'twenties', 'young', 'just started out'],
-  ADULT: ['adult', 'middle', 'thirties', 'forties', 'grown'],
-  // The decades are here because a Sim answers "how old are you" with a number, and
-  // "pushing past sixty" is a correct answer for an elder that no adjective catches.
-  ELDER: [
-    'elder',
-    'older',
-    'old',
-    'senior',
-    'retired',
-    'getting on',
-    'my age',
-    'grandpa',
-    'grandma',
-    'sixty',
-    'sixties',
-    'seventy',
-    'seventies',
-    'eighty',
-    'eighties',
-  ],
-};
+// The life-stage words live in util/lifeStageWords so the facts block and this oracle
+// cannot drift apart: the prompt tells the Sim it is "an elder (retirement age)" and the
+// grader accepts the words a person says for that. Grading on the tuning name ("ELDER")
+// failed every correct answer.
 
 export function looksLikeDenial(answer: string): boolean {
   const lowered = answer.toLowerCase().trim();
@@ -355,7 +330,7 @@ export function buildQuestions(dossier: SimDossier, todaysMemories: string[] = [
       // retired, so the oracle has to speak English too. This synonym set is safe in a way
       // one for likes would not be: there are exactly seven life stages and they are
       // ordered, so the words for each are a closed list rather than an open-ended guess.
-      accept: AGE_WORDS[stage] ?? [dossier.age.toLowerCase()],
+      accept: lifeStageAcceptWords(stage),
     });
   }
 

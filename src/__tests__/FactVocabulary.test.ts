@@ -193,7 +193,7 @@ describe('KNOWN_FACTS rendering', () => {
       names: {},
       maxChars: 60,
     });
-    expect(block).toContain('you are adult');
+    expect(block).toContain('you are an adult');
     expect(block).not.toContain('hearsay');
   });
 });

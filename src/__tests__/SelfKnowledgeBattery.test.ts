@@ -318,6 +318,14 @@ describe('self-knowledge battery', () => {
       ).toBe(false);
     });
 
+    it('C4: and having no official occupation is the same answer in other words', () => {
+      // Live 2026-09-04: a Sim the game gives no career said exactly this and was failed
+      const job = question(mackenzie, 'SELF-job');
+      expect(
+        gradeAnswer(job, "Ariel Scott: I don't really do anything official, just figuring things out right now.").pass,
+      ).toBe(true);
+    });
+
     it('reads "never had" as the denial it is', () => {
       // Live 2026-09-04, the first run with the new facts block: Summer has no parents on
       // record and said so, and the grader failed her for it. Sixth grader bug, and the

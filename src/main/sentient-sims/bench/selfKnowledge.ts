@@ -384,7 +384,21 @@ const AFFIRMATIONS: Record<string, string[]> = {
 // rather than added to DENIAL_PHRASES, where it would let a Sim deny having a sibling by
 // mentioning retirement.
 const EXTRA_DENIALS: Record<string, string[]> = {
-  'SELF-job': ['retired', 'not working', "don't work", 'do not work', 'between jobs', 'unemployed', 'no job'],
+  'SELF-job': [
+    'retired',
+    'not working',
+    "don't work",
+    'do not work',
+    'between jobs',
+    'unemployed',
+    'no job',
+    // "I don't really do anything official, just figuring things out" is a Sim with no
+    // career saying so, and it failed (live 2026-09-04).
+    "don't do anything",
+    'nothing official',
+    "don't really do",
+    'no real job',
+  ],
 };
 
 function namesFor(dossier: SimDossier, ids: string[] | undefined): string[] {

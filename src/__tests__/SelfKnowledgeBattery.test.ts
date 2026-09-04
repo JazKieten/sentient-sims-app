@@ -137,7 +137,9 @@ describe('self-knowledge battery', () => {
     const parents = byId('SELF-parents');
     const claimed = gradeAnswer(parents, "My mom's Mackenzie Scott, and Ariel Scott's my dad.");
     expect(claimed.pass).toBe(false);
-    expect(claimed.reason).toContain('invented');
+    expect(claimed.contradiction).toBe(true);
+    // Both are his children, and naming a child as a parent is the precise complaint
+    expect(claimed.reason).toContain('is their child');
   });
 
   it('strips the speaker prefix a scene line carries', () => {
@@ -190,5 +192,165 @@ describe('self-knowledge battery', () => {
       relationships: [{ sim_id: '2', name: 'Someone', has_met: true, friendship: 5 }],
     });
     expect(lonely.some((question) => question.id === 'SOC-bestfriend')).toBe(false);
+  });
+
+  // Every answer below is verbatim from the live run of 2026-09-03. Five of them were
+  // graded wrongly - two correct answers failed, three wrong ones passed - which is the
+  // worst state a benchmark can be in, so each one is pinned here.
+  describe('the live run of 2026-09-03', () => {
+    // Mackenzie: child of Travis, sibling of Ariel, four in the household, no career
+    const mackenzie: SimDossier = {
+      sim_id: '200',
+      name: 'Mackenzie Scott',
+      age: 'ELDER',
+      gender: 'MALE',
+      family: { parents: ['100'], siblings: ['300'], children: [], steady_ids: [] },
+      household: { id: '900', name: 'BFF', member_ids: ['100', '200', '300', '400'] },
+      careers: [],
+      relationships: [
+        { sim_id: '100', name: 'Travis Scott', has_met: true, friendship: 80 },
+        { sim_id: '300', name: 'Ariel Scott', has_met: true, friendship: 70 },
+        { sim_id: '400', name: 'Summer Holiday', has_met: true, friendship: 60 },
+        { sim_id: '500', name: 'Alice Landgraab', has_met: true, friendship: -20 },
+      ],
+    };
+    // Summer: no family at all on record, so every family question is adversarial
+    const summer: SimDossier = {
+      sim_id: '400',
+      name: 'Summer Holiday',
+      age: 'ELDER',
+      family: { parents: [], siblings: [], children: [], steady_ids: [] },
+      household: { id: '900', name: 'BFF', member_ids: ['100', '200', '300', '400'] },
+      relationships: [
+        { sim_id: '100', name: 'Travis Scott', has_met: true, friendship: 60 },
+        { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 70 },
+      ],
+    };
+    const question = (forSim: SimDossier, id: string) => {
+      const found = buildQuestions(forSim).find((candidate) => candidate.id === id);
+      if (!found) {
+        throw new Error(`no question ${id}`);
+      }
+      return found;
+    };
+
+    it('C1: a relative named in their own role is not a confabulation', () => {
+      // Flagged as a contradiction live. It is a correct answer that also mentions his real
+      // sister, correctly, as his sister.
+      const graded = gradeAnswer(
+        question(mackenzie, 'SELF-parents'),
+        "Mackenzie Scott: My dad's Travis Scott, and my sister's Ariel—family's complicated.",
+      );
+      expect(graded.pass).toBe(true);
+      expect(graded.contradiction).toBe(false);
+    });
+
+    it('C1: and the same for a Sim who spells out that they are not parents', () => {
+      const ariel: SimDossier = {
+        ...mackenzie,
+        sim_id: '300',
+        name: 'Ariel Scott',
+        age: 'ADULT',
+        family: { parents: ['100'], siblings: ['200'], children: [], steady_ids: [] },
+        relationships: [
+          { sim_id: '100', name: 'Travis Scott', has_met: true, friendship: 80 },
+          { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 70 },
+        ],
+      };
+      const graded = gradeAnswer(
+        question(ariel, 'SELF-parents'),
+        "Ariel Scott: My dad is Travis Scott, and my sister is Mackenzie, but they're not my parents.",
+      );
+      expect(graded.pass).toBe(true);
+      expect(graded.contradiction).toBe(false);
+    });
+
+    it('C2: a relative named in the WRONG role is a contradiction, whatever was asked', () => {
+      // This PASSED the household question live: he named two people he does live with,
+      // and called his sister one of his parents on the way past
+      const graded = gradeAnswer(
+        question(mackenzie, 'SELF-household'),
+        'Mackenzie Scott: I live with my parents, Travis and Ariel.',
+      );
+      expect(graded.pass).toBe(false);
+      expect(graded.contradiction).toBe(true);
+      expect(graded.reason).toContain('Ariel Scott');
+      expect(graded.reason).toContain('is their sibling');
+    });
+
+    it('C3: a denial that takes itself back is not a denial', () => {
+      // Passed live. The game records no partner for her.
+      const graded = gradeAnswer(
+        question(mackenzie, 'SELF-partner'),
+        "Ariel Scott: No, not married. I'm seeing someone, but it's complicated.",
+      );
+      expect(graded.pass).toBe(false);
+      expect(graded.contradiction).toBe(true);
+      expect(graded.reason).toContain('seeing someone');
+    });
+
+    it('C3: a plain denial still passes, negations included', () => {
+      const partner = question(mackenzie, 'SELF-partner');
+      expect(gradeAnswer(partner, "Mackenzie Scott: No, I'm not seeing anyone right now.").pass).toBe(true);
+      expect(gradeAnswer(partner, 'Not dating anyone, no.').pass).toBe(true);
+      expect(gradeAnswer(partner, "Nah, I'm flying solo these days, just focusing on me.").pass).toBe(true);
+    });
+
+    it('C3: an invention with no name in it fails too', () => {
+      // Summer has no siblings on record. Nothing in the old grader looked at this: there
+      // is no name to catch, only a claim.
+      const graded = gradeAnswer(
+        question(summer, 'SELF-siblings'),
+        "Summer Holiday: Yeah, I have a sister and a brother, but we're not that close these days.",
+      );
+      expect(graded.pass).toBe(false);
+      expect(gradeAnswer(question(summer, 'SELF-siblings'), "No, I don't have any siblings.").pass).toBe(true);
+    });
+
+    it('C4: retired is a correct answer to the job question, and vagueness is not', () => {
+      const job = question(mackenzie, 'SELF-job');
+      expect(job.mode).toBe('denial');
+      expect(gradeAnswer(job, "Mackenzie Scott: I'm retired, mostly.").pass).toBe(true);
+      expect(gradeAnswer(job, 'Not working these days.').pass).toBe(true);
+      // ...and the live answer that should keep failing
+      expect(
+        gradeAnswer(job, "Mackenzie Scott: I'm mostly wrapped up in reading and thinking. Keeps things quiet.").pass,
+      ).toBe(false);
+    });
+
+    it('C5: a name belonging to nobody is reported as a warning', () => {
+      // "helped Jess with dinner plans" - live, and no other check in the battery sees it
+      const graded = gradeAnswer(
+        question(summer, 'SELF-household'),
+        'Summer Holiday: I had a little spat with Ariel but then helped Jess with dinner plans.',
+      );
+      expect(graded.warnings).toContain('Jess');
+      // A person she really knows is not a warning
+      expect(graded.warnings).not.toContain('Travis');
+    });
+
+    it('C5: warnings are reported for the manually judged questions too', () => {
+      const summerWithMemories = buildQuestions(summer, ['Summer Holiday (diary): a quiet day']);
+      const memory = summerWithMemories.find((candidate) => candidate.id === 'MEM-today');
+      if (!memory) throw new Error('no memory question');
+      const graded = gradeAnswer(memory, 'Summer Holiday: I helped Jess with dinner plans.');
+      expect(graded.reason).toBe('needs a person to judge it');
+      expect(graded.warnings).toContain('Jess');
+    });
+
+    it('C6: the reason finishes its sentence and the flag drives the headline', () => {
+      const graded = gradeBattery('200', 'Mackenzie Scott', [
+        { question: question(mackenzie, 'SELF-parents'), answer: 'My parents are Alice Landgraab.' },
+        {
+          question: question(mackenzie, 'SELF-household'),
+          answer: 'Mackenzie Scott: I live with my parents, Travis and Ariel.',
+        },
+        { question: question(summer, 'SELF-household'), answer: 'I helped Jess with dinner.', exchangeIds: [4447] },
+      ]);
+      expect(graded.results[0].reason).toContain('who is not a parent');
+      expect(graded.contradictions).toHaveLength(2);
+      expect(graded.warnings.some((warning) => warning.includes('Jess'))).toBe(true);
+      expect(graded.results[2].exchangeIds).toEqual([4447]);
+    });
   });
 });

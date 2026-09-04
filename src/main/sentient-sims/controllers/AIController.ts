@@ -159,24 +159,34 @@ export class AIController {
     const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;
     const speaker = body.speaker || this.ctx.settings.playerSpeakerName || 'Someone';
 
-    const answers: { question: BatteryQuestion; answer: string }[] = [];
+    const answers: { question: BatteryQuestion; answer: string; exchangeIds?: number[] }[] = [];
     for (const question of questions) {
       // Sequential on purpose: the battery is a conversation, and asking a Sim ten things
       // at once would let each answer be written without the others in the transcript.
 
+      // Which provider calls this answer came from. Every stage of the scene logs one, and
+      // reading a graded answer's prompt used to mean scrolling the exchange log guessing
+      // at timestamps.
+      const before = this.ctx.aiExchangeLog.list(1).at(0)?.id ?? 0;
       const result = await this.ctx.ai.runDirectedGeneration(body.event, {
         playerLine: { speaker, text: question.question },
         // The battery is a measurement, not a scene: its answers must not become memories
         // the Sim then remembers having said.
         saveMemory: false,
       });
-      answers.push({ question, answer: result.text ?? '' });
+      const exchangeIds = this.ctx.aiExchangeLog
+        .list(20)
+        .map((entry) => entry.id)
+        .filter((id) => id > before)
+        .sort((a, b) => a - b);
+      answers.push({ question, answer: result.text ?? '', exchangeIds });
     }
 
     const graded = gradeBattery(simId, dossier.name, answers);
     log.info(
       `[Bench] self-knowledge for ${dossier.name ?? simId}: ${graded.passed}/${graded.total}` +
-        (graded.contradictions.length > 0 ? `, ${graded.contradictions.length} contradiction(s)` : ''),
+        (graded.contradictions.length > 0 ? `, ${graded.contradictions.length} contradiction(s)` : '') +
+        (graded.warnings.length > 0 ? `, ${graded.warnings.length} unknown name(s)` : ''),
     );
     return res.json(graded);
   };

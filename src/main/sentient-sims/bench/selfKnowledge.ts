@@ -17,6 +17,39 @@ import { lifeStageAcceptWords } from '../util/lifeStageWords';
 
 export type GradeMode = 'names' | 'denial' | 'text' | 'manual';
 
+// The roles a Sim can put someone in while answering. A const object rather than an enum,
+// for the reason FactPredicate is one: these strings travel through results and HTTP.
+export const Role = {
+  PARENT: 'parent',
+  SIBLING: 'sibling',
+  CHILD: 'child',
+  PARTNER: 'partner',
+} as const;
+
+export type Role = (typeof Role)[keyof typeof Role];
+
+// How a person says each role out loud. This table is what lets the grader tell "My dad's
+// Travis, and my sister's Ariel" (both correct, and both were flagged as confabulation)
+// from "I live with my parents, Travis and Ariel" (Ariel is his sister, and this passed).
+// Both are live answers from 2026-09-03.
+export const ROLE_WORDS: Record<Role, string[]> = {
+  [Role.PARENT]: ['dad', 'dads', 'mom', 'moms', 'mum', 'mums', 'father', 'mother', 'parent', 'parents', 'folks'],
+  [Role.SIBLING]: ['sister', 'sisters', 'brother', 'brothers', 'sibling', 'siblings', 'sis', 'bro'],
+  [Role.CHILD]: ['son', 'sons', 'daughter', 'daughters', 'kid', 'kids', 'child', 'children'],
+  [Role.PARTNER]: [
+    'wife',
+    'husband',
+    'boyfriend',
+    'girlfriend',
+    'partner',
+    'spouse',
+    'fiance',
+    'fiancee',
+    'fiancé',
+    'fiancée',
+  ],
+};
+
 export type BatteryQuestion = {
   id: string;
   question: string;
@@ -31,6 +64,19 @@ export type BatteryQuestion = {
   excusable?: string[];
   // Substrings any of which satisfies mode 'text'
   accept?: string[];
+  // Everyone the dossier gives a family role to, by name. Checked in EVERY auto-graded
+  // mode: putting a real relative in the wrong role is a contradiction whatever was asked.
+  roles?: Record<string, Role>;
+  // Phrases that assert the very thing a denial question denies. A denial followed by one
+  // of these is not a denial ("No, not married. I'm seeing someone" - live 2026-09-03).
+  affirmations?: string[];
+  // Extra wordings that count as a denial for THIS question ("retired" for the job one).
+  denials?: string[];
+  // What the question asks about, so a reason sentence can finish: "who is not a parent".
+  roleLabel?: string;
+  // Every name this Sim could legitimately say: everyone they have met, themselves, their
+  // household. Anything else capitalised in an answer is reported as an unknown name.
+  knownNames?: string[];
   note?: string;
 };
 
@@ -41,6 +87,15 @@ export type QuestionResult = {
   expected: string[];
   pass: boolean;
   reason: string;
+  // A wrong relationship, as opposed to a vague or missing answer. Set by the graders
+  // rather than sniffed back out of the reason string afterwards.
+  contradiction: boolean;
+  // Names in the answer belonging to nobody this Sim knows. Reported, never failed: the
+  // cheapest confabulation instrument there is, and it covers the manual questions too.
+  warnings?: string[];
+  // The provider calls this answer came from, so a graded answer can be traced to its
+  // prompt without searching the exchange log.
+  exchangeIds?: number[];
 };
 
 export type BatteryResult = {
@@ -52,6 +107,8 @@ export type BatteryResult = {
   // Answers that named someone in a role the dossier gives to someone else. The headline
   // number for 3.1: a wrong relationship is worse than a vague one.
   contradictions: string[];
+  // Unknown names, across every question including the manually judged ones.
+  warnings: string[];
 };
 
 function pretty(value: string): string {
@@ -136,15 +193,185 @@ const DENIAL_PHRASES = [
 // grader accepts the words a person says for that. Grading on the tuning name ("ELDER")
 // failed every correct answer.
 
-export function looksLikeDenial(answer: string): boolean {
+// A negation anywhere in the sentence followed by "anyone" or "anybody" ("not dating
+// anyone", "haven't met anybody"). The phrase list cannot cover this: the verb between the
+// two halves is open-ended, and every wording it missed failed a correct answer.
+const NEGATED_ANYONE = /\b(not|no|never)\b[^.!?]*\b(any *one|any *body|anything)\b|n't[^.!?]*\b(any *one|any *body)\b/;
+// A bare "no" as its own clause, which is how a person often finishes a denial
+const TRAILING_NO = /[,;]\s*no\s*[.!]?$/;
+
+export function looksLikeDenial(answer: string, extra: string[] = []): boolean {
   const lowered = answer.toLowerCase().trim();
   // A plain "No, ..." opening is the commonest denial of all and matches none of the
   // phrases below, which is why it is checked on its own.
   if (/^no[,.\s]/.test(lowered) || lowered === 'no') {
     return true;
   }
-  return DENIAL_PHRASES.some((phrase) => lowered.includes(phrase));
+  if (NEGATED_ANYONE.test(lowered) || TRAILING_NO.test(lowered)) {
+    return true;
+  }
+  return [...DENIAL_PHRASES, ...extra].some((phrase) => lowered.includes(phrase));
 }
+
+/**
+ * Which roles an answer puts a named person in.
+ *
+ * Clause-local on purpose. "My dad's Travis, and my sister's Ariel" has to read as two
+ * separate claims, and treating the whole sentence as one bag of role words made every
+ * relative look like every role. A name in a clause with no role word of its own inherits
+ * the previous clause's ("I live with my parents, Travis and Ariel"), which is how English
+ * lists work and is exactly the sentence that hid a real contradiction.
+ */
+export function claimedRoles(answer: string, name: string): Role[] {
+  const clauses = stripSpeaker(answer).split(/[,.;!?]|\band\b/i);
+  const rolesIn = (clause: string): Role[] =>
+    (Object.keys(ROLE_WORDS) as Role[]).filter((role) => ROLE_WORDS[role].some((word) => containsPhrase(clause, word)));
+
+  const found = new Set<Role>();
+  let carried: Role[] = [];
+  for (const clause of clauses) {
+    const here = rolesIn(clause);
+    if (here.length > 0) {
+      carried = here;
+    }
+    if (mentions(clause, name)) {
+      // A clause of its own beats an inherited one; with neither, the name was mentioned
+      // in no role at all and nothing is claimed.
+      (here.length > 0 ? here : carried).forEach((role) => found.add(role));
+    }
+  }
+  return [...found];
+}
+
+// "No, not married" is a denial; "No, not married. I'm seeing someone" is not. The window
+// before the phrase is what keeps "not dating anyone" and "no boyfriend" from counting as
+// assertions of the thing being denied.
+const NEGATION_WINDOW = 14;
+
+export function affirmsAnyway(answer: string, affirmations: string[]): string | undefined {
+  const lowered = stripSpeaker(answer).toLowerCase();
+  return affirmations.find((phrase) => {
+    const needle = phrase.toLowerCase();
+    let index = lowered.indexOf(needle);
+    while (index >= 0) {
+      const before = lowered.slice(Math.max(0, index - NEGATION_WINDOW), index);
+      if (!/\bnot\b|n't|\bno\b|\bnever\b/.test(before)) {
+        return true;
+      }
+      index = lowered.indexOf(needle, index + needle.length);
+    }
+    return false;
+  });
+}
+
+// Words that start a sentence, stand for the speaker, or are simply not names. Everything
+// else capitalised mid-sentence is a name the Sim produced from somewhere.
+const NOT_A_NAME = new Set([
+  'i',
+  "i'm",
+  "i'll",
+  "i've",
+  "i'd",
+  'sim',
+  'sims',
+  'nah',
+  'nope',
+  'yeah',
+  'yep',
+  'honestly',
+  'maybe',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+]);
+
+/**
+ * Capitalised words in an answer that belong to nobody this Sim knows.
+ *
+ * A warning rather than a failure, and deliberately so: a Sim may name a bar, a town or a
+ * band. But "helped Jess with dinner plans" (live 2026-09-03) is a person who does not
+ * exist, and no other check in the battery would have caught it.
+ */
+export function unknownNames(answer: string, known: string[]): string[] {
+  const text = stripSpeaker(answer);
+  const knownForms = new Set(known.flatMap(nameForms).map((form) => form.toLowerCase()));
+  const found: string[] = [];
+  // Skip the first word of each sentence: it is capitalised by grammar, not by being a name
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  for (const sentence of sentences) {
+    const words = sentence.trim().split(/\s+/).slice(1);
+    for (const raw of words) {
+      const word = raw.replace(/^[^A-Za-z']+|[^A-Za-z']+$/g, '');
+      if (!/^[A-Z][a-z']+$/.test(word)) {
+        continue;
+      }
+      const lowered = word.toLowerCase();
+      if (NOT_A_NAME.has(lowered) || knownForms.has(lowered) || found.includes(word)) {
+        continue;
+      }
+      found.push(word);
+    }
+  }
+  return found;
+}
+
+// What each question is asking about, so a failure reads as a sentence rather than as a
+// clause that stops halfway ("named Ariel Scott, who is not").
+const ROLE_LABELS: Record<string, string> = {
+  'SELF-parents': 'a parent',
+  'SELF-siblings': 'a sibling',
+  'SELF-children': 'a child of theirs',
+  'SELF-partner': 'a partner',
+  'SELF-household': 'someone they live with',
+  'SOC-bestfriend': 'someone they are close to',
+};
+
+// Claiming the thing the question asks the Sim to deny. Live 2026-09-03, "No, not married.
+// I'm seeing someone, but it's complicated" was graded as a correct denial: the denial is
+// there, and so is the invention that follows it.
+const AFFIRMATIONS: Record<string, string[]> = {
+  'SELF-parents': ['my mom', 'my mum', 'my dad', 'my mother', 'my father', 'my parents', 'my folks'],
+  'SELF-siblings': ['my sister', 'my brother', 'my siblings', 'a sister', 'a brother', 'an older', 'a younger'],
+  'SELF-partner': [
+    'seeing someone',
+    'boyfriend',
+    'girlfriend',
+    'my partner',
+    'my husband',
+    'my wife',
+    'married to',
+    'dating',
+    'engaged',
+    'in a relationship',
+    'with someone',
+  ],
+  // Deliberately only explicit claims of employment: "I'm a retiree" must not read as one.
+  'SELF-job': ['i work as', 'i work at', 'i work in', 'my job', 'my career', 'i have a job'],
+};
+
+// "Retired" is the right answer to "what do you do for a living" for a Sim the game gives
+// no career, and it is not a denial in any general sense - so it is attached per question
+// rather than added to DENIAL_PHRASES, where it would let a Sim deny having a sibling by
+// mentioning retirement.
+const EXTRA_DENIALS: Record<string, string[]> = {
+  'SELF-job': ['retired', 'not working', "don't work", 'do not work', 'between jobs', 'unemployed', 'no job'],
+};
 
 function namesFor(dossier: SimDossier, ids: string[] | undefined): string[] {
   const byId = new Map((dossier.relationships ?? []).map((edge) => [edge.sim_id, edge.name ?? ''] as const));
@@ -361,26 +588,104 @@ export function buildQuestions(dossier: SimDossier, todaysMemories: string[] = [
     });
   }
 
-  return questions;
+  // Everything below is true of every question rather than of one, so it is attached in a
+  // single pass: who this Sim's relatives actually are (checked in all four modes), the
+  // names that are not confabulations, and the per-question wordings.
+  const roles: Record<string, Role> = {};
+  const assign = (names: string[], role: Role) => {
+    for (const name of names) {
+      roles[name] = role;
+    }
+  };
+  assign(parents, Role.PARENT);
+  assign(siblings, Role.SIBLING);
+  assign(children, Role.CHILD);
+  assign(partners, Role.PARTNER);
+
+  const knownNames = [...new Set([...everyone, dossier.name ?? '', dossier.household?.name ?? ''])].filter(Boolean);
+
+  return questions.map((question) => ({
+    ...question,
+    roles,
+    knownNames,
+    roleLabel: ROLE_LABELS[question.id],
+    affirmations: question.mode === 'denial' ? AFFIRMATIONS[question.id] : undefined,
+    denials: EXTRA_DENIALS[question.id],
+  }));
+}
+
+// Someone the Sim really is related to, named in a role that belongs to somebody else.
+// This is a contradiction whatever the question was: "I live with my parents, Travis and
+// Ariel" passed the household question live, and Ariel is his sister.
+function miscastRelative(question: BatteryQuestion, answer: string): string | undefined {
+  const roles = question.roles ?? {};
+  for (const [name, trueRole] of Object.entries(roles)) {
+    if (!mentions(answer, name)) {
+      continue;
+    }
+    const claimed = claimedRoles(answer, name);
+    const wrong = claimed.find((role) => role !== trueRole);
+    if (wrong) {
+      return `named ${name} as ${wrong === Role.CHILD ? 'their child' : `a ${wrong}`}, but ${name} is their ${trueRole}`;
+    }
+  }
+  return undefined;
 }
 
 export function gradeAnswer(question: BatteryQuestion, answer: string): QuestionResult {
-  const base = { id: question.id, question: question.question, answer, expected: question.expected };
+  const trimmed = stripSpeaker(answer);
+  const warnings = question.knownNames ? unknownNames(trimmed, question.knownNames) : [];
+  const base = {
+    id: question.id,
+    question: question.question,
+    answer,
+    expected: question.expected,
+    contradiction: false,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
   // Scene lines arrive speaker-prefixed ("Travis Scott: No, just my two kids"). Grading
   // the raw string put every answer's first word behind that prefix, so a leading "No,"
   // was never seen as one and correct denials were failed (live 2026-09-03).
-  const trimmed = stripSpeaker(answer);
   if (!trimmed) {
     return { ...base, pass: false, reason: 'no answer' };
   }
+  if (question.mode === 'manual') {
+    return { ...base, pass: false, reason: 'needs a person to judge it' };
+  }
 
-  const wronglyNamed = (question.forbidden ?? []).filter((name) => mentions(trimmed, name));
+  // Checked before the mode, because a relative in the wrong role is wrong in every mode
+  const miscast = miscastRelative(question, trimmed);
+  if (miscast) {
+    return { ...base, pass: false, contradiction: true, reason: miscast };
+  }
+
+  const roles = question.roles ?? {};
+  const wronglyNamed = (question.forbidden ?? []).filter((name) => {
+    if (!mentions(trimmed, name)) {
+      return false;
+    }
+    // A relative named in their OWN role is not a claim about this question: "My dad's
+    // Travis, and my sister's Ariel" answers "who are your parents" correctly and names
+    // his real sister as his sister. Failing that was the grader being wrong twice over
+    // (live 2026-09-03, both flagged contradictions).
+    if (!(name in roles)) {
+      // No family role at all, so nothing they were called can be the right one
+      return true;
+    }
+    return !claimedRoles(trimmed, name).includes(roles[name]);
+  });
 
   switch (question.mode) {
     case 'names': {
       const named = question.expected.filter((name) => mentions(trimmed, name));
       if (wronglyNamed.length > 0) {
-        return { ...base, pass: false, reason: `named ${wronglyNamed.join(', ')}, who is not` };
+        const label = question.roleLabel ? ` ${question.roleLabel}` : '';
+        return {
+          ...base,
+          pass: false,
+          contradiction: true,
+          reason: `named ${wronglyNamed.join(', ')}, who is not${label}`,
+        };
       }
       return named.length > 0
         ? { ...base, pass: true, reason: `named ${named.join(', ')}` }
@@ -392,17 +697,24 @@ export function gradeAnswer(question: BatteryQuestion, answer: string): Question
       // siblings was the grader being wrong (live 2026-09-03). Naming anyone ELSE while
       // denying is still a confabulation ("Nah, apart from Alice"), and asserting the role
       // outright with no denial in it fails whoever is named.
-      const denied = looksLikeDenial(trimmed);
+      const denied = looksLikeDenial(trimmed, question.denials ?? []);
       const excusable = new Set(question.excusable ?? []);
       const convicting = denied ? wronglyNamed.filter((name) => !excusable.has(name)) : wronglyNamed;
       if (convicting.length > 0) {
-        return { ...base, pass: false, reason: `invented ${convicting.join(', ')}` };
+        return { ...base, pass: false, contradiction: true, reason: `invented ${convicting.join(', ')}` };
       }
-      return denied
-        ? { ...base, pass: true, reason: 'denied it, correctly' }
-        : { ...base, pass: false, reason: 'did not deny it' };
+      if (!denied) {
+        return { ...base, pass: false, reason: 'did not deny it' };
+      }
+      // A denial that takes itself back. The invention here is usually nameless ("I've got
+      // a sister and a brother"), which is why no name check catches it.
+      const affirmed = affirmsAnyway(trimmed, question.affirmations ?? []);
+      if (affirmed) {
+        return { ...base, pass: false, contradiction: true, reason: `denied it, then claimed "${affirmed}"` };
+      }
+      return { ...base, pass: true, reason: 'denied it, correctly' };
     }
-    case 'text': {
+    default: {
       // Whole words only. A substring match passed "Somewhere between holding on and
       // letting go" as saying "old" - the grader finding the answer inside a word that
       // has nothing to do with it (live 2026-09-03).
@@ -411,17 +723,18 @@ export function gradeAnswer(question: BatteryQuestion, answer: string): Question
         ? { ...base, pass: true, reason: `said "${hit}"` }
         : { ...base, pass: false, reason: `expected one of ${(question.accept ?? question.expected).join(', ')}` };
     }
-    default:
-      return { ...base, pass: false, reason: 'needs a person to judge it' };
   }
 }
 
 export function gradeBattery(
   simId: string,
   simName: string | undefined,
-  answers: { question: BatteryQuestion; answer: string }[],
+  answers: { question: BatteryQuestion; answer: string; exchangeIds?: number[] }[],
 ): BatteryResult {
-  const results = answers.map(({ question, answer }) => gradeAnswer(question, answer));
+  const results = answers.map(({ question, answer, exchangeIds }) => {
+    const graded = gradeAnswer(question, answer);
+    return exchangeIds && exchangeIds.length > 0 ? { ...graded, exchangeIds } : graded;
+  });
   // A manual question is neither passed nor failed by the machine, so it is excluded from
   // the score rather than counted as a failure.
   const auto = results.filter((result) => result.reason !== 'needs a person to judge it');
@@ -431,9 +744,11 @@ export function gradeBattery(
     results,
     passed: auto.filter((result) => result.pass).length,
     total: auto.length,
-    contradictions: results
-      .filter((result) => result.reason.startsWith('named ') && result.reason.endsWith('who is not'))
-      .concat(results.filter((result) => result.reason.startsWith('invented ')))
-      .map((result) => `${result.id}: ${result.reason}`),
+    // Read off the flag the graders set. Matching on the shape of the reason string meant
+    // every new wording silently dropped out of the headline number.
+    contradictions: results.filter((result) => result.contradiction).map((result) => `${result.id}: ${result.reason}`),
+    // Manual questions warn too: a name nobody knows is the same defect whether or not the
+    // question could be auto-graded.
+    warnings: results.flatMap((result) => (result.warnings ?? []).map((name) => `${result.id}: ${name}`)),
   };
 }

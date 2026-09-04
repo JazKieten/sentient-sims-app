@@ -40,6 +40,10 @@ export type RenderablePerson = {
   name?: string;
   facts: RenderableFact[];
   relationship?: { hasMet?: boolean; friendship?: number; romance?: number; bits?: string[] };
+  // How to refer to them ("he/him"). The block names people but said nothing about which
+  // of them is a he or a she, so a sim guessed from the name: Summer called Mackenzie
+  // "she" while the game had him as male (live 2026-09-03, found by Scott).
+  pronouns?: string;
 };
 
 export type RenderKnownFactsInput = {
@@ -254,7 +258,13 @@ function personLine(person: RenderablePerson, names: Record<string, string | und
     parts.push(...relationshipWords(person.relationship));
   }
   const unique = [...new Set(parts.filter(Boolean))];
-  return unique.length > 0 ? `- ${name}: ${unique.join(', ')}` : undefined;
+  if (unique.length === 0) {
+    return undefined;
+  }
+  // Pronouns ride with the name rather than in the list of relationship words: they are
+  // how to SAY the name, not a fact about the relationship.
+  const label = person.pronouns ? `${name} (${person.pronouns})` : name;
+  return `- ${label}: ${unique.join(', ')}`;
 }
 
 export function renderKnownFacts(input: RenderKnownFactsInput): string {

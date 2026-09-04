@@ -273,6 +273,7 @@ export class SemanticMemoryService {
         name: names[otherId],
         facts: selfFacts.filter((fact) => fact.objectSimId === otherId),
         relationship: scores.get(otherId),
+        pronouns: this.pronounsFor(otherId),
       });
       const people = mentioned.map(describe);
       const lifePeople = lifeIds.map(describe);
@@ -302,6 +303,36 @@ export class SemanticMemoryService {
     } catch (err) {
       log.error('Failed to build KNOWN_FACTS', err);
       return '';
+    }
+  }
+
+  /**
+   * How to refer to somebody else: their own pronouns if the game has them, otherwise the
+   * ones their gender implies.
+   *
+   * Read from THEIR fact rows, not from the sim doing the recalling - gender is a fact
+   * about a sim, never an edge, so nothing in the speaker's own rows knows it. Without
+   * this the facts block named people and left their gender to be guessed from the name,
+   * and a sim called a male housemate "she" (live 2026-09-03).
+   */
+  private pronounsFor(simId: string): string | undefined {
+    try {
+      const facts = this.facts.getCurrentFacts(simId);
+      const stated = facts.find((fact) => fact.predicate === FactPredicate.PRONOUNS)?.objectText;
+      if (stated) {
+        return stated.toLowerCase();
+      }
+      const gender = facts.find((fact) => fact.predicate === FactPredicate.GENDER)?.objectText?.toUpperCase();
+      if (gender === 'MALE') {
+        return 'he/him';
+      }
+      if (gender === 'FEMALE') {
+        return 'she/her';
+      }
+      return undefined;
+    } catch {
+      // A sim the store has never heard of simply goes unlabelled
+      return undefined;
     }
   }
 

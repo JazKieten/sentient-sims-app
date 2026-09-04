@@ -193,6 +193,19 @@ describe('semantic memory', () => {
     expect(block).toContain('you live with Mackenzie Scott and Liberty Lee (the BFF household)');
   });
 
+  it('labels other people with the pronouns their own facts imply', () => {
+    // Gender is a fact ABOUT a sim, never an edge, so the speaker's own rows cannot supply
+    // it: without reading Mackenzie's rows the block named him and left his gender to be
+    // guessed from the name, and a sim called him "she" (live 2026-09-03).
+    ctx.semanticMemory.ingestDossier(dossier(), { hash: 'h1', day: 10 });
+    ctx.semanticMemory.ingestDossier(
+      { sim_id: '200', name: 'Mackenzie Scott', gender: 'MALE', family: { parents: ['100'], steady_ids: [] } },
+      { hash: 'm1', day: 10 },
+    );
+
+    expect(ctx.semanticMemory.recall('100', { mentionedSimIds: ['200'] })).toContain('Mackenzie Scott (he/him)');
+  });
+
   it('states the absences the game records, once a dossier has been ingested', () => {
     ctx.semanticMemory.ingestDossier(
       dossier({ family: { parents: [], siblings: [], children: [], grandparents: [], steady_ids: [] } }),

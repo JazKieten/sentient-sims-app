@@ -129,6 +129,32 @@ describe('renderKnownFacts', () => {
     expect(block).toContain('- Liberty Lee: a good friend');
   });
 
+  it('says how to refer to the people it names', () => {
+    // Live 2026-09-03: the block named Mackenzie and said nothing about his gender, so the
+    // sim guessed from the name and called him "she"
+    const block = render({
+      lifePeople: [
+        {
+          simId: '300',
+          name: 'Mackenzie Scott',
+          facts: [],
+          relationship: { hasMet: true, friendship: 60 },
+          pronouns: 'he/him',
+        },
+      ],
+    });
+    expect(block).toContain('- Mackenzie Scott (he/him): a good friend');
+  });
+
+  it('leaves a person unlabelled when their pronouns are unknown', () => {
+    const block = render({
+      lifePeople: [
+        { simId: '300', name: 'Mackenzie Scott', facts: [], relationship: { hasMet: true, friendship: 60 } },
+      ],
+    });
+    expect(block).toContain('- Mackenzie Scott: a good friend');
+  });
+
   it('describes a person once, in the section they belong to', () => {
     const block = render({
       selfFacts: [...summerFacts, fact(FactPredicate.CHILD, undefined, '400')],

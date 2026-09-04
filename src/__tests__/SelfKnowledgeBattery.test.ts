@@ -318,6 +318,38 @@ describe('self-knowledge battery', () => {
       ).toBe(false);
     });
 
+    it('reads "never had" as the denial it is', () => {
+      // Live 2026-09-04, the first run with the new facts block: Summer has no parents on
+      // record and said so, and the grader failed her for it. Sixth grader bug, and the
+      // sixth to fail a correct answer.
+      const parents = question(summer, 'SELF-parents');
+      expect(
+        gradeAnswer(parents, 'Summer Holiday: I never really had parents around, so I made up my own story instead.')
+          .pass,
+      ).toBe(true);
+      expect(gradeAnswer(parents, 'I never knew them.').pass).toBe(true);
+    });
+
+    it('takes the fixed idioms for old age as an answer', () => {
+      // Live 2026-09-04: "Approaching the sunset years, if you must know" for an elder.
+      // These are set phrases, not the open-ended synonym table the likes question refuses.
+      const age = buildQuestions(mackenzie).find((candidate) => candidate.id === 'SELF-age');
+      if (!age) throw new Error('no age question');
+      expect(gradeAnswer(age, 'Mackenzie Scott: Approaching the sunset years, if you must know.').pass).toBe(true);
+      expect(gradeAnswer(age, 'Enjoying my golden years.').pass).toBe(true);
+      // ...and the non-answer that must keep failing
+      expect(gradeAnswer(age, 'Somewhere between holding on and letting go.').pass).toBe(false);
+    });
+
+    it('does not report a shared surname as an unknown person', () => {
+      // Live 2026-09-04: "Yeah, I have a sister, Mackenzie Scott" warned about "Scott"
+      const graded = gradeAnswer(
+        question(mackenzie, 'SELF-siblings'),
+        'Ariel Scott: Yeah, I have a sister, Mackenzie Scott.',
+      );
+      expect(graded.warnings ?? []).not.toContain('Scott');
+    });
+
     it('C5: a name belonging to nobody is reported as a warning', () => {
       // "helped Jess with dinner plans" - live, and no other check in the battery sees it
       const graded = gradeAnswer(

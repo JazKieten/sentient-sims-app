@@ -34,6 +34,17 @@ const FAMILY_AND_PARTNER_PREDICATES: ReadonlySet<string> = new Set([
   FactPredicate.STEADY,
 ]);
 
+// Single-valued facts about WHO a sim is. A new value for one of these is not a detail
+// changing, it is the character changing: an age-up, a gender change, a transformation, a
+// death. The stored character description was written from the old answer and is now
+// wrong, which is what fix B watches these for.
+const IDENTITY_PREDICATES: ReadonlySet<string> = new Set([
+  FactPredicate.AGE_STAGE,
+  FactPredicate.GENDER,
+  FactPredicate.OCCULT_CURRENT,
+  FactPredicate.ALIVE,
+]);
+
 // The bands relationshipWords already uses: 15 is "a friend", 10 is a romantic spark.
 const LIFE_FRIENDSHIP_FLOOR = 15;
 const LIFE_ROMANCE_FLOOR = 10;
@@ -85,8 +96,12 @@ export class SemanticMemoryService {
     inserted: number;
     retired: number;
     skipped: boolean;
+    // Single-valued facts about WHO the sim is that replaced a previous game fact: an
+    // age-up, a gender change, a transformation, a death. A first ingest changes nothing,
+    // however much it inserts - there was no previous answer to contradict.
+    identityChanged: string[];
   } {
-    const unchanged = { inserted: 0, retired: 0, skipped: true };
+    const unchanged = { inserted: 0, retired: 0, skipped: true, identityChanged: [] };
     if (!this.isLoaded() || !dossier.sim_id) {
       return unchanged;
     }
@@ -103,9 +118,18 @@ export class SemanticMemoryService {
 
       let inserted = 0;
       let retired = 0;
+      const identityChanged: string[] = [];
       for (const fact of derived) {
         if (currentKeys.has(factKey(fact))) {
           continue;
+        }
+        // A new answer to a question the store already had an answer to. Checked before
+        // the insert, while "what the game used to say" is still readable.
+        if (
+          IDENTITY_PREDICATES.has(fact.predicate) &&
+          current.some((existing) => existing.predicate === fact.predicate)
+        ) {
+          identityChanged.push(fact.predicate);
         }
         const id = this.facts.insert({
           subjectSimId: simId,
@@ -141,7 +165,7 @@ export class SemanticMemoryService {
         updatedDay: day,
         updatedAt: new Date().toISOString(),
       });
-      return { inserted, retired, skipped: false };
+      return { inserted, retired, skipped: false, identityChanged };
     }
 
     // Same structure, but the scores inside may have moved and the battery grades against

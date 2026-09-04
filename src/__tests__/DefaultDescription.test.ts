@@ -9,7 +9,6 @@ import { mockApiContext } from './util';
 // keep it from stepping on the player: never overwrite an existing description, and never
 // fire twice for the same entity.
 
-
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // The service only ever touches ai + settings + the two repositories, so a stub context
@@ -80,6 +79,71 @@ describe('DefaultDescriptionService', () => {
     expect(ctx.participantRepository.getParticipant({ id, fullName: 'Milo Test' }).description).toEqual(
       'generated one',
     );
+  });
+
+  // Fix B: a description is written once and never revised, so a sim who has aged twice is
+  // still introduced to every scene as a teenager. Refreshing one means clearing it, and
+  // the only thing standing between that and deleting the player's own writing is this flag.
+  it('clears a description it generated, and never one a person wrote', () => {
+    const ctx = loadedContext('3');
+
+    ctx.participantRepository.setDescriptionIfEmpty('9101', 'a machine wrote this', 'Generated Sim');
+    expect(ctx.participantRepository.clearGeneratedDescription('9101')).toBe(true);
+    expect(ctx.participantRepository.getParticipant({ id: '9101', fullName: 'Generated Sim' }).description).toBeFalsy();
+
+    ctx.participantRepository.updateParticipant({ id: '9102', description: 'the player wrote this', name: 'Own Sim' });
+    expect(ctx.participantRepository.clearGeneratedDescription('9102')).toBe(false);
+    expect(ctx.participantRepository.getParticipant({ id: '9102', fullName: 'Own Sim' }).description).toEqual(
+      'the player wrote this',
+    );
+
+    // Clearing is idempotent: nothing to clear the second time
+    expect(ctx.participantRepository.clearGeneratedDescription('9101')).toBe(false);
+  });
+
+  it('stops treating a description as generated once a person edits it', () => {
+    const ctx = loadedContext('4');
+    ctx.participantRepository.setDescriptionIfEmpty('9201', 'a machine wrote this', 'Edited Sim');
+
+    ctx.participantRepository.updateParticipant({
+      id: '9201',
+      description: 'the player rewrote it',
+      name: 'Edited Sim',
+    });
+
+    expect(ctx.participantRepository.clearGeneratedDescription('9201')).toBe(false);
+    expect(ctx.participantRepository.getParticipant({ id: '9201', fullName: 'Edited Sim' }).description).toEqual(
+      'the player rewrote it',
+    );
+  });
+
+  it('keeps the generated flag when only the name is refreshed', () => {
+    // getParticipant rewrites the row whenever it learns a sim's real name, and the old
+    // INSERT OR REPLACE dropped the flag every time it did
+    const ctx = loadedContext('5');
+    ctx.participantRepository.setDescriptionIfEmpty('9301', 'a machine wrote this', 'Sim 9301');
+
+    ctx.participantRepository.updateParticipant({
+      id: '9301',
+      description: 'a machine wrote this',
+      name: 'Renamed Sim',
+    });
+
+    expect(ctx.participantRepository.clearGeneratedDescription('9301')).toBe(true);
+  });
+
+  it('describes a sim again after its description is cleared', () => {
+    const { ctx, calls } = stubContext('A steady presence who keeps the household running.');
+    const service = new DefaultDescriptionService(ctx);
+
+    service.considerSim(sim('7101', 'Aging Sim'));
+    service.considerSim(sim('7101', 'Aging Sim'));
+    expect(calls).toHaveLength(1);
+
+    // Without this the description would be cleared and never rewritten in this app run
+    service.forget('7101');
+    service.considerSim(sim('7101', 'Aging Sim'));
+    expect(calls).toHaveLength(2);
   });
 
   it('setDescriptionIfGeneric replaces only the stock lot description', () => {

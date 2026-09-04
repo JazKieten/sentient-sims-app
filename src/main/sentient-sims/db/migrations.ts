@@ -379,6 +379,15 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
     '019-memory-index-game-day': (db: Database) => {
       db.prepare('ALTER TABLE memory_index ADD COLUMN game_day INTEGER').run();
     },
+    // Which descriptions the app wrote itself (Phase 3.1 fix B). A description is
+    // generated once, when the row is empty, and then never touched again — so a sim who
+    // has aged twice since still gets introduced to every scene as a teenager. Refreshing
+    // it means clearing it, and clearing a description the PLAYER wrote would be worse
+    // than the staleness. This column is what tells the two apart: 1 for a generated one,
+    // 0 or NULL for anything a person typed, including every row written before this.
+    '020-participant-description-generated': (db: Database) => {
+      db.prepare('ALTER TABLE participant ADD COLUMN description_generated INTEGER').run();
+    },
   }),
 );
 

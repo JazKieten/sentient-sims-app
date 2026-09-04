@@ -90,8 +90,7 @@ export function outcomeObservation(
   if (outcome === 'success' && verdict === 'suspect') {
     return `${attempt}; the game accepted it but nothing confirmed it happened${because}.`;
   }
-  const fix =
-    recoveryAction && outcome !== 'success' ? ` Doing '${recoveryAction}' first would clear this.` : '';
+  const fix = recoveryAction && outcome !== 'success' ? ` Doing '${recoveryAction}' first would clear this.` : '';
   return `${attempt} and it ${outcomeVerb(outcome)}${because}.${fix}`;
 }
 
@@ -153,6 +152,23 @@ export class CognitionController {
         retired += result.retired;
         if (!result.skipped) {
           ingested += 1;
+        }
+        // The sim is not who they were when their description was written: aged up, died,
+        // changed form. A generated description is dropped so the next scene writes one
+        // from what is true now; anything the player wrote is left alone (Phase 3.1 fix
+        // B). Isolated - a description is cosmetic and must never fail a dossier POST.
+        if (result.identityChanged.length > 0) {
+          try {
+            if (this.ctx.participantRepository.clearGeneratedDescription(dossier.sim_id)) {
+              this.ctx.defaultDescriptions.forget(dossier.sim_id);
+              log.info(
+                `[Dossier] ${dossier.name ?? dossier.sim_id} changed ${result.identityChanged.join(', ')}; ` +
+                  'cleared the generated description so it is rewritten',
+              );
+            }
+          } catch (error) {
+            log.warn(`[Dossier] could not refresh the description for ${dossier.sim_id}`, error);
+          }
         }
       }
       log.info(

@@ -65,7 +65,7 @@ export class ParticipantRepository extends Repository {
     const result = this.dbService
       .getDb()
       .prepare(
-        `UPDATE participant SET description = ?
+        `UPDATE participant SET description = ?, description_generated = 1
          WHERE id = ? AND (description IS NULL OR TRIM(description) = '')`,
       )
       .safeIntegers()
@@ -83,10 +83,35 @@ export class ParticipantRepository extends Repository {
       .safeIntegers()
       .all([BigInt(participantId)]) as ParticipantEntity[];
     if (existing.length === 0) {
-      this.updateParticipant({ id: participantId, description, name });
+      this.updateParticipant({ id: participantId, description, name }, { generated: true });
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Drop a description the app wrote itself, so the next scene writes a fresh one.
+   *
+   * Phase 3.1 fix B: a description is generated once and never refreshed, so a sim who has
+   * aged twice is still introduced to every scene as a teenager while the facts block one
+   * line below says elder. Only a GENERATED description is cleared — whatever the player
+   * wrote stays, staleness and all, because the alternative is deleting their writing.
+   * Returns whether anything was actually cleared.
+   */
+  clearGeneratedDescription(participantId: string): boolean {
+    const result = this.dbService
+      .getDb()
+      .prepare(
+        `UPDATE participant SET description = NULL, description_generated = NULL
+         WHERE id = ? AND description_generated = 1`,
+      )
+      .safeIntegers()
+      .run([BigInt(participantId)]);
+    if (result.changes > 0) {
+      notifySimsChanged();
+      return true;
+    }
     return false;
   }
 
@@ -162,12 +187,27 @@ export class ParticipantRepository extends Repository {
     return names;
   }
 
-  updateParticipant(participant: ParticipantDTO) {
+  // An UPSERT rather than INSERT OR REPLACE so the generated flag survives a write that
+  // was not about the description at all: getParticipant re-writes the row whenever it
+  // learns a sim's real name, and a REPLACE dropped the flag every time. The flag is kept
+  // only while the description text is unchanged — a person editing the text has taken
+  // ownership of it, and it must never be cleared out from under them afterwards.
+  updateParticipant(participant: ParticipantDTO, options: { generated?: boolean } = {}) {
     const result = this.dbService
       .getDb()
-      .prepare('INSERT OR REPLACE INTO participant(id, description, name) VALUES(?, ?, ?)')
+      .prepare(
+        `INSERT INTO participant(id, description, name, description_generated) VALUES(?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           description_generated = CASE
+             WHEN excluded.description_generated = 1 THEN 1
+             WHEN excluded.description IS participant.description THEN participant.description_generated
+             ELSE NULL
+           END`,
+      )
       .safeIntegers()
-      .run([BigInt(participant.id), participant.description, participant.name]);
+      .run([BigInt(participant.id), participant.description, participant.name, options.generated ? 1 : null]);
     notifySimsChanged();
     return result;
   }

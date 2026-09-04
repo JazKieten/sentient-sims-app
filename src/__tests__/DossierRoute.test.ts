@@ -27,10 +27,13 @@ describe('dossier route', () => {
     return { sim_id: simId, name: `Sim ${simId}`, age: 'ADULT' };
   }
 
+  // Set per test: which identity facts the next ingest should report as changed
+  let identityChanged: string[] = [];
+
   beforeAll(() => {
     vi.spyOn(ctx.semanticMemory, 'ingestDossier').mockImplementation((d, options) => {
       ingested.push({ simId: d.sim_id, day: options?.day });
-      return { inserted: 3, retired: 1, skipped: false };
+      return { inserted: 3, retired: 1, skipped: false, identityChanged };
     });
     server = runApi(ctx);
   });
@@ -76,5 +79,50 @@ describe('dossier route', () => {
     expect(status).toBe(200);
     expect(body.ingested).toBe(1);
     expect(ingested.map((entry) => entry.simId)).toEqual(['300']);
+  });
+
+  it('drops a stale generated description when the sim is no longer who it described', async () => {
+    // Fix B: the sim aged up, so the description written about the old one is wrong. The
+    // clear is what makes the next scene write a fresh one.
+    const clear = vi.spyOn(ctx.participantRepository, 'clearGeneratedDescription').mockReturnValue(true);
+    const forget = vi.spyOn(ctx.defaultDescriptions, 'forget').mockImplementation(() => {});
+
+    identityChanged = ['age_stage'];
+    await post('/cognition/dossier', { dossiers: [dossier('400')] });
+    expect(clear).toHaveBeenCalledWith('400');
+    expect(forget).toHaveBeenCalledWith('400');
+
+    // A dossier that changed nothing about who the sim is leaves the description alone
+    clear.mockClear();
+    forget.mockClear();
+    identityChanged = [];
+    await post('/cognition/dossier', { dossiers: [dossier('500')] });
+    expect(clear).not.toHaveBeenCalled();
+    expect(forget).not.toHaveBeenCalled();
+
+    // ...and a description the player wrote is not cleared, so nothing is regenerated
+    clear.mockReturnValue(false);
+    identityChanged = ['age_stage'];
+    await post('/cognition/dossier', { dossiers: [dossier('600')] });
+    expect(clear).toHaveBeenCalledWith('600');
+    expect(forget).not.toHaveBeenCalled();
+
+    clear.mockRestore();
+    forget.mockRestore();
+    identityChanged = [];
+  });
+
+  it('never lets a description problem fail the dossier POST', async () => {
+    const clear = vi.spyOn(ctx.participantRepository, 'clearGeneratedDescription').mockImplementation(() => {
+      throw new Error('no database loaded');
+    });
+    identityChanged = ['age_stage'];
+
+    const { status, body } = await post('/cognition/dossier', { dossiers: [dossier('700')] });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    clear.mockRestore();
+    identityChanged = [];
   });
 });

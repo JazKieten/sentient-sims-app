@@ -51,6 +51,12 @@ export const LIFE_STAGE_WORDS: Record<string, LifeStageWords> = {
       'seventies',
       'eighty',
       'eighties',
+      // Fixed idioms for old age, not open-ended synonyms: "Approaching the sunset years"
+      // is a correct answer that the grader failed (live 2026-09-04).
+      'sunset years',
+      'golden years',
+      'twilight years',
+      'later years',
     ],
   },
 };

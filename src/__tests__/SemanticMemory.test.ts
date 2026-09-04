@@ -193,6 +193,32 @@ describe('semantic memory', () => {
     expect(block).toContain('you live with Mackenzie Scott and Liberty Lee (the BFF household)');
   });
 
+  it('reports an identity change, but not a first ingest', () => {
+    // Fix B: an age-up means the stored character description was written about somebody
+    // this sim no longer is. A first ingest inserts the age without changing anything -
+    // there was no previous answer for it to contradict.
+    const first = ctx.semanticMemory.ingestDossier(dossier({ age: 'TEEN' }), { hash: 'h1', day: 1 });
+    expect(first.inserted).toBeGreaterThan(0);
+    expect(first.identityChanged).toEqual([]);
+
+    const aged = ctx.semanticMemory.ingestDossier(dossier({ age: 'ELDER' }), { hash: 'h2', day: 2 });
+    expect(aged.identityChanged).toEqual([FactPredicate.AGE_STAGE]);
+
+    // ...and it is reported once, not on every push afterwards
+    const again = ctx.semanticMemory.ingestDossier(dossier({ age: 'ELDER' }), { hash: 'h3', day: 3 });
+    expect(again.identityChanged).toEqual([]);
+  });
+
+  it('does not call a new trait or a new friend an identity change', () => {
+    ctx.semanticMemory.ingestDossier(dossier(), { hash: 'h1', day: 1 });
+    const changed = ctx.semanticMemory.ingestDossier(dossier({ traits: ['trait_Geek', 'trait_Cheerful'] }), {
+      hash: 'h2',
+      day: 2,
+    });
+    expect(changed.inserted).toBeGreaterThan(0);
+    expect(changed.identityChanged).toEqual([]);
+  });
+
   it('labels other people with the pronouns their own facts imply', () => {
     // Gender is a fact ABOUT a sim, never an edge, so the speaker's own rows cannot supply
     // it: without reading Mackenzie's rows the block named him and left his gender to be

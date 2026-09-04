@@ -45,6 +45,7 @@ Rules:
 - Be economical: every sentence must earn its place, and the word budgets are hard limits. Tight briefings make sharper performances.
 - Direct for a real conversation, not a highlight reel. Each line should be a natural reply to the one before it, and the exchange should build toward something. A plain, honest line that moves the scene forward beats a clever one that does not connect.
 - Keep secrets secret. Anything a character would not know — the other character's private thoughts, feelings, plans, or secrets — belongs only in the other actor's private briefing, never in the shared briefing.
+- If a character's description and their <KNOWN_FACTS> disagree, the FACTS are right and the description is out of date. Descriptions are written once and never revised, so a character can be described as a teenager years after growing up.
 - The <PAST_REFLECTIONS> block, if present, holds the characters' distilled memories of earlier scenes. Mine it for continuity and feelings, but it is not happening now — never stage it as the current scene, and fold in only the details that matter here.
 - Smooth over wrinkles: if the context is awkward, contradictory, or overloaded, resolve it into a clean, playable scene.
 - If the user message contains "Previously in this scene", the conversation is already underway: tell each actor to pick up mid-flow and build on what has already been said — no greetings, no introductions, no re-describing the setting.
@@ -72,9 +73,13 @@ export type SpeechPromptContext = {
 
 export function buildSpeechSystemPrompt(context: SpeechPromptContext): string {
   const { simName, monologueOnly, factsBlock } = context;
-  // Facts first: what is true about this Sim frames the briefing, not the other way round
+  // Facts first: what is true about this Sim frames the briefing, not the other way round.
+  // The sentence underneath is cheap insurance for a save whose stored description predates
+  // an age-up: the briefing said "a teenage boy" one line below a facts block saying elder
+  // (live 2026-09-03), and the actor is the one who speaks.
   const actorPrompt = factsBlock
     ? `${factsBlock}
+These facts are what the game records about you right now. Where your briefing or your character description disagrees with them, the facts are right.
 
 ${context.actorPrompt}`
     : context.actorPrompt;

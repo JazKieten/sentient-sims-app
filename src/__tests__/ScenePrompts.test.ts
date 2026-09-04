@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import { buildBriefingSystemPrompt, buildSpeechSystemPrompt } from 'main/sentient-sims/pipeline/prompts/scene';
+
+// Fix B2: cheap insurance for a save whose stored description predates an age-up. Live
+// 2026-09-03, the director's briefing for Mackenzie called him "a teenage boy ... navigating
+// the challenges of high school" one line below a facts block saying elder, and asked how
+// old he was he answered "almost seventeen". The description cannot be regenerated for
+// prose the player wrote, so the prompts say which source wins.
+describe('scene prompts', () => {
+  const briefing = (monologueOnly = false) =>
+    buildBriefingSystemPrompt({
+      simNames: ['Travis Scott', 'Mackenzie Scott'],
+      performerNames: ['Travis Scott', 'Mackenzie Scott'],
+      sceneContext: '<CHARACTER_IN_INTERACTION>Mackenzie Scott is a Male elder</CHARACTER_IN_INTERACTION>',
+      monologueOnly,
+    });
+
+  it('tells the director that the facts outrank a stale description', () => {
+    const prompt = briefing();
+    expect(prompt).toContain('<KNOWN_FACTS>');
+    expect(prompt).toContain('the FACTS are right');
+    expect(prompt).toContain('out of date');
+  });
+
+  it('tells the actor the same thing, and only when it has facts', () => {
+    const withFacts = buildSpeechSystemPrompt({
+      simName: 'Mackenzie Scott',
+      actorPrompt: 'You are playing Mackenzie Scott.',
+      monologueOnly: false,
+      factsBlock: '<KNOWN_FACTS>\nAbout you:\n- you are an elder (retirement age)\n</KNOWN_FACTS>',
+    });
+    expect(withFacts).toContain('the facts are right');
+    // The facts come first, before the briefing that may contradict them
+    expect(withFacts.indexOf('<KNOWN_FACTS>')).toBeLessThan(withFacts.indexOf('You are playing'));
+
+    // With no facts block the prompt is byte-identical to the pre-3.1 one, which is what
+    // keeps a store-less context (tests, an empty save) working exactly as it did
+    const withoutFacts = buildSpeechSystemPrompt({
+      simName: 'Mackenzie Scott',
+      actorPrompt: 'You are playing Mackenzie Scott.',
+      monologueOnly: false,
+    });
+    expect(withoutFacts).not.toContain('the facts are right');
+    expect(withoutFacts.startsWith('You are playing Mackenzie Scott.')).toBe(true);
+  });
+
+  it('carries the rule into a solo beat too', () => {
+    const solo = buildSpeechSystemPrompt({
+      simName: 'Mackenzie Scott',
+      actorPrompt: 'You are playing Mackenzie Scott.',
+      monologueOnly: true,
+      factsBlock: '<KNOWN_FACTS>\nAbout you:\n- you are an elder (retirement age)\n</KNOWN_FACTS>',
+    });
+    expect(solo).toContain('the facts are right');
+    expect(solo).toContain('THINK:');
+  });
+});

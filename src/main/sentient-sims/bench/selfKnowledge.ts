@@ -186,7 +186,14 @@ const DENIAL_PHRASES = [
   'not really',
   "i'm not",
   'i am not',
+  'no parents',
+  'no family',
 ];
+
+// "I never really had parents around" is a denial in every sense except the grader's,
+// which failed it (live 2026-09-04). An adverb can sit between the two halves, which is
+// why this is a pattern and not another entry in the list above.
+const NEVER_HAD = /\bnever\b(?:\s+\w+){0,2}\s+\b(had|knew|met|seen|got)\b/;
 
 // The life-stage words live in util/lifeStageWords so the facts block and this oracle
 // cannot drift apart: the prompt tells the Sim it is "an elder (retirement age)" and the
@@ -207,7 +214,7 @@ export function looksLikeDenial(answer: string, extra: string[] = []): boolean {
   if (/^no[,.\s]/.test(lowered) || lowered === 'no') {
     return true;
   }
-  if (NEGATED_ANYONE.test(lowered) || TRAILING_NO.test(lowered)) {
+  if (NEGATED_ANYONE.test(lowered) || TRAILING_NO.test(lowered) || NEVER_HAD.test(lowered)) {
     return true;
   }
   return [...DENIAL_PHRASES, ...extra].some((phrase) => lowered.includes(phrase));
@@ -310,7 +317,14 @@ const NOT_A_NAME = new Set([
  */
 export function unknownNames(answer: string, known: string[]): string[] {
   const text = stripSpeaker(answer);
-  const knownForms = new Set(known.flatMap(nameForms).map((form) => form.toLowerCase()));
+  // Every WORD of every known name, not just the full name and the first name: a shared
+  // surname was being reported as an unknown person ("Scott", live 2026-09-04).
+  const knownForms = new Set(
+    known
+      .flatMap(nameForms)
+      .flatMap((form) => [form, ...form.split(/\s+/)])
+      .map((form) => form.toLowerCase()),
+  );
   const found: string[] = [];
   // Skip the first word of each sentence: it is capitalised by grammar, not by being a name
   const sentences = text.split(/(?<=[.!?])\s+/);

@@ -61,6 +61,17 @@ export class DefaultDescriptionService {
     });
   }
 
+  /**
+   * Allow this sim to be described again.
+   *
+   * The once-per-run gate above exists so a failed generation does not re-queue on every
+   * prompt; it also means that clearing a stale description is not enough on its own, as
+   * nothing would ever write the replacement in this app run (Phase 3.1 fix B).
+   */
+  forget(simId: string) {
+    this.attemptedSims.delete(simId);
+  }
+
   considerLocation(location: LocationEntity, lot?: LotBlock, zoneName?: string) {
     if (!this.enabled() || !location.is_generic) {
       return;

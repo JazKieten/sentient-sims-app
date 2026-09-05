@@ -236,15 +236,36 @@ export function claimedRoles(answer: string, name: string): Role[] {
 
   const found = new Set<Role>();
   let carried: Role[] = [];
+  // How far a role word reaches past its own clause. A plural one ("my parents, Travis
+  // and Ariel") heads a list and reaches every name after it. A singular one names ONE
+  // person: "my dad, Travis," reaches the bare name standing in apposition in the next
+  // clause and no further, and "my dad Travis and Mackenzie" reaches nobody else because
+  // its own clause already holds the name. Live 2026-09-04: "probably my father and
+  // Mackenzie" was graded as calling Mackenzie a parent, and it was the grader that was wrong.
+  let reach: 'list' | 'next' | 'none' = 'none';
   for (const clause of clauses) {
+    if (!clause.trim()) {
+      // ", and" leaves an empty clause behind; it is not a place a name could stand
+      continue;
+    }
     const here = rolesIn(clause);
+    let inherited: Role[] = [];
     if (here.length > 0) {
       carried = here;
+      const plural = here.some((role) =>
+        ROLE_WORDS[role].some((word) => isPluralRoleWord(word) && containsPhrase(clause, word)),
+      );
+      reach = plural ? 'list' : hasNameLikeToken(clause) ? 'none' : 'next';
+    } else if (reach === 'list') {
+      inherited = carried;
+    } else if (reach === 'next') {
+      inherited = isBareName(clause) ? carried : [];
+      reach = 'none';
     }
     if (mentions(clause, name)) {
       // A clause of its own beats an inherited one; with neither, the name was mentioned
       // in no role at all and nothing is claimed.
-      (here.length > 0 ? here : carried).forEach((role) => found.add(role));
+      (here.length > 0 ? here : inherited).forEach((role) => found.add(role));
     }
   }
   return [...found];
@@ -307,6 +328,42 @@ const NOT_A_NAME = new Set([
   'november',
   'december',
 ]);
+
+const PLURAL_ROLE_WORDS = new Set([
+  'dads',
+  'moms',
+  'mums',
+  'parents',
+  'folks',
+  'sisters',
+  'brothers',
+  'siblings',
+  'sons',
+  'daughters',
+  'kids',
+  'children',
+]);
+
+function isPluralRoleWord(word: string): boolean {
+  return PLURAL_ROLE_WORDS.has(word.toLowerCase());
+}
+
+// A capitalised word past the clause's first (which may only be starting the sentence,
+// "My dad") that is not a known non-name: the clause already names somebody, so a
+// singular role word in it is taken.
+function hasNameLikeToken(clause: string): boolean {
+  return clause
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .some((token) => /^[A-Z][a-z']+$/.test(token) && !NOT_A_NAME.has(token.toLowerCase()));
+}
+
+// "Travis" or "Travis Scott", possibly possessive, and nothing else in the clause
+function isBareName(clause: string): boolean {
+  const tokens = clause.trim().split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every((token) => /^[A-Z][a-z']+$/.test(token));
+}
 
 /**
  * Capitalised words in an answer that belong to nobody this Sim knows.

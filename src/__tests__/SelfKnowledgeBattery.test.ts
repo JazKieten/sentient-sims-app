@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildQuestions,
+  claimedRoles,
   gradeAnswer,
   gradeBattery,
   mentions,
@@ -392,5 +393,55 @@ describe('self-knowledge battery', () => {
       expect(graded.warnings.some((warning) => warning.includes('Jess'))).toBe(true);
       expect(graded.results[2].exchangeIds).toEqual([4447]);
     });
+  });
+});
+
+// The live run of 2026-09-04 (Ariel, at the gym). The grader carried a singular "father"
+// across "and" onto the next name, and called a correct answer a contradiction.
+describe('how far a role word reaches', () => {
+  it('a singular role word does not reach past "and" onto the next person', () => {
+    const answer = 'Ariel Scott: Honestly, probably my father and Mackenzie—people who get me without too much fuss.';
+    expect(claimedRoles(answer, 'Mackenzie Scott')).toEqual([]);
+    expect(claimedRoles(answer, 'Travis Scott')).toEqual([]);
+  });
+
+  it('a singular role word reaches a bare name in apposition, and no further', () => {
+    expect(claimedRoles('My dad, Travis, and my sister, Ariel.', 'Travis Scott')).toEqual(['parent']);
+    expect(claimedRoles('My dad, Travis, and my sister, Ariel.', 'Ariel Scott')).toEqual(['sibling']);
+    // The role's own clause already names its person, so the next name is nobody's role
+    expect(claimedRoles('I live with my dad Travis and Mackenzie.', 'Mackenzie Scott')).toEqual([]);
+    expect(claimedRoles('I live with my dad Travis and Mackenzie.', 'Travis Scott')).toEqual(['parent']);
+  });
+
+  it('a plural role word still heads a whole list', () => {
+    expect(claimedRoles('I live with my parents, Travis and Ariel.', 'Ariel Scott')).toEqual(['parent']);
+    expect(claimedRoles('My kids are Mackenzie and Ariel.', 'Ariel Scott')).toEqual(['child']);
+  });
+
+  it('SOC-bestfriend: "my father and Mackenzie" names both closest people and no wrong role', () => {
+    const ariel: SimDossier = {
+      sim_id: '300',
+      name: 'Ariel Scott',
+      age: 'ADULT',
+      gender: 'FEMALE',
+      family: { parents: ['100'], siblings: ['200'], children: [], steady_ids: [] },
+      household: { id: '900', name: 'BFF', member_ids: ['100', '200', '300', '400'] },
+      careers: [],
+      relationships: [
+        { sim_id: '100', name: 'Travis Scott', has_met: true, friendship: 80 },
+        { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 80 },
+        { sim_id: '400', name: 'Summer Holiday', has_met: true, friendship: 40 },
+      ],
+    };
+    const question = buildQuestions(ariel).find((candidate) => candidate.id === 'SOC-bestfriend');
+    if (!question) {
+      throw new Error('no SOC-bestfriend question');
+    }
+    const graded = gradeAnswer(
+      question,
+      'Ariel Scott: Honestly, probably my father and Mackenzie—people who get me without too much fuss.',
+    );
+    expect(graded.contradiction).toBe(false);
+    expect(graded.pass).toBe(true);
   });
 });

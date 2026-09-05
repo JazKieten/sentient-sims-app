@@ -218,6 +218,34 @@ export class MemoryRepository extends Repository {
     return rows.map((row) => row.participant_id.toString());
   }
 
+  // J1 (2026-09-04): one Sim's OWN reflections, by memory_index owner. Reflections are
+  // first-person diary prose, and the prompt used to gather them world-wide (most recent
+  // overall, most recent at the location, any author), which is how every briefing carried
+  // other Sims' private days. A row with no owner (a save from before reflections were
+  // owner-stamped) belongs to nobody and is returned for nobody.
+  getRecentReflectionsByOwner(ownerId: string, limit: number): MemoryEntity[] {
+    let owner: bigint;
+    try {
+      owner = BigInt(ownerId);
+    } catch {
+      return [];
+    }
+    const rows = this.dbService
+      .getDb()
+      .prepare(
+        `
+          SELECT memory.* FROM memory
+          INNER JOIN memory_index ON memory_index.memory_id = memory.id
+          WHERE memory.event_type = 'reflection' AND memory_index.owner_participant_id = ?
+          ORDER BY memory.timestamp DESC, memory.id DESC
+          LIMIT ?;
+        `,
+      )
+      .safeIntegers()
+      .all([owner, limit]) as MemoryRow[];
+    return rows.map(toMemoryEntity);
+  }
+
   getRecentReflections(limit: number): MemoryEntity[] {
     const rows = this.dbService
       .getDb()

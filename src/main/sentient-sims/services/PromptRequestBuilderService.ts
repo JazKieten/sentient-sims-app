@@ -43,6 +43,11 @@ const maxGroupSizeLength = 1700;
 // How many retrieved memories ride along in the prompt, and how long each is allowed to
 // be — six short lines of history, never a second transcript.
 const relevantMemoryCount = 6;
+// J1: a Sim's own most recent diaries in a briefing. The old world-wide gather showed up
+// to seven rows of anyone's; three per performer keeps a two-Sim scene at the same size.
+const reflectionsPerSim = 3;
+
+export type ReflectionsBySim = { sim: SentientSim; reflections: MemoryEntity[] };
 const maxRelevantMemoryLength = 280;
 
 // How long a canceled-outcome row stays in the verbatim scene transcript. Recent enough to
@@ -218,44 +223,44 @@ export class PromptRequestBuilderService {
     });
   }
 
-  // Collects the reflections that matter for this moment, deduped and newest first:
-  // the most recent overall, the most recent at this location, and the most recent involving
-  // the sims currently in the interaction.
-  getReflections(event: SSEvent): MemoryEntity[] {
-    const locationId = event.environment.location_id;
-    const participantIds = event.sentient_sims.map((sentientSim) => sentientSim.sim_id);
-
-    const collected: MemoryEntity[] = [
-      ...this.ctx.memoryRepository.getRecentReflections(3),
-      ...this.ctx.memoryRepository.getRecentReflectionsForLocation(locationId, 2),
-      ...this.ctx.memoryRepository.getRecentReflectionsForParticipants(participantIds, 2),
-    ];
-
-    const byId = new Map<string, MemoryEntity>();
-    collected.forEach((reflection) => {
-      if (reflection.id !== undefined) {
-        byId.set(reflection.id, reflection);
-      }
-    });
-
-    return Array.from(byId.values()).sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
+  // J1 (2026-09-04): each performer's OWN most recent reflections, newest first. A
+  // reflection is one Sim's private diary; until now the block was gathered world-wide (the
+  // three most recent overall plus two at this location, whatever the author), so a briefing
+  // for Milo carried Tessa's day at another lot and the actors played it as shared history
+  // (Jaz's 09-04 handoff, cause 1). Same owner rule as getSceneMemories: one Sim's private
+  // head never reaches another Sim's performance. Rows with no owner appear for nobody.
+  getReflections(event: SSEvent): ReflectionsBySim[] {
+    return event.sentient_sims.map((sim) => ({
+      sim,
+      reflections: this.ctx.memoryRepository.getRecentReflectionsByOwner(sim.sim_id, reflectionsPerSim),
+    }));
   }
 
-  private buildReflectionsBlock(reflections: MemoryEntity[]): string | undefined {
-    if (reflections.length === 0) {
+  // One <PAST_REFLECTIONS> block per Sim who has any, labelled by speaker in a multi-Sim
+  // scene the way knownFactsForScene labels facts, so the director can keep each diary in
+  // its owner's private briefing. A solo scene keeps the unlabelled tag.
+  private buildReflectionsBlock(reflectionsBySim: ReflectionsBySim[]): string | undefined {
+    const withRows = reflectionsBySim.filter((entry) => entry.reflections.length > 0);
+    if (withRows.length === 0) {
       return undefined;
     }
+    const labelled = reflectionsBySim.length > 1;
 
-    const lines = reflections.map((reflection) => {
-      const location = this.ctx.locationRepository.getLocation({ id: reflection.location_id });
-      return `[At ${location.name}] ${reflection.content}`;
+    const blocks = withRows.map(({ sim, reflections }) => {
+      const lines = reflections.map((reflection) => {
+        const location = this.ctx.locationRepository.getLocation({ id: reflection.location_id });
+        return `[At ${location.name}] ${reflection.content}`;
+      });
+      return [labelled ? `<PAST_REFLECTIONS speaker="${sim.name}">` : '<PAST_REFLECTIONS>', ...lines, '</PAST_REFLECTIONS>'].join(
+        '\n',
+      );
     });
 
     return [
-      '<PAST_REFLECTIONS>',
-      ...lines,
-      '</PAST_REFLECTIONS>',
-      'These are the characters’ distilled memories of past scenes. Draw on them only when relevant; do not recap them.',
+      ...blocks,
+      labelled
+        ? 'Each block is one character’s own distilled memories of past scenes, private to them: fold a diary only into its owner’s briefing, never into the shared scene or another actor’s briefing. Draw on them only when relevant; do not recap them.'
+        : 'These are the character’s distilled memories of past scenes. Draw on them only when relevant; do not recap them.',
     ].join('\n');
   }
 
@@ -574,8 +579,9 @@ export class PromptRequestBuilderService {
       sims.push(this.buildSceneGuidance());
     }
 
-    const reflections = this.getReflections(event);
-    const reflectionsBlock = this.buildReflectionsBlock(reflections);
+    const reflectionsBySim = this.getReflections(event);
+    const reflections = reflectionsBySim.flatMap((entry) => entry.reflections);
+    const reflectionsBlock = this.buildReflectionsBlock(reflectionsBySim);
     if (reflectionsBlock) {
       sims.push(reflectionsBlock);
     }

@@ -3,8 +3,8 @@ import { StageId } from '../pipeline/stages';
 import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
 import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
-import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
-import { offLoadoutActions } from '../models/ActionLoadout';
+import { CognitionIntent, offeredActions, SOCIAL_ACTIONS, validateIntent } from '../models/CognitionIntent';
+import { isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
 import { GradedOutcomeEvent } from './OutcomeVerdictService';
 import { AIActionType } from '../models/AIActionType';
@@ -214,6 +214,18 @@ const ONE_SHOT_SUPPRESS_MS: Record<string, number> = { go_out: 5 * 60_000 };
 // Without it the wrecked-rule and the social drive ping-ponged her home->bar->home
 // (observed live: home for 17 seconds between trips)
 const TOO_TIRED_TO_GO_OUT = -40;
+
+// J8: is there ANY verb the prompt would offer this tick? Object verbs and lot verbs
+// come narrowed already; socials are rendered from the static SOCIAL_ACTIONS set minus
+// the hidden keys, and only when someone awake is in the room to receive them.
+function hasOfferedVerb(entryView: SimStateEntry, lotActionKeys: string[], hiddenActions: Set<string>): boolean {
+  const offered = offeredActions(entryView, lotActionKeys);
+  if (offered.objectActions.size > 0 || offered.lotActions.size > 0) {
+    return true;
+  }
+  const awakeTarget = [...offered.simTargets.values()].some((target) => !target.asleep);
+  return awakeTarget && [...SOCIAL_ACTIONS].some((action) => !hiddenActions.has(action));
+}
 
 // Retry wrapper: each attempt gets a fresh request and its own timeout. Only the LAST
 // failure propagates; earlier ones are logged and retried.
@@ -833,6 +845,18 @@ export class CognitionService {
 
     const entryView = this.withoutSuppressedActions(entry, narrowed);
     const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
+
+    // J8: an infant's age gate leaves nothing to pick — no object verb, no lot verb, every
+    // social blocked — yet the tick still bought a monologue, scores and a three-stage
+    // Action Scene that ended in "no valid options" (Jaz's 09-04 handoff, cause 8: five
+    // paid round trips per infant tick). Below CHILD with an empty vocabulary the sim
+    // simply rests; a toddler with 'dance' or 'sit' still offered thinks as before.
+    if (isBelowChild(entry.self?.age) && !hasOfferedVerb(entryView, lotActionKeys, hiddenActions)) {
+      log.debug(`[Cognition] sim ${simId} is ${entry.self?.age} with nothing offered; no deliberation`);
+      this.stats.continues += 1;
+      this.toCooldown(simId);
+      return;
+    }
     const reportView: SimStateReport =
       narrowed.size === 0 || !report.lot
         ? report

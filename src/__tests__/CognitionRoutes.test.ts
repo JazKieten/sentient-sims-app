@@ -380,9 +380,7 @@ describe('cognition routes', () => {
       reflected.push(scene);
       return Promise.resolve();
     });
-    const participants = vi
-      .spyOn(ctx.memoryRepository, 'getSceneParticipantIds')
-      .mockReturnValue(['555', '777']);
+    const participants = vi.spyOn(ctx.memoryRepository, 'getSceneParticipantIds').mockReturnValue(['555', '777']);
 
     ctx.sceneService.checkSceneBoundary({ environment: { location_id: 99 } } as never);
     const barScene = ctx.sceneService.getCurrentScene();
@@ -400,6 +398,31 @@ describe('cognition routes', () => {
     expect(own).toMatchObject({ ok: true, reflected: true });
     expect(reflected).toHaveLength(1);
     participants.mockRestore();
+  });
+
+  it('sleep boundary from an infant writes no diary and leaves the scene running (J8)', async () => {
+    // Jaz's 09-04 handoff, cause 8: an infant naps several times a day; each nap ended
+    // the household's scene and wrote the infant a first-person diary
+    const reflected: unknown[] = [];
+    vi.spyOn(ctx.ai, 'runSceneReflection').mockImplementation((scene) => {
+      reflected.push(scene);
+      return Promise.resolve();
+    });
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 5,
+      sims: [{ sim_id: '600', sim_name: 'Ehren Scott', self: { age: 'INFANT' } }],
+    } as never);
+
+    ctx.sceneService.checkSceneBoundary({ environment: { location_id: 77 } } as never);
+    const scene = ctx.sceneService.getCurrentScene();
+
+    const result = await post('/cognition/sleep-boundary', { sim_id: '600', sim_name: 'Ehren Scott' });
+    expect(result).toMatchObject({ ok: true, reflected: false });
+    expect(String(result.reason)).toContain('infant');
+    expect(reflected).toHaveLength(0);
+    expect(ctx.sceneService.getCurrentScene()?.sceneId).toBe(scene?.sceneId);
+    ctx.simStateCache.reset();
   });
 
   it('ingests state reports into the SimStateCache', async () => {

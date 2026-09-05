@@ -10,6 +10,8 @@ import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { DossierReport } from '../models/SimDossier';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
+import { lifeStageOf } from '../util/simLifeStage';
+import { isBelowChild } from '../models/ActionLoadout';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 
 function errorMessage(err: unknown): string {
@@ -342,6 +344,19 @@ export class CognitionController {
         return res.status(400).json({ error: 'sim_id is required' });
       }
       const who = simName || this.lookupParticipantName(simId) || `Sim ${simId}`;
+      // J8: an infant naps several times a day and has no diary to write; ending the
+      // household's scene at every nap chopped everyone else's evening into fragments and
+      // wrote first-person entries for a Sim who cannot talk (Jaz's 09-04 handoff, cause 8).
+      // Below CHILD the boundary is a no-op and the scene keeps running.
+      const stage = lifeStageOf(this.ctx, simId);
+      if (isBelowChild(stage)) {
+        log.info(`[Cognition] sleep boundary for ${who}: ${stage} writes no diary; leaving the scene running`);
+        return res.json({
+          ok: true,
+          reflected: false,
+          reason: `sleeper is ${stage?.toLowerCase()}: no diary below child`,
+        });
+      }
       // A sleeper who took no part in the active scene must not end it: the scene belongs
       // to the sims who are in it, and closing it here both loses THEIR reflection and
       // hands the sleeper a first-person diary of an evening they never attended (live

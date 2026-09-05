@@ -88,6 +88,8 @@ import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
 import { parsePlannerJson, extractDiaryProse, DailyPlanService } from './DailyPlanService';
 import { assertDiaryIsProse, repairDiary } from '../bench/tier0';
 import { SceneState } from './SceneService';
+import { lifeStageOf } from '../util/simLifeStage';
+import { isBelowChild } from '../models/ActionLoadout';
 import { MemoryTrace } from '../models/MemoryTrace';
 import { pngToPaintingDds } from '../image/paintingDds';
 import { ImageGenerationRequest, ImageGenerationResponse } from '../models/ImageGeneration';
@@ -540,6 +542,15 @@ export class AIService {
     sleepClock?: { hour?: number; absolute_day?: number },
   ) {
     try {
+      // J8: no diary below CHILD. An infant travelling with the household (or napping,
+      // via the sleep boundary) was handed a first-person entry about an evening it
+      // cannot narrate, and that entry came back as <PAST_REFLECTIONS> (Jaz's 09-04
+      // handoff, cause 8). Checked before the memory query, which is the expensive part.
+      const stage = pov ? lifeStageOf(this.ctx, pov.simId) : undefined;
+      if (pov && isBelowChild(stage)) {
+        log.info(`[Reflection] ${pov.simName} is ${stage}; no diary below child`);
+        return;
+      }
       const sceneMemories = this.ctx.memoryRepository.getSceneMemories(
         previousScene.locationId,
         previousScene.startedAt,

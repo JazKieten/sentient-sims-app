@@ -1242,4 +1242,66 @@ describe('CognitionService', () => {
     expect(prompts[0]).not.toContain('<TODAYS_PLAN>');
     expect(dispatched).toHaveLength(1);
   });
+
+  it('an infant with nothing offered never deliberates (J8)', async () => {
+    // Jaz's 09-04 handoff, cause 8: five paid round trips per infant tick, ending in
+    // "no valid options". The mod's age gate blocks every verb for an infant; with an
+    // empty vocabulary the tick is skipped before the monologue.
+    const { cache, oneShotCalls, dispatched } = buildCtx();
+    const socials = [
+      'chat',
+      'ask_about_day',
+      'ask_about_career',
+      'get_to_know',
+      'deep_conversation',
+      'compliment_outfit',
+      'tell_joke',
+      'tell_funny_story',
+      'gossip',
+      'hug',
+      'flirt',
+      'kiss',
+      'insult',
+      'apologize',
+    ];
+    cache.ingest(
+      idleSimReport(1, {
+        sims: [
+          {
+            sim_id: '100',
+            sim_name: 'Ehren',
+            location: { zone_id: 1 },
+            sims: [{ sim_id: '200', tier: 'same_room', name: 'Adrian', distance: 3, age: 'ADULT' }],
+            objects: [],
+            self: { mood: 'Fine', needs: { hunger: 50 }, age: 'INFANT', age_blocked: socials },
+            activity: { queue: [], running: null, in_social: false },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(oneShotCalls).toEqual([]);
+    expect(dispatched).toHaveLength(0);
+
+    // A toddler who can still 'dance' thinks as before
+    cache.ingest(
+      idleSimReport(2, {
+        sims: [
+          {
+            sim_id: '101',
+            sim_name: 'Tot',
+            location: { zone_id: 1 },
+            sims: [],
+            objects: [
+              { object_id: '901', action_keys: ['dance'], name: 'object_stereo', tier: 'same_room', distance: 2 },
+            ],
+            self: { mood: 'Fine', needs: { hunger: 50 }, age: 'TODDLER', age_blocked: socials },
+            activity: { queue: [], running: null, in_social: false },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(oneShotCalls[0]).toMatch(/^Cognition Monologue/);
+  });
 });

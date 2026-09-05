@@ -106,6 +106,8 @@ export type SimSelfStatus = {
   in_ww_scene?: boolean;
   next_objective?: NextObjective;
   age?: string;
+  // J3: the game's Species name for a pet; absent for a human
+  species?: string;
   // Whitelist keys this sim's AGE cannot run, read mod-side from the game's own affordance
   // tests (a CHILD cannot read_book, tell_joke, cook_meal, deep_conversation, ...). Absent
   // on older mod builds, which simply means no age filtering.

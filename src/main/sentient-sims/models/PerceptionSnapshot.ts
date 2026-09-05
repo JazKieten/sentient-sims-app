@@ -10,6 +10,8 @@ export type PerceivedSim = {
   // Same_room only. Gates romance on the TARGET, not just the actor (see isRomanceAge).
   // Absent on older mod builds, which reads as unknown and blocks romance.
   age?: string;
+  // J3: the game's Species name (CAT, DOG, SMALLDOG, FOX, HORSE) for a pet; absent for a human
+  species?: string;
   // Whitelist keys the game refuses TOWARD a target of this age (read mod-side from the
   // mixer's own TargetSim age tests). The mod's dispatch-time age gate is the safety;
   // this lets the app skip offering them as a cost optimisation. Absent on older mods.

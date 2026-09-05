@@ -20,6 +20,7 @@ import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import { ApiContext } from './ApiContext';
 import { postureDescriptions, PostureType } from '../descriptions/postureDescriptions';
 import { withContentFreeHint } from '../pipeline/prompts/scene';
+import { buildAlsoPresentBlock } from '../util/alsoPresent';
 import { ObjectDescription, objectDescriptions } from '../descriptions/objectDescriptions';
 
 // Per-Sim fact blocks are separated by a newline, so a model reading the prompt sees them
@@ -582,6 +583,17 @@ export class PromptRequestBuilderService {
     );
 
     const sims = this.formatSims(event.sentient_sims, location, event.relationships);
+    // J3: who else is on this lot (people and pets, species where the mod says), right
+    // after the character blocks, so "which cats are here" has a roster to answer from.
+    // Only for the lot the report is about; another lot's event renders nothing here.
+    const alsoPresent = buildAlsoPresentBlock(
+      this.ctx.simStateCache.getReport(),
+      event.environment.location_id,
+      event.sentient_sims.map((sim) => sim.sim_id),
+    );
+    if (alsoPresent) {
+      sims.push(alsoPresent);
+    }
     if (directedScenes) {
       sims.push(this.buildDirectorBlock(event));
       sims.push(this.buildSceneGuidance());

@@ -193,4 +193,30 @@ describe('renderKnownFacts', () => {
   it('returns nothing at all when there is nothing to say', () => {
     expect(renderKnownFacts({ selfFacts: [], people: [], told: [], names })).toBe('');
   });
+
+  it('says the family bit the way a person says it, once', () => {
+    // Live through 2026-09-04: the game's sibling bit is family_Target_IsBrotherSisterOf_Actor
+    // and every block read "Mackenzie Scott (he/him): your brother sister, your sibling"
+    const brother = (pronouns?: string) =>
+      render({
+        lifePeople: [
+          {
+            simId: '300',
+            name: 'Mackenzie Scott',
+            facts: [
+              fact(FactPredicate.FAMILY_BIT, 'family_Target_IsBrotherSisterOf_Actor', '300'),
+              fact(FactPredicate.SIBLING, undefined, '300'),
+              fact(FactPredicate.HOUSEHOLD_MEMBER, undefined, '300'),
+            ],
+            relationship: { hasMet: true, friendship: 60 },
+            pronouns,
+          },
+        ],
+      });
+    expect(brother('he/him')).toContain('- Mackenzie Scott (he/him): your brother, you live together, a good friend');
+    expect(brother('she/her')).toContain('- Mackenzie Scott (she/her): your sister, you live together');
+    // Unknown pronouns: the plain word, and not twice
+    expect(brother()).toContain('- Mackenzie Scott: your sibling, you live together');
+    expect(brother()).not.toContain('brother sister');
+  });
 });

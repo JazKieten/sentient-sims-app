@@ -111,6 +111,10 @@ export function familyBitWords(bit: string): string {
     parent: 'their parent',
     siblings: 'their sibling',
     sibling: 'their sibling',
+    // The game's actual sibling bit is family_Target_IsBrotherSisterOf_Actor; it rendered
+    // as "your brother sister" in every live facts block until 2026-09-04
+    brothersister: 'their sibling',
+    brotherorsister: 'their sibling',
     grandparent: 'their grandparent',
     grandchild: 'their grandchild',
     auntuncle: 'their aunt or uncle',
@@ -233,20 +237,49 @@ function joinList(values: string[], limit = 6): string {
   return kept.join(', ') + suffix;
 }
 
+// "your sibling" said the way a person says it once the pronouns are known. Anything else
+// (unknown pronouns, a role with no gendered word) comes back unchanged.
+const GENDERED_ROLES: Partial<Record<string, [string, string]>> = {
+  'your sibling': ['your brother', 'your sister'],
+  'your child': ['your son', 'your daughter'],
+  'your parent': ['your father', 'your mother'],
+  'your grandparent': ['your grandfather', 'your grandmother'],
+  'your grandchild': ['your grandson', 'your granddaughter'],
+};
+
+function genderedRole(role: string, pronouns?: string): string {
+  const pair = GENDERED_ROLES[role];
+  if (!pair) {
+    return role;
+  }
+  if (pronouns === 'he/him') {
+    return pair[0];
+  }
+  if (pronouns === 'she/her') {
+    return pair[1];
+  }
+  return role;
+}
+
 function personLine(person: RenderablePerson, names: Record<string, string | undefined>): string | undefined {
   const name = person.name ?? names[person.simId] ?? `sim ${person.simId}`;
   const parts: string[] = [];
   // The family bit is the precise word ("their child"), so it beats the score band
   const familyBit = person.facts.find((fact) => fact.predicate === FactPredicate.FAMILY_BIT)?.objectText;
-  if (familyBit) {
-    parts.push(familyBitWords(familyBit).replace('their ', 'your '));
+  // With pronouns known the role gets its everyday word ("your brother"), which also
+  // makes the generic id-list line ("your sibling") redundant
+  const familyWords = familyBit
+    ? genderedRole(familyBitWords(familyBit).replace('their ', 'your '), person.pronouns)
+    : undefined;
+  if (familyWords) {
+    parts.push(familyWords);
   }
   for (const fact of person.facts) {
     const line = selfLine(fact, names);
     // reuse the self wording but from the other direction: "X is your parent"
     if (line && line.includes('your') && fact.predicate !== FactPredicate.FAMILY_BIT) {
       const role = line.replace(`${name} is `, '').replace('you are engaged to ', 'engaged to ');
-      if (role !== line) {
+      if (role !== line && genderedRole(role, person.pronouns) !== familyWords) {
         parts.push(role);
       }
     }

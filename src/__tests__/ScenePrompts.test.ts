@@ -85,7 +85,15 @@ About Travis Scott: your father
         ['Travis Scott', ''],
       ]),
     });
-    expect(prompt.startsWith('What the game records about each speaker:')).toBe(true);
+    expect(prompt).toContain('Fact check, before anything else. What the game records about each speaker:');
+    // The check sits after the rewrite rules and right before the answer format, where the
+    // first cut (prepended, one bullet) was skimmed past: gpt-4.1-mini aired "I focus on
+    // fitness coaching" under "you have no job"
+    expect(prompt.indexOf('Fact check, before anything else')).toBeGreaterThan(prompt.indexOf('When you do rewrite'));
+    expect(prompt.indexOf('Fact check, before anything else')).toBeLessThan(
+      prompt.indexOf('Respond with the final scene'),
+    );
+    expect(prompt).toContain('does not protect it');
     expect(prompt).toContain('<KNOWN_FACTS speaker="Mackenzie Scott">');
     expect(prompt).toContain('your father');
     // An empty block is not a speaker with facts
@@ -102,5 +110,6 @@ About Travis Scott: your father
     expect(buildSceneReviewSystemPrompt({ ...base, factsBySim: new Map([['Travis Scott', '']]) })).toBe(without);
     expect(without.startsWith('You are the director of a show')).toBe(true);
     expect(without).not.toContain('Contradicts the speaker');
+    expect(without).not.toContain('Fact check');
   });
 });

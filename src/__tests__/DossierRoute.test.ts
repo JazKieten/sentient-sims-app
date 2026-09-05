@@ -125,4 +125,23 @@ describe('dossier route', () => {
     clear.mockRestore();
     identityChanged = [];
   });
+
+  // R2 (2026-09-04): a bench event with no environment used to reach buildPromptRequest,
+  // throw on location_id, and pop a renderer notification every time (something posted
+  // exactly that every 30 s on 2026-09-03). A malformed event is a 400 and never a generation.
+  it('rejects a self-knowledge event with no environment before any generation', async () => {
+    const readDossier = vi.spyOn(ctx.semanticMemory, 'readDossier').mockReturnValue(dossier('100'));
+    const generate = vi.spyOn(ctx.ai, 'runDirectedGeneration');
+    try {
+      const { status, body } = await post('/bench/self-knowledge/100', {
+        event: { sentient_sims: [{ sim_id: '100', name: 'Sim 100' }] },
+      });
+      expect(status).toBe(400);
+      expect(String(body.error)).toContain('environment.location_id');
+      expect(generate).not.toHaveBeenCalled();
+    } finally {
+      readDossier.mockRestore();
+      generate.mockRestore();
+    }
+  });
 });

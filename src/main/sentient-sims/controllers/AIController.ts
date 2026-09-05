@@ -144,8 +144,17 @@ export class AIController {
         error: `no dossier stored for sim ${simId}; the mod reports one on zone load and on change`,
       });
     }
-    if (!body.event || body.event.sentient_sims.length === 0) {
+    if (!body.event || !Array.isArray(body.event.sentient_sims) || body.event.sentient_sims.length === 0) {
       return res.status(400).json({ error: 'event with one sentient sim is required' });
+    }
+    // R2 (2026-09-04): an event with no environment used to reach buildPromptRequest and
+    // throw on `location_id`, and @CatchErrors pops a renderer notification on every throw.
+    // Something posted exactly that shape every 30 s on 2026-09-03 (HANDOFF-RECUT-2026-09-04.md);
+    // whatever it was, a malformed bench event is a 400 now, never a popup.
+    if (body.event.environment?.location_id === undefined) {
+      return res.status(400).json({
+        error: 'event.environment.location_id is required; build the event with bench_helpers.build_single_sim_event',
+      });
     }
 
     // "What did you do earlier today" is graded against real rows, so it is only asked

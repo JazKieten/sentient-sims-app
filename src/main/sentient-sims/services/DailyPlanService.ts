@@ -50,6 +50,32 @@ export type PlannerOutput = {
   rejected?: PlannerReject[];
 };
 
+// C1 (2026-08-27): outgoing personalities and weekends get a one-line outing nudge in
+// the planner prompt — prompt-only, never a forced key. Traits arrive as raw tuning
+// names ('trait_SelfAssured', verified live), so match normalized-exact, not substring
+// ('bro' as a substring would hit half the catalog).
+const OUTGOING_TRAITS = new Set(['outgoing', 'dancemachine', 'bro', 'selfassured', 'lovesoutdoors', 'cheerful']);
+
+// Sim weekdays, verified live 2026-08-27 via tunable_time.Days: 0=Sunday .. 6=Saturday
+const WEEKEND_DAYS = new Set([0, 6]);
+
+export function outingNudgeLines(traits?: string[], plannedWeekday?: number): string[] {
+  const lines: string[] = [];
+  const normalized = (traits ?? []).map((trait) =>
+    trait
+      .toLowerCase()
+      .replace(/^trait_/, '')
+      .replace(/[^a-z]/g, ''),
+  );
+  if (normalized.some((trait) => OUTGOING_TRAITS.has(trait))) {
+    lines.push('You come alive around people — an outing key (go_out) is usually worth a slot.');
+  }
+  if (plannedWeekday !== undefined && WEEKEND_DAYS.has(plannedWeekday)) {
+    lines.push('It is the weekend — a good day to go out somewhere.');
+  }
+  return lines;
+}
+
 // The social keys the planner may count as lot-served whenever anyone is around
 const SOCIAL_KEYS = [
   'chat',
@@ -490,6 +516,8 @@ export class DailyPlanService {
     lotServes?: Set<string>,
     // G-8: goal id -> consecutive planned days it was 'ignored'
     stuck?: Map<string, number>,
+    // C1: prompt-only outing nudges — the sim's traits and the weekday being planned
+    outing?: { traits?: string[]; plannedWeekday?: number },
   ): string {
     const lines: string[] = [];
     if (includeYesterday && includeYesterday.goals.length > 0) {
@@ -528,6 +556,10 @@ export class DailyPlanService {
         lines.push(`${group}: ${offered.join(', ')}`);
       }
     });
+    const nudges = outingNudgeLines(outing?.traits, outing?.plannedWeekday);
+    if (nudges.length > 0) {
+      lines.push('', ...nudges);
+    }
     lines.push(
       '',
       'Your loadout must include at least one key that serves each goal you choose (see [serve it with]); a goal nothing serves is one to skip.',
@@ -618,6 +650,9 @@ export class DailyPlanService {
           ageBlocked,
           DailyPlanService.lotServedKeys(entry, this.ctx.simStateCache?.getReport?.()?.lot?.action_keys),
           this.stuckGoals(simId, absoluteDay),
+          // Lazy planner plans the REST of today, so today's weekday is the planned one
+          // (optional-chained like the lotServedKeys line above: test fakes omit the cache)
+          { traits, plannedWeekday: this.ctx.simStateCache?.getReport?.()?.lot?.clock?.day },
         ),
       ]
         .filter(Boolean)

@@ -2,7 +2,7 @@ import log from 'electron-log';
 import { StageId } from '../pipeline/stages';
 import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
-import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
+import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent } from '../models/ActionIntent';
@@ -203,6 +203,12 @@ const LLM_RETRIES = 1;
 // success-suppression the monologue re-wants it forever (observed live 2026-08-07:
 // brushed 4x in 5 minutes, an Action Scene burned per re-pick)
 const ONE_SHOT_ACTIONS = new Set(['hire_repair_service', 'pay_bills', 'call_firefighter', 'go_out', 'brush_teeth']);
+
+// Per-verb success cool-off overrides (default FAILED_ACTION_SUPPRESS_MS). go_out's
+// outing occupies the sim through a loading screen already; the full 10 minutes on top
+// mostly suppressed legitimate second outings after coming home. The home->bar
+// ping-pong guard is TOO_TIRED_TO_GO_OUT, not this window.
+const ONE_SHOT_SUPPRESS_MS: Record<string, number> = { go_out: 5 * 60_000 };
 
 // Below this energy, go_out leaves the vocabulary entirely: sleep first, party later.
 // Without it the wrecked-rule and the social drive ping-ponged her home->bar->home
@@ -477,7 +483,10 @@ export class CognitionService {
     // catches up (broken sink stays flagged until the repairman arrives), so a success
     // suppresses re-picking exactly like a failure would
     if (event.outcome === 'success' && event.action && ONE_SHOT_ACTIONS.has(event.action)) {
-      runtime.suppressedUntil.set(event.action, Date.now() + FAILED_ACTION_SUPPRESS_MS);
+      runtime.suppressedUntil.set(
+        event.action,
+        Date.now() + (ONE_SHOT_SUPPRESS_MS[event.action] ?? FAILED_ACTION_SUPPRESS_MS),
+      );
     }
     this.clearPending(runtime);
     this.toCooldown(event.sim_id);
@@ -855,6 +864,10 @@ export class CognitionService {
           `${planBlock.goals.length} goal(s) [${planGoals}]${withPersona}`,
       );
     }
+    // go_out destinations for the prompt/action scene — only meaningful when the verb
+    // survived narrowing (the prompt builder renders nothing otherwise)
+    const venues = lotActionKeys.includes('go_out') ? report.venues : undefined;
+
     const situationPrompt = buildCognitionUserPrompt(
       entryView,
       reportView,
@@ -863,6 +876,7 @@ export class CognitionService {
       planBlock,
       hiddenActions,
       factsBlock,
+      venues,
     );
 
     const simLabel = entry.sim_name ?? simId;
@@ -955,6 +969,7 @@ export class CognitionService {
       actionReason,
       exchanges: tickExchanges,
       hiddenActions,
+      venues,
     });
     if (!intent || intent.kind !== 'action' || !intent.action) {
       this.stats.continues += 1;
@@ -1016,6 +1031,7 @@ export class CognitionService {
         action: intent.action,
         target_sim_id: intent.target_sim_id,
         target_object_id: intent.target_object_id,
+        zone_id: intent.zone_id,
         motivation: intent.motivation ?? intent.thought,
         source: 'cognition',
       });
@@ -1065,9 +1081,20 @@ export class CognitionService {
     // Belt-and-braces: the director never saw off-loadout or age-blocked keys (the
     // vocabulary was narrowed upstream), but if a stage names one anyway it dies here
     hiddenActions?: Set<string>;
+    // go_out destinations from the report; validateIntent resolves option.destination
+    venues?: VenueEntry[];
   }): Promise<CognitionIntent | undefined> {
-    const { entryView, lotActionKeys, situationPrompt, simLabel, thought, actionReason, exchanges, hiddenActions } =
-      params;
+    const {
+      entryView,
+      lotActionKeys,
+      situationPrompt,
+      simLabel,
+      thought,
+      actionReason,
+      exchanges,
+      hiddenActions,
+      venues,
+    } = params;
     try {
       const optionsShot = await runStage(this.ctx.generationQueue, 'action options', () =>
         this.ctx.ai.runOneShot(
@@ -1101,9 +1128,11 @@ export class CognitionService {
             action: option.action,
             target_sim_id: option.target_sim_id,
             target_object_id: option.target_object_id,
+            destination: option.destination,
           },
           entryView,
           lotActionKeys,
+          venues,
         );
         if (!validated.ok || validated.intent.kind !== 'action' || !validated.intent.action) {
           return;
@@ -1112,7 +1141,8 @@ export class CognitionService {
           log.debug(`[Cognition] ${simLabel} action scene dropped hidden option '${validated.intent.action}'`);
           return;
         }
-        const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}`;
+        // zone_id in the key: two go_out options with different destinations both survive
+        const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}|${validated.intent.zone_id ?? ''}`;
         if (!valid.some((existing) => existing.key === key)) {
           valid.push({ intent: validated.intent, label: option.label ?? validated.intent.action, key });
         }

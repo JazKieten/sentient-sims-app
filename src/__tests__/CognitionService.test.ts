@@ -831,6 +831,85 @@ describe('CognitionService', () => {
     expect(dispatched).toHaveLength(1);
   });
 
+  it('carries a chosen go_out destination through to the dispatcher as zone_id', async () => {
+    const { cache, dispatched } = buildCtx({
+      optionsJson: JSON.stringify({
+        scene: 'The evening stretches ahead.',
+        options: [{ action: 'go_out', destination: 'Willow Creek Archive', label: 'Head to the library' }],
+      }),
+    });
+    const report = idleSimReport(1);
+    report.lot!.action_keys = ['go_out'];
+    report.venues = [
+      { zone_id: '42', name: 'Willow Creek Archive', venue: 'library', world: 'Willow Creek', same_world: false },
+      { zone_id: '77', name: 'Rattlesnake Juice', venue: 'bar', world: 'Oasis Springs', same_world: true },
+    ];
+    cache.ingest(report);
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({ action: 'go_out', zone_id: '42' });
+    expect(dispatched[0].target_object_id).toBeUndefined();
+  });
+
+  it('renders the go_out destinations line only when go_out is offered', async () => {
+    const { cache, prompts } = buildCtx();
+    const report = idleSimReport(1);
+    report.lot!.action_keys = ['go_out'];
+    report.venues = [
+      { zone_id: '77', name: 'Rattlesnake Juice', venue: 'bar', world: 'Oasis Springs', same_world: true },
+    ];
+    cache.ingest(report);
+    await settle();
+    expect(
+      prompts.some(
+        (prompt) => prompt.includes('go_out destinations') && prompt.includes('Rattlesnake Juice (bar, Oasis Springs)'),
+      ),
+    ).toBe(true);
+
+    // Without go_out in the lot keys the venue list stays out of the prompt
+    const { cache: cache2, prompts: prompts2 } = buildCtx();
+    const second = idleSimReport(1);
+    second.venues = [
+      { zone_id: '77', name: 'Rattlesnake Juice', venue: 'bar', world: 'Oasis Springs', same_world: true },
+    ];
+    cache2.ingest(second);
+    await settle();
+    expect(prompts2.some((prompt) => prompt.includes('go_out destinations'))).toBe(false);
+  });
+
+  it('re-offers go_out after its shortened 5-minute success cool-off', async () => {
+    // Ordinary one-shots sit out the full 10 minutes; go_out's outing already occupies
+    // the sim, so its window is half that — home from a trip, a second outing is fair
+    vi.useFakeTimers();
+    const { cache, cognition, dispatched } = buildCtx({
+      optionsJson: JSON.stringify({ options: [{ action: 'go_out', label: 'Hit the town' }] }),
+    });
+    const first = idleSimReport(1);
+    first.lot!.action_keys = ['go_out'];
+    cache.ingest(first);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'go_out' });
+
+    // 4 minutes: still suppressed
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    const second = idleSimReport(2);
+    second.lot!.action_keys = ['go_out'];
+    cache.ingest(second);
+    await settle();
+    expect(dispatched).toHaveLength(1);
+
+    // Past 5 minutes: offered again (a 10-minute window would still be suppressing)
+    await vi.advanceTimersByTimeAsync(90_000);
+    const third = idleSimReport(3);
+    third.lot!.action_keys = ['go_out'];
+    cache.ingest(third);
+    await settle();
+    expect(dispatched).toHaveLength(2);
+  });
+
   it('accepts squashed action keys when the action is offered', async () => {
     const { cache, dispatched } = buildCtx({
       optionsJson: JSON.stringify({ options: [{ action: 'grabsnack', label: 'A snack' }] }),

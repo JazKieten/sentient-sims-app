@@ -7,7 +7,7 @@
 
 export const ACTION_OPTIONS_SYSTEM_PROMPT = `You are directing a choose-your-own-adventure beat for one Sim in The Sims 4 who wants a change of course.
 Given their situation, their inner monologue, and what is pulling at them, reply with ONLY a JSON object:
-{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "label": "the choice as the Sim would think it, one short line"}]}
+{"scene": "one or two sentences framing the moment, second person", "options": [{"action": "<action key>", "target_sim_id": "<id, only for social actions>", "target_object_id": "<id, only if shown for that action>", "destination": "<venue name, only for go out, only from the listed destinations>", "label": "the choice as the Sim would think it, one short line"}]}
 Rules:
 - 3 to 5 options, each a genuinely different answer to the pull — more of something, less of something, or something new. No filler.
 - Every "action" MUST be an action key from the OFFERED lists in the situation; social actions need a target_sim_id from the OFFERED people. Never invent actions, targets, or ids.

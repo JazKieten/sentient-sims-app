@@ -3,7 +3,7 @@
 // vocabulary), and every policy rule that can be enforced in code is enforced in code —
 // the preamble only carries the judgment calls a model has to make.
 
-import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
+import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
 import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
 import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout';
@@ -62,6 +62,41 @@ export function firstJsonBlock(raw: string): unknown {
   }
 }
 
+// A bare value runs from the colon to the next "key": pair or the closing brace — commas
+// and apostrophes inside prose are content, not delimiters, so neither may terminate it
+const BARE_VALUE = /("(?:[^"\\]|\\.)*"\s*:\s*)([^"\s{[][\s\S]*?)(?=\s*,\s*"(?:[^"\\]|\\.)*"\s*:|\s*\}\s*$)/g;
+
+// Asked for a JSON object with a prose field, a model routinely answers
+// {"willing": true, "thought": I need to get ready anyway} — the prose unquoted. Strict
+// JSON.parse throws on that and the caller silently loses an answer the model did give
+// (live 2026-08-27: 21 of 22 matched ask-actions died here). Quote the bare values and
+// try again; real scalars are left alone, and anything still unparseable stays a miss.
+function quoteBareValues(block: string): string {
+  return block.replace(BARE_VALUE, (whole, key: string, value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || /^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)$/.test(trimmed)) {
+      return whole;
+    }
+    return `${key}${JSON.stringify(trimmed)}`;
+  });
+}
+
+export function firstJsonBlockLoose(raw: string): unknown {
+  const strict = firstJsonBlock(raw);
+  if (strict !== undefined) {
+    return strict;
+  }
+  const match = /\{[\s\S]*\}/.exec(raw);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(quoteBareValues(match[0])) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export type TickScores = { memory: number; action: number; reason?: string };
 
 export function parseTickScores(raw: string): TickScores | undefined {
@@ -86,6 +121,8 @@ export type ActionOption = {
   action: string;
   target_sim_id?: string;
   target_object_id?: string;
+  // go_out only: the venue NAME chosen from the prompt's destination list
+  destination?: string;
   label?: string;
 };
 
@@ -104,6 +141,7 @@ export function parseActionOptions(raw: string): { scene?: string; options: Acti
       action: typeof option.action === 'string' ? option.action : '',
       target_sim_id: typeof option.target_sim_id === 'string' ? option.target_sim_id : undefined,
       target_object_id: typeof option.target_object_id === 'string' ? option.target_object_id : undefined,
+      destination: typeof option.destination === 'string' ? option.destination : undefined,
       label: typeof option.label === 'string' ? option.label : undefined,
     }))
     .filter((option) => option.action.length > 0);
@@ -166,6 +204,9 @@ export function buildCognitionUserPrompt(
   // people here, from the semantic store. Empty string when the store has nothing, so
   // the prompt is byte-identical to the pre-3.1 one until facts exist.
   factsBlock?: string,
+  // go_out destinations (the mod's venue directory, same-world first); rendered only
+  // when go_out is actually offered this tick
+  venues?: VenueEntry[],
 ): string {
   const sections: string[] = [];
   // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
@@ -286,6 +327,29 @@ export function buildCognitionUserPrompt(
   sections.push(`OFFERED object actions: ${objectList}`);
   if (offered.lotActions.size > 0) {
     sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
+  }
+  if (offered.lotActions.has('go_out') && venues && venues.length > 0) {
+    // Names only — zone ids never reach the model. Same-world entries lead (the mod
+    // sorts them first) and the cap keeps the prompt from ballooning; anywhere in the
+    // directory stays reachable because validateIntent matches by name, not by list
+    // position... but the model can only name what it sees, so cap generously.
+    const listed = venues
+      .slice(0, 12)
+      .map((venue) => {
+        const detail = [venue.venue, venue.world].filter(Boolean).join(', ');
+        return detail ? `${venue.name} (${detail})` : `${venue.name}`;
+      })
+      .join('; ');
+    sections.push(
+      `go_out destinations — name one with "destination" on a go out option, or leave it off to just head somewhere: ${listed}.`,
+    );
+    // The gentle evening pull: a lonely sim at home with the night ahead should think
+    // of going out on their own — same pattern as the dirty/broken lines above
+    const hour = report?.lot?.clock?.hour;
+    const social = entry.self?.needs?.social;
+    if (typeof hour === 'number' && hour >= 18 && typeof social === 'number' && social < 25) {
+      sections.push('The evening is young and nobody is around — going out (go_out) would put people nearby.');
+    }
   }
   sections.push(`OFFERED people to talk to: ${simList}`);
   if (awakeTargets.length > 0) {

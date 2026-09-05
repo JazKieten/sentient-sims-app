@@ -13,6 +13,8 @@ export type ActionIntent = {
   // accepted ask-actions so the sim drops the old plan instead of finishing it first
   preempt?: boolean;
   source?: string;
+  // go_out/travel_to_zone: destination zone resolved from the report's venue directory
+  zone_id?: string;
   // The thought that motivated the action; carried into the outcome memory's pre_action so
   // future cognition ticks can see why the action was attempted
   motivation?: string;

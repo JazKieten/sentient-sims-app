@@ -121,6 +121,7 @@ export class ActionDispatcherService {
       insert_strategy: intent.insert_strategy,
       clear_queue: intent.clear_queue,
       preempt: intent.preempt,
+      zone_id: intent.zone_id,
       source: intent.source ?? 'cognition',
     };
     this.pending.set(requestId, { requestId, intent, dispatchedAt: Date.now() });
@@ -132,6 +133,7 @@ export class ActionDispatcherService {
       action: intent.action,
       target_sim_id: intent.target_sim_id,
       target_object_id: intent.target_object_id,
+      zone_id: intent.zone_id,
       priority: intent.priority,
       source: intent.source ?? 'cognition',
     });

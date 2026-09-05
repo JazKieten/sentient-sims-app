@@ -148,6 +148,16 @@ export type KnownSim = {
   friendship?: number;
 };
 
+// One go_out destination from the mod's venue directory (every venue lot in the save,
+// same-world first, capped at 40). zone_id is a string — the ids are 64-bit.
+export type VenueEntry = {
+  zone_id: string;
+  name?: string;
+  venue?: string;
+  world?: string;
+  same_world?: boolean;
+};
+
 export type SimStateReport = {
   type: 'state_report';
   seq: number;
@@ -157,6 +167,8 @@ export type SimStateReport = {
   lot?: LotBlock;
   sims?: SimStateEntry[];
   known_sims?: KnownSim[];
+  // Venue directory for go_out destination choice; absent on older mod builds
+  venues?: VenueEntry[];
   // sim_ids that transitioned busy -> idle since the previous report
   went_idle?: string[];
   // The player's currently selected sim. Rides paused heartbeats too — sim switching

@@ -4,8 +4,14 @@
 // wrong. EnqueueResult truthiness is NOT success; success only arrives via the outcome
 // POST, and that rule lives in CognitionService's state machine, not in any prompt.
 
-import { SimStateEntry } from './SimStateReport';
-import { ROMANCE_ACTIONS, TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from './ActionLoadout';
+import { SimStateEntry, VenueEntry } from './SimStateReport';
+import {
+  ROMANCE_ACTIONS,
+  SOLO_TRAVEL_ACTIONS,
+  TEEN_PLUS_TARGET_SOCIALS,
+  isRomanceAge,
+  isTeenPlus,
+} from './ActionLoadout';
 
 export type CognitionIntentKind = 'action' | 'speak' | 'continue' | 'wait';
 
@@ -18,6 +24,11 @@ export type CognitionIntent = {
     target_sim_id?: string;
     topic?: string;
   };
+  // go_out only: the venue NAME the model chose from the report's venue directory
+  // (validateIntent resolves it to zone_id; an unknown name is dropped, never fatal)
+  destination?: string;
+  // go_out/travel_to_zone: the resolved destination zone, passed through to the mod
+  zone_id?: string;
   // One-line inner monologue — always present, becomes a 'thought' memory
   thought?: string;
   // Why, in-world — carried into the outcome memory's pre_action
@@ -158,13 +169,49 @@ export function offeredActions(
   if (entry.is_household === false) {
     HOUSEHOLD_ONLY_ACTIONS.forEach((action) => lotActions.delete(action));
   }
+  // Solo travel is TEEN+ (mod whitelist min_age). The mod's age_blocked narrows these
+  // already on current builds; this is the fail-closed skew guard — an absent/unknown
+  // age strips them too, same doctrine as romance.
+  if (!isTeenPlus(entry.self?.age)) {
+    SOLO_TRAVEL_ACTIONS.forEach((action) => lotActions.delete(action));
+  }
   return { objectActions, simTargets, lotActions };
+}
+
+// The model chooses a go_out destination by NAME (zone ids never reach the prompt);
+// only a name that matches the report's venue directory resolves to a zone_id. For
+// travel_to_zone a model-supplied zone_id is trusted only when the directory contains
+// it. No match = no destination — the mod's picker takes over; never fatal.
+function resolveDestination(
+  action: string,
+  candidate: CognitionIntent,
+  venues?: VenueEntry[],
+): { name?: string; zone_id: string } | undefined {
+  if (!SOLO_TRAVEL_ACTIONS.has(action) || !venues || venues.length === 0) {
+    return undefined;
+  }
+  const wanted = candidate.destination?.trim().toLowerCase();
+  if (wanted) {
+    const match = venues.find((venue) => venue.name?.trim().toLowerCase() === wanted);
+    if (match?.zone_id) {
+      return { name: match.name, zone_id: match.zone_id };
+    }
+  }
+  const zoneId = candidate.zone_id;
+  if (zoneId) {
+    const match = venues.find((venue) => venue.zone_id === zoneId);
+    if (match?.zone_id) {
+      return { name: match.name, zone_id: match.zone_id };
+    }
+  }
+  return undefined;
 }
 
 export function validateIntent(
   candidate: CognitionIntent | undefined,
   entry: SimStateEntry,
   lotActionKeys?: string[],
+  venues?: VenueEntry[],
 ): ValidatedIntent {
   if (!candidate || typeof candidate !== 'object') {
     return { ok: false, reason: 'unparseable intent', fallback: fallbackContinue() };
@@ -259,9 +306,19 @@ export function validateIntent(
     // mod resolves mailbox/phone/fallbacks itself, so any model-supplied target is
     // noise (observed live: target_object_id: "Mailbox" crashed int() mod-side)
     if (offered.lotActions.has(action)) {
+      // Destination is attached AFTER the target strip, or it would vanish with them
+      const resolved = resolveDestination(action, candidate, venues);
       return {
         ok: true,
-        intent: { ...candidate, action, target_object_id: undefined, target_sim_id: undefined, thought },
+        intent: {
+          ...candidate,
+          action,
+          target_object_id: undefined,
+          target_sim_id: undefined,
+          destination: resolved?.name,
+          zone_id: resolved?.zone_id,
+          thought,
+        },
       };
     }
     // A social by any other name: an unknown verb aimed at a PRESENT sim is a social —

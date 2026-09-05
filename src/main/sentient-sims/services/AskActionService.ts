@@ -9,7 +9,7 @@ import { SentientSim } from '../models/SentientSim';
 import { SimStateEntry } from '../models/SimStateReport';
 import { playerPersonaFlavor } from '../models/PlayerVoicePersona';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
-import { firstJsonBlock } from '../util/formatCognitionPrompt';
+import { firstJsonBlock, firstJsonBlockLoose } from '../util/formatCognitionPrompt';
 import {
   ASK_MATCH_SYSTEM_PROMPT,
   ASK_TRIAGE_SYSTEM_PROMPT,
@@ -17,7 +17,7 @@ import {
 } from '../pipeline/prompts/ask';
 import { markScenePaced } from '../util/pacedScenes';
 import { sendSceneLineToMod } from '../util/notifyRenderer';
-import { formatSceneForChatWindow } from '../formatter/PromptFormatter';
+import { DialogueLine, formatSceneForChatWindow } from '../formatter/PromptFormatter';
 import { formatPreviouslyInScene } from './AIService';
 import type { DirectedGenerationOptions } from './AIService';
 
@@ -105,6 +105,9 @@ export class AskActionService {
       interactionActionType,
     );
     if (!decision) {
+      // Every other miss on this path says so out loud; this one used to be the pipeline's
+      // one silent exit, which read in the log as "the ask never happened"
+      log.info(`[AskAction] no usable decision from ${sim.name} for "${playerLine.text}" — answering as talk`);
       return undefined;
     }
     log.info(
@@ -198,7 +201,9 @@ export class AskActionService {
         { stageId: StageId.WERNICKE_MATCH },
       );
       exchanges.push(shot.exchange);
-      const parsed = firstJsonBlock(shot.text) as
+      // Loose for the same reason as the decision stage: "label" is prose, and an
+      // unquoted one would throw away a perfectly good action match
+      const parsed = firstJsonBlockLoose(shot.text) as
         | { action?: string | null; target_sim_id?: string; target_object_id?: string; label?: string }
         | undefined;
       if (parsed && typeof parsed.action === 'string' && parsed.action) {
@@ -322,9 +327,14 @@ Will you do it?`;
         { stageId: StageId.PREFRONTAL_DECIDE },
       );
       exchanges.push(shot.exchange);
-      const parsed = firstJsonBlock(shot.text) as { willing?: unknown; thought?: unknown } | undefined;
+      // Loose: this stage asks for a prose "thought", and the answer comes back with it
+      // unquoted often enough that a strict parse threw the sim's decision away silently
+      const parsed = firstJsonBlockLoose(shot.text) as { willing?: unknown; thought?: unknown } | undefined;
       const thought = typeof parsed?.thought === 'string' ? parsed.thought.trim().slice(0, 300) : '';
       if (!parsed || typeof parsed.willing !== 'boolean' || thought.length <= 1) {
+        log.warn(
+          `[AskAction] ${sim.name}'s decision was unusable; received: ${JSON.stringify(shot.text.slice(0, 200))}`,
+        );
         return undefined;
       }
       return { willing: parsed.willing, thought };
@@ -382,18 +392,37 @@ Will you do it?`;
     }
 
     const play = () => {
-      // The ask itself opens the beat in the in-game memories window; it is not
-      // TTS-voiced — the speaker already said it
+      // The ask itself opens the beat in the in-game memories window. The Voice's own
+      // asks are not TTS-voiced — the player already said it out loud — but a Twitch
+      // question has no one to say it, so speakPlayerLine gives it the chat voice.
       sendSceneLineToMod({
         speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
         text: playerLine.text,
       });
       markScenePaced(finalText);
-      this.ctx.ai.playTtsLines([{ speaker: `${sim.name} (to self)`, text: decision.thought }], event.sentient_sims, {
-        paced: true,
-        pacedText: finalText,
-        priority: playbackOptions.priority,
-      });
+      // Same shape as runDirectedGeneration's talk path: the question airs as the beat's
+      // first TTS line, pre-cast to the chat voice, with its subtitle already sent above
+      // (skipSceneLine). Without this, an ask that triaged as "do" lost the narration the
+      // identical question keeps when it triages as "talk".
+      const spokenQuestion: DialogueLine[] = options.speakPlayerLine
+        ? [
+            {
+              speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
+              text: options.speakPlayerLine.spokenText,
+              voiceId: options.speakPlayerLine.voiceId,
+              skipSceneLine: true,
+            },
+          ]
+        : [];
+      this.ctx.ai.playTtsLines(
+        [...spokenQuestion, { speaker: `${sim.name} (to self)`, text: decision.thought }],
+        event.sentient_sims,
+        {
+          paced: true,
+          pacedText: finalText,
+          priority: playbackOptions.priority,
+        },
+      );
     };
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);

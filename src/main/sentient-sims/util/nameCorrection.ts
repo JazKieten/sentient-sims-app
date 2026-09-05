@@ -86,7 +86,14 @@ const COMMON_WORDS = new Set(
    see she should sim sims some sorry stay still stop sure take talk tell than thank thanks that
    the their them then there these they thing think this those time too two umm use used very
    wait walk want wanna was watch way well were what when where which while who why will with
-   wont work would wow whoa yeah yep yes yet you your`.split(/\s+/),
+   wont work would wow whoa yeah yep yes yet you your
+   actually alright already always another answer anyone anything around away awesome
+   basically better bring calm careful check chill dear easy either enough everyone everything
+   excuse follow forget forgive found gone guys happy hear heard hold honestly hurry idea
+   inside instead later leave listen maybe mind minute moment morning night nobody nothing
+   nowhere obviously outside perfect perhaps probably quick quiet ready remember seriously
+   simply someone something somewhere sounds speak start thanks though today tonight totally
+   trust truly until upstairs whatever whenever wherever whether whose yours yourself`.split(/\s+/),
 );
 
 // Snap tokens within a small edit distance of a known first/last name to that name.
@@ -98,7 +105,13 @@ const COMMON_WORDS = new Set(
 // exactly the moment it was needed (live 08-27: "Margot" stayed uncorrected). The
 // wrong-name snaps that motivated scoping were sentence-initial fillers, and the
 // COMMON_WORDS guard handles those directly.
-export function correctNames(transcript: string, knownNames: string[]): string {
+// Tie-breaks (J7, Jaz's 09-04 handoff, cause 7): "Rin" is phonetic distance 1 from BOTH
+// Wren ("ren") and Rainn ("rain"), so the clearly-closest rule let it through uncorrected
+// and the sims copied the misspelling into memory. Three keys settle a phonetic tie
+// before giving up: same phonetic length as what was heard (a vowel swap, not a dropped
+// syllable), then the raw spelling, then presence on the lot (the caller passes the names
+// in play). A tie that survives all three stays untouched.
+export function correctNames(transcript: string, knownNames: string[], onLotNames: string[] = []): string {
   const vocabulary = new Map<string, string>(); // lowercase -> canonical
   knownNames.forEach((full) => {
     if (isPlaceholderName(full)) {
@@ -117,6 +130,14 @@ export function correctNames(transcript: string, knownNames: string[]): string {
     return transcript;
   }
   const canonical = [...vocabulary.values()];
+  const onLot = new Set<string>();
+  onLotNames.forEach((full) => {
+    full
+      .split(/\s+/)
+      .map((part) => part.trim().toLowerCase())
+      .filter((part) => part.length >= 3)
+      .forEach((part) => onLot.add(part));
+  });
   return transcript.replace(/[A-Za-z][A-Za-z'’-]{2,}/g, (token) => {
     const lowered = token.toLowerCase().replace(/[’']s$/, '');
     if (vocabulary.has(lowered)) {
@@ -133,23 +154,67 @@ export function correctNames(transcript: string, knownNames: string[]): string {
     }
     const spoken = phonetic(lowered);
     const allowed = spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
-    let best: string | undefined;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    let secondBest = Number.POSITIVE_INFINITY;
-    canonical.forEach((name) => {
-      const distance = levenshtein(spoken, phonetic(name));
-      if (distance < bestDistance) {
-        secondBest = bestDistance;
-        bestDistance = distance;
-        best = name;
-      } else if (distance < secondBest) {
-        secondBest = distance;
-      }
-    });
-    if (best && bestDistance <= allowed && bestDistance < secondBest) {
+    const best = closestName(lowered, spoken, canonical, onLot);
+    if (best && best.distance <= allowed) {
       const possessive = /[’']s$/.test(token) ? token.slice(-2) : '';
-      return `${best}${possessive}`;
+      return `${best.name}${possessive}`;
     }
     return token;
   });
+}
+
+// The single closest candidate by phonetic distance, with the J7 tie-breaks; undefined
+// when the phonetic tie cannot be settled (never guess between two equal names).
+function closestName(
+  lowered: string,
+  spoken: string,
+  canonical: string[],
+  onLot: Set<string>,
+): { name: string; distance: number } | undefined {
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let tied: string[] = [];
+  canonical.forEach((name) => {
+    const distance = levenshtein(spoken, phonetic(name));
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      tied = [name];
+    } else if (distance === bestDistance) {
+      tied.push(name);
+    }
+  });
+  if (tied.length === 0) {
+    return undefined;
+  }
+  if (tied.length > 1) {
+    // A substitution beats an insertion: "rin" heard for "ren" (Wren) is one vowel off,
+    // "rin" for "rain" (Rainn) is a syllable short, and Whisper mishears vowels far more
+    // often than it drops them. Keep the candidates whose phonetic length matches.
+    const sameLength = tied.filter((name) => phonetic(name).length === spoken.length);
+    if (sameLength.length > 0) {
+      tied = sameLength;
+    }
+  }
+  if (tied.length > 1) {
+    // Then raw spelling: the phonetic layer threw away letters that may tell the names apart
+    let rawBest = Number.POSITIVE_INFINITY;
+    let rawTied: string[] = [];
+    tied.forEach((name) => {
+      const raw = levenshtein(lowered, name.toLowerCase());
+      if (raw < rawBest) {
+        rawBest = raw;
+        rawTied = [name];
+      } else if (raw === rawBest) {
+        rawTied.push(name);
+      }
+    });
+    tied = rawTied;
+  }
+  if (tied.length > 1) {
+    // Then whoever is actually here
+    const present = tied.filter((name) => onLot.has(name.toLowerCase()));
+    if (present.length === 1) {
+      tied = present;
+    }
+  }
+  return tied.length === 1 ? { name: tied[0], distance: bestDistance } : undefined;
 }

@@ -157,7 +157,7 @@ export class VoiceInputService {
       }
       // V-7 post-pass: snap near-miss names to the sims in play. The settings Test
       // button goes through transcribe() directly and stays raw on purpose.
-      const text = correctNames(raw, this.knownNames());
+      const text = correctNames(raw, this.knownNames(), this.onLotNames());
       if (text !== raw) {
         log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }
@@ -210,6 +210,31 @@ export class VoiceInputService {
       } catch {
         // no DB loaded: the report names still apply
       }
+      return [...names];
+    } catch {
+      return [];
+    }
+  }
+
+  // J7: the names actually in play right now - the reported sims and everyone they see
+  // in the room - so a phonetic tie between two known names goes to the one who is here
+  private onLotNames(): string[] {
+    try {
+      const entries = this.ctx.simStateCache.getReport()?.sims;
+      const names = new Set<string>();
+      if (!entries) {
+        return [];
+      }
+      entries.forEach((entry) => {
+        if (entry.sim_name && !isPlaceholderName(entry.sim_name)) {
+          names.add(entry.sim_name);
+        }
+        entry.sims.forEach((sim) => {
+          if (sim.name && !isPlaceholderName(sim.name)) {
+            names.add(sim.name);
+          }
+        });
+      });
       return [...names];
     } catch {
       return [];

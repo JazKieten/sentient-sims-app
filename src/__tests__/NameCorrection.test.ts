@@ -57,4 +57,43 @@ describe('STT dictionary (V-7)', () => {
     expect(levenshtein('lily', 'lillie')).toBe(3);
     expect(levenshtein('same', 'same')).toBe(0);
   });
+
+  // J7 (Jaz's 09-04 handoff, cause 7): with Rainn Whiting in the pool, "Rin" was phonetic
+  // distance 1 from both Wren and Rainn and the clearly-closest rule let it through; the
+  // sims then copied "Rin", "Ren" and "Hallie" into their thoughts and memories.
+  it('settles the Wren/Rainn tie by raw spelling with the real pool', () => {
+    const pool = [
+      'Wren Calloway',
+      'Margo Calloway',
+      'Rainn Whiting',
+      'Halley Chatman',
+      'Milo Calder',
+      'Tessa Chatman',
+      'Emma Calder',
+      'Lillie Cason',
+      'Asher Woolie Wolfie',
+    ];
+    expect(correctNames('Which cats though, Rin?', pool)).toBe('Which cats though, Wren?');
+    expect(correctNames('...on this lot right now, Ren?', pool)).toBe('...on this lot right now, Wren?');
+    expect(correctNames('Hey Hallie, call the fire department.', pool)).toBe('Hey Halley, call the fire department.');
+    // Rainn is still reachable when that is what was said
+    expect(correctNames('Rain, come here', pool)).toBe('Rainn, come here');
+  });
+
+  it('never turns a sentence starter into a sim', () => {
+    const pool = ['Asher Woolie Wolfie', 'Wren Calloway', 'Alton Ross'];
+    expect(correctNames("Answer Woolie Wolfie's question.", pool)).toBe("Answer Woolie Wolfie's question.");
+    expect(correctNames('Always the same with you', pool)).toBe('Always the same with you');
+    expect(correctNames('Another one, please', pool)).toBe('Another one, please');
+    expect(correctNames('Asher, come here', pool)).toBe('Asher, come here');
+  });
+
+  it('lets the lot settle a tie the spelling cannot', () => {
+    // Two names one edit from the token and equally far in raw spelling: only the
+    // roster can decide, and only when exactly one of them is here
+    const pool = ['Mara Stone', 'Mira Stone'];
+    expect(correctNames('Mora, over here', pool)).toBe('Mora, over here');
+    expect(correctNames('Mora, over here', pool, ['Mira Stone'])).toBe('Mira, over here');
+    expect(correctNames('Mora, over here', pool, ['Mira Stone', 'Mara Stone'])).toBe('Mora, over here');
+  });
 });

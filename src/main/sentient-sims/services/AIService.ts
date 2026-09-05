@@ -1544,6 +1544,8 @@ ${factsBlock}
     const sceneLines: DialogueLine[] = playerLine ? [playerLine] : [];
     const performedLines: DialogueLine[] = [];
     const monologueBySim = new Map<string, string>();
+    // Fix D: the reviewer reads the same facts the actors did, keyed by speaker name
+    const factsBySim = new Map<string, string>();
     for (let i = 0; i < performers.length; i += 1) {
       const sim = performers[i];
       let actorFacts: string;
@@ -1554,6 +1556,9 @@ ${factsBlock}
       } catch {
         // Speaking without facts is the pre-3.1 behaviour; a silent Sim is not
         actorFacts = '';
+      }
+      if (actorFacts) {
+        factsBySim.set(sim.name, actorFacts);
       }
       const actorSystemPrompt = buildSpeechSystemPrompt({
         simName: sim.name,
@@ -1646,6 +1651,7 @@ ${factsBlock}
       hasPlayerLine: Boolean(playerLine),
       playerLineSpeaker: playerLine?.speaker,
       performerNamesList: formatListToString(performerNames),
+      factsBySim,
     });
 
     // The review pass is a polish step: without time or on failure, the actors' lines air as delivered

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildBriefingSystemPrompt, buildSpeechSystemPrompt } from 'main/sentient-sims/pipeline/prompts/scene';
+import {
+  buildBriefingSystemPrompt,
+  buildSceneReviewSystemPrompt,
+  buildSpeechSystemPrompt,
+} from 'main/sentient-sims/pipeline/prompts/scene';
 
 // Fix B2: cheap insurance for a save whose stored description predates an age-up. Live
 // 2026-09-03, the director's briefing for Mackenzie called him "a teenage boy ... navigating
@@ -53,5 +57,50 @@ describe('scene prompts', () => {
     });
     expect(solo).toContain('the facts are right');
     expect(solo).toContain('THINK:');
+  });
+});
+
+// Fix D: the review stage read the delivered lines with no ground truth, one stage below
+// the facts. Live 2026-09-03, Mackenzie's "I live with my parents, Travis and Ariel"
+// (father and sister) and Summer's "I'm seeing someone" (no partner on record) both went
+// to air untouched. The reviewer now sees each speaker's own facts and one rule for them.
+describe('scene review prompt', () => {
+  const base = {
+    simNames: ['Travis Scott', 'Mackenzie Scott'],
+    performerNames: ['Travis Scott', 'Mackenzie Scott'],
+    hasPlayerLine: false,
+    performerNamesList: 'Travis Scott and Mackenzie Scott',
+  };
+  const mackenzieFacts = `<KNOWN_FACTS>
+About you:
+- you are an elder (retirement age)
+About Travis Scott: your father
+</KNOWN_FACTS>`;
+
+  it('shows the reviewer each speaker facts, labelled, with a contradiction rule', () => {
+    const prompt = buildSceneReviewSystemPrompt({
+      ...base,
+      factsBySim: new Map([
+        ['Mackenzie Scott', mackenzieFacts],
+        ['Travis Scott', ''],
+      ]),
+    });
+    expect(prompt.startsWith('What the game records about each speaker:')).toBe(true);
+    expect(prompt).toContain('<KNOWN_FACTS speaker="Mackenzie Scott">');
+    expect(prompt).toContain('your father');
+    // An empty block is not a speaker with facts
+    expect(prompt).not.toContain('speaker="Travis Scott"');
+    expect(prompt).toContain("Contradicts the speaker's own <KNOWN_FACTS>");
+    // The rule sits inside the "Only rewrite a line if it:" list, before the closing sentence
+    expect(prompt.indexOf('Contradicts the speaker')).toBeLessThan(prompt.indexOf('When you do rewrite'));
+    expect(prompt.indexOf('Only rewrite a line if it:')).toBeLessThan(prompt.indexOf('Contradicts the speaker'));
+  });
+
+  it('is byte-identical to the pre-D prompt when nobody has facts', () => {
+    const without = buildSceneReviewSystemPrompt(base);
+    expect(buildSceneReviewSystemPrompt({ ...base, factsBySim: new Map() })).toBe(without);
+    expect(buildSceneReviewSystemPrompt({ ...base, factsBySim: new Map([['Travis Scott', '']]) })).toBe(without);
+    expect(without.startsWith('You are the director of a show')).toBe(true);
+    expect(without).not.toContain('Contradicts the speaker');
   });
 });

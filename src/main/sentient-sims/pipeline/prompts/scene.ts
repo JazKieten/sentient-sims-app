@@ -128,12 +128,28 @@ export type SceneReviewPromptContext = {
   playerLineSpeaker?: string;
   // performerNames rendered as "Alice and Bob" by the caller's list formatter
   performerNamesList: string;
+  // Fix D (Phase 3.1): each performer's own <KNOWN_FACTS> block, keyed by speaker name,
+  // the same text their actor prompt carried. Live 2026-09-03 the facts sat one stage
+  // upstream of the reviewer, so "I live with my parents, Travis and Ariel" (Travis is
+  // her father, Ariel her sister) and "I'm seeing someone" (no partner on record) both
+  // passed review untouched. Absent or empty, the prompt is byte-identical to before.
+  factsBySim?: Map<string, string>;
 };
 
 export function buildSceneReviewSystemPrompt(context: SceneReviewPromptContext): string {
-  const { simNames, hasPlayerLine, playerLineSpeaker, performerNamesList } = context;
+  const { simNames, hasPlayerLine, playerLineSpeaker, performerNamesList, factsBySim } = context;
 
-  return `You are the director of a show starring sentient Sims. You are reviewing the newest lines of a scene between ${simNames.join(' and ')} before they go to air. The scene was performed in a specific genre and tone — comedy, thriller, tragedy, romance, whatever the delivered lines are playing in. Infer that register from the lines and preserve it. What matters most is that the scene reads as one continuous, coherent conversation: every line follows naturally from the line before it.
+  const factsBlocks = [...(factsBySim ?? [])]
+    .filter(([, facts]) => Boolean(facts))
+    .map(([name, facts]) => facts.replace('<KNOWN_FACTS>', `<KNOWN_FACTS speaker="${name}">`));
+  const factsPreamble =
+    factsBlocks.length > 0 ? `What the game records about each speaker:\n${factsBlocks.join('\n\n')}\n\n` : '';
+  const factsRule =
+    factsBlocks.length > 0
+      ? `- Contradicts the speaker's own <KNOWN_FACTS> above — a relative in the wrong role, a partner, job, age, or family member the record denies. Repair the claim and keep the rest of the line\n`
+      : '';
+
+  return `${factsPreamble}You are the director of a show starring sentient Sims. You are reviewing the newest lines of a scene between ${simNames.join(' and ')} before they go to air. The scene was performed in a specific genre and tone — comedy, thriller, tragedy, romance, whatever the delivered lines are playing in. Infer that register from the lines and preserve it. What matters most is that the scene reads as one continuous, coherent conversation: every line follows naturally from the line before it.
 
 You are an editor, not a writer. Do NOT continue the conversation, do NOT reply to the delivered lines, and do NOT add new lines — your output is the delivered lines themselves, passed through or repaired. Any scene direction in the user message (such as an instruction to continue the scene or move the conversation forward) was addressed to the actors, and they have already performed it — it is context for you, not a task. Your default is to return them EXACTLY as written, in the same order. Jokes, jabs, verbal tics, hesitations, plain replies, and slang are performance choices — they stay. A line does not need to be clever or quotable to be kept. Only rewrite a line if it:
 - Does not connect to the line before it — ignores a direct question, changes the subject for no reason, or is a standalone quip instead of a reply
@@ -143,7 +159,7 @@ You are an editor, not a writer. Do NOT continue the conversation, do NOT reply 
 - Repeats or rephrases something already said, contradicts another line, or trails off mid-sentence
 - Greets or re-introduces a character when the conversation is already underway
 - Runs long — cut a rambling line down to the sentence that carries the conversation
-When you do rewrite, change only what is broken and keep the actor's intent and voice.
+${factsRule}When you do rewrite, change only what is broken and keep the actor's intent and voice.
 
 Respond with the final scene as one line per row in exactly this format, nothing else:
 <character name>: <the words they say>

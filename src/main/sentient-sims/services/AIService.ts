@@ -56,6 +56,7 @@ import {
   buildSceneSalienceSystemPrompt,
   buildSpeechSystemPrompt,
   DIRECTOR_REVIEW_SYSTEM_PROMPT,
+  withContentFreeHint,
 } from '../pipeline/prompts/scene';
 import { buildConsolidationSystemPrompt, buildDiaryOnlySystemPrompt } from '../pipeline/prompts/consolidation';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
@@ -1462,6 +1463,10 @@ ${factsBlock}
     } else {
       sceneAction = promptRequest.action ?? options.action;
       displayAction = sceneAction;
+      // J6: a content-free social (inside joke, story, gossip) says where its material may
+      // come from. Model-only, after displayAction is taken: the memory row keeps the
+      // beat as it happened, never a stage direction (the 08-16 lesson above).
+      sceneAction = withContentFreeHint(sceneAction, (event as { interaction_name?: string }).interaction_name);
       // V-5b: a fresh scene OPENS — the actors are just starting this conversation.
       // Without it they launched mid-thought ("That reminds me of a joke:" before the
       // joke) because nothing told them this was the first exchange.

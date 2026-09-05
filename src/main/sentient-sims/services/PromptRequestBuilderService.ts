@@ -19,7 +19,6 @@ import { LocationEntity } from '../db/entities/LocationEntity';
 import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import { ApiContext } from './ApiContext';
 import { postureDescriptions, PostureType } from '../descriptions/postureDescriptions';
-import { withContentFreeHint } from '../pipeline/prompts/scene';
 import { buildAlsoPresentBlock } from '../util/alsoPresent';
 import { ObjectDescription, objectDescriptions } from '../descriptions/objectDescriptions';
 
@@ -509,11 +508,6 @@ export class PromptRequestBuilderService {
         options.sexCategoryType,
         options.sexLocationType,
         postures,
-      );
-      // J6: an inside joke or a story needs material; say where it may come from
-      formattedPreAction = withContentFreeHint(
-        formattedPreAction,
-        (event as Partial<InteractionEvent>).interaction_name,
       );
     }
 

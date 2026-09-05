@@ -94,7 +94,9 @@ describe('owner-scoped reflections', () => {
       }),
     );
     const solo = builder['buildReflectionsBlock'](builder.getReflections(event([{ sim_id: '700', name: 'Ann' }])));
-    expect(solo).toContain('<PAST_REFLECTIONS>\n[At Garden Essence] Ann (diary): I fixed the sink\n</PAST_REFLECTIONS>');
+    expect(solo).toContain(
+      '<PAST_REFLECTIONS>\n[At Garden Essence] Ann (diary): I fixed the sink\n</PAST_REFLECTIONS>',
+    );
     expect(solo).not.toContain('speaker=');
 
     const none = builder['buildReflectionsBlock'](builder.getReflections(event([{ sim_id: '800', name: 'Ben' }])));

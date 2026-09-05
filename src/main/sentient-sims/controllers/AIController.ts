@@ -151,7 +151,9 @@ export class AIController {
     // throw on `location_id`, and @CatchErrors pops a renderer notification on every throw.
     // Something posted exactly that shape every 30 s on 2026-09-03 (HANDOFF-RECUT-2026-09-04.md);
     // whatever it was, a malformed bench event is a 400 now, never a popup.
-    if (body.event.environment?.location_id === undefined) {
+    // The type says environment is always there; the wire does not
+    const environment = (body.event as { environment?: { location_id?: number } }).environment;
+    if (environment?.location_id === undefined) {
       return res.status(400).json({
         error: 'event.environment.location_id is required; build the event with bench_helpers.build_single_sim_event',
       });

@@ -455,6 +455,14 @@ const EXTRA_DENIALS: Record<string, string[]> = {
     'nothing official',
     "don't really do",
     'no real job',
+    // "I'm figuring that out right now, so it's kind of up in the air" is the same Sim,
+    // the same truth, and it failed too (live 2026-09-04, the household run)
+    'figuring that out',
+    'figuring it out',
+    'still figuring',
+    'up in the air',
+    'looking for work',
+    'not sure yet',
   ],
 };
 

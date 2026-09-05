@@ -325,6 +325,10 @@ describe('self-knowledge battery', () => {
       expect(
         gradeAnswer(job, "Ariel Scott: I don't really do anything official, just figuring things out right now.").pass,
       ).toBe(true);
+      // The household run the same night: still no career, still failed
+      expect(
+        gradeAnswer(job, "Ariel Scott: Honestly? I'm figuring that out right now, so it's kind of up in the air.").pass,
+      ).toBe(true);
     });
 
     it('reads "never had" as the denial it is', () => {

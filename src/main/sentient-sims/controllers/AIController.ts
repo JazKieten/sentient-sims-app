@@ -161,10 +161,21 @@ export class AIController {
 
     // "What did you do earlier today" is graded against real rows, so it is only asked
     // when there are some.
-    const todaysMemories = this.ctx.memoryRepository
-      .getRecentReflectionsForParticipants([simId], 5)
-      .map((memory) => memory.content ?? '')
-      .filter(Boolean);
+    //
+    // 2026-09-05: this used to ask getRecentReflectionsForParticipants, which returns rows
+    // the Sim was a PARTICIPANT in - and a reflection lists everyone who was in the scene,
+    // so a toddler's "today" came back as his parents' diaries about him, spanning several
+    // days, with none of his own rows in it. His correct answer ("I tried to dance", and the
+    // game had logged exactly that) could not be graded because the thing he did was not in
+    // the oracle. Own rows, this game day, other people's diaries left out.
+    const gameDay = this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+    const todaysMemories =
+      gameDay === undefined
+        ? []
+        : this.ctx.memoryRepository
+            .getOwnDayMemories(simId, gameDay, 20)
+            .map((memory) => ({ content: memory.content ?? '', interaction: memory.interaction_name }))
+            .filter((activity) => activity.content);
 
     const all = buildQuestions(dossier, todaysMemories);
     const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;

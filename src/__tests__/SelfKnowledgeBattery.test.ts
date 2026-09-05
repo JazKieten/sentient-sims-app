@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activityWords,
   buildQuestions,
   claimedRoles,
+  claimsActivity,
+  DayActivity,
   gradeAnswer,
   gradeBattery,
   mentions,
+  NEEDS_A_PERSON,
   stripSpeaker,
 } from 'main/sentient-sims/bench/selfKnowledge';
 import { SimDossier } from 'main/sentient-sims/models/SimDossier';
@@ -375,7 +379,7 @@ describe('self-knowledge battery', () => {
     });
 
     it('C5: warnings are reported for the manually judged questions too', () => {
-      const summerWithMemories = buildQuestions(summer, ['Summer Holiday (diary): a quiet day']);
+      const summerWithMemories = buildQuestions(summer, [{ content: 'Summer Holiday (diary): a quiet day' }]);
       const memory = summerWithMemories.find((candidate) => candidate.id === 'MEM-today');
       if (!memory) throw new Error('no memory question');
       const graded = gradeAnswer(memory, 'Summer Holiday: I helped Jess with dinner plans.');
@@ -447,5 +451,89 @@ describe('how far a role word reaches', () => {
     );
     expect(graded.contradiction).toBe(false);
     expect(graded.pass).toBe(true);
+  });
+});
+
+// MEM-today, the question that could not be graded. Live 2026-09-05 on Ehren Alder, a
+// toddler: the game had logged `generic_Dance` canceled and he answered "I tried to dance",
+// which is exactly right, and the oracle handed the grader his parents' diaries instead.
+describe('MEM-today grades a Sim against what the game says the Sim did', () => {
+  const ehren: SimDossier = {
+    sim_id: '821650642008040319',
+    name: 'Ehren Alder',
+    age: 'TODDLER',
+    gender: 'MALE',
+    family: { parents: ['121340882759582053'], siblings: [], children: [], steady_ids: [] },
+    household: { id: '999', name: 'Alder', member_ids: ['821650642008040319', '121340882759582053'] },
+    careers: [],
+    relationships: [{ sim_id: '121340882759582053', name: 'Jonah Alder', has_met: true, friendship: 90 }],
+  };
+
+  const memToday = (activities: DayActivity[]) => {
+    const found = buildQuestions(ehren, activities).find((candidate) => candidate.id === 'MEM-today');
+    if (!found) throw new Error('no MEM-today question');
+    return found;
+  };
+
+  it('splits an interaction name into the words a Sim would actually say', () => {
+    expect(activityWords('generic_Dance')).toEqual(['dance']);
+    expect(activityWords('atWorkActions_Daycare_Default')).toEqual(['work', 'daycare']);
+    // Boilerplate that would otherwise accept almost any sentence
+    expect(activityWords('mixer_social_GossipAbout_targeted_friendly_alwaysOn')).toEqual(['gossip']);
+    expect(activityWords('mixer_Fireplace_WarmSelf')).toEqual(['fireplace', 'warm']);
+  });
+
+  it('accepts the tense a Sim speaks in, and nothing further', () => {
+    expect(claimsActivity('I tried to dance', 'dance')).toBe(true);
+    expect(claimsActivity('we danced all evening', 'dance')).toBe(true);
+    expect(claimsActivity('I was dancing', 'dance')).toBe(true);
+    // A different word is a different claim, however close it looks
+    expect(claimsActivity('I read a book', 'dance')).toBe(false);
+    expect(claimsActivity('I was at daycare', 'daycare')).toBe(true);
+  });
+
+  it('passes the live answer that used to be ungradeable', () => {
+    const question = memToday([
+      { content: "Ehren Alder tried 'dance' and it was canceled.", interaction: 'generic_Dance' },
+      { content: 'Ehren Alder (thinking): I wish I could dance again', interaction: 'atWorkActions_Daycare_Default' },
+    ]);
+    const graded = gradeAnswer(question, 'Ehren Alder: I tried to dance');
+    expect(graded.pass).toBe(true);
+    expect(graded.reason).toContain('dance');
+    // And the oracle is his own rows now, not somebody's diary about him
+    expect(question.expected[0]).toContain("tried 'dance'");
+  });
+
+  it('counts toward the score instead of dropping out of it', () => {
+    const question = memToday([{ content: "tried 'dance'", interaction: 'generic_Dance' }]);
+    const result = gradeBattery('821650642008040319', 'Ehren Alder', [
+      { question, answer: 'Ehren Alder: I tried to dance' },
+    ]);
+    expect(result.total).toBe(1);
+    expect(result.passed).toBe(1);
+  });
+
+  it('defers rather than failing an answer no suffix rule reaches', () => {
+    const question = memToday([{ content: "Ehren Alder tried 'sit'", interaction: 'seating_Sit' }]);
+    // "sat" is "sit" to a person and to nothing else; failing it would be the grader lying
+    const graded = gradeAnswer(question, 'Ehren Alder: I sat on the floor');
+    expect(graded.reason).toBe(NEEDS_A_PERSON);
+    const result = gradeBattery('821650642008040319', 'Ehren Alder', [
+      { question, answer: 'Ehren Alder: I sat on the floor' },
+    ]);
+    expect(result.total).toBe(0);
+  });
+
+  it('stays a manual question on a day with no interactions on the record', () => {
+    const question = memToday([{ content: 'Ehren Alder (thinking): it feels quiet today' }]);
+    expect(question.mode).toBe('manual');
+    expect(gradeAnswer(question, 'I played with blocks').reason).toBe(NEEDS_A_PERSON);
+  });
+
+  it('still reports an unknown name on an answer it grades', () => {
+    const question = memToday([{ content: "tried 'dance'", interaction: 'generic_Dance' }]);
+    const graded = gradeAnswer(question, 'Ehren Alder: I danced with Jess');
+    expect(graded.pass).toBe(true);
+    expect(graded.warnings).toContain('Jess');
   });
 });

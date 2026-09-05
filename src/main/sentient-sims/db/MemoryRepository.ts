@@ -303,6 +303,45 @@ export class MemoryRepository extends Repository {
     return rows.map(toMemoryEntity);
   }
 
+  // What one Sim actually DID on one game day, oldest first — the oracle for the battery's
+  // "what did you do earlier today".
+  //
+  // The battery used to ask getRecentReflectionsForParticipants for this, which is wrong
+  // twice over and was wrong live on 2026-09-05: a reflection lists everyone who was in the
+  // scene as a participant, so a toddler's "today" came back as his parents' diaries about
+  // him, and nothing bounded it to today at all. His own row — 'tried dance and it was
+  // canceled' — was not in the set, so a correct answer had nothing to be graded against.
+  //
+  // So: rows this Sim took part in, on this game day, minus OTHER Sims' diary prose. His own
+  // reflection stays; it is a first-person account of his day, which is exactly the question.
+  getOwnDayMemories(participantId: string, gameDay: number, limit: number): MemoryEntity[] {
+    let participant: bigint;
+    try {
+      participant = BigInt(participantId);
+    } catch {
+      return [];
+    }
+    const rows = this.dbService
+      .getDb()
+      .prepare(
+        `
+          SELECT DISTINCT memory.* FROM memory
+          INNER JOIN memory_participants ON memory_participants.memory_id = memory.id
+          INNER JOIN memory_index ON memory_index.memory_id = memory.id
+          WHERE memory_participants.participant_id = ?
+            AND memory_index.game_day = ?
+            AND (memory.event_type IS NULL
+                 OR memory.event_type != 'reflection'
+                 OR memory_index.owner_participant_id = ?)
+          ORDER BY memory.timestamp ASC, memory.id ASC
+          LIMIT ?;
+        `,
+      )
+      .safeIntegers()
+      .all([participant, gameDay, participant, limit]) as MemoryRow[];
+    return rows.map(toMemoryEntity);
+  }
+
   updateMemory(memory: MemoryEntity) {
     if (memory.id === undefined) {
       throw Error('Cannot update a memory without an id');

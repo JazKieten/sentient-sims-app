@@ -15,7 +15,11 @@
 import { SimDossier } from '../models/SimDossier';
 import { lifeStageAcceptWords } from '../util/lifeStageWords';
 
-export type GradeMode = 'names' | 'denial' | 'text' | 'manual';
+export type GradeMode = 'names' | 'denial' | 'text' | 'activity' | 'manual';
+
+// The one reason string that means "the machine did not score this". gradeBattery excludes
+// these from the total, so it has to be the same string in every place that defers.
+export const NEEDS_A_PERSON = 'needs a person to judge it';
 
 // The roles a Sim can put someone in while answering. A const object rather than an enum,
 // for the reason FactPredicate is one: these strings travel through results and HTTP.
@@ -119,6 +123,75 @@ function pretty(value: string): string {
     .replace(/_/g, ' ')
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .trim();
+}
+
+// One thing a Sim did today: the memory row's text, and the game's own name for the
+// interaction behind it where there is one (`generic_Dance`, `seating_Sit`). The
+// interaction name is what makes MEM-today gradeable at all — it is a closed vocabulary
+// coming from the game rather than a guess about what words mean, the same property that
+// makes the life-stage synonyms safe and an open-ended likes table unsafe.
+export type DayActivity = { content: string; interaction?: string };
+
+// Boilerplate that appears in interaction names without naming the activity. Matching an
+// answer on these would pass "I did something generic", which is not an answer.
+// `about` and `self` matter as much as `generic` here: `mixer_social_GossipAbout_...` would
+// otherwise accept any answer containing the word "about", and `mixer_Fireplace_WarmSelf`
+// any answer containing "myself".
+const ACTIVITY_STOP_WORDS = new Set([
+  'generic',
+  'sim',
+  'social',
+  'mixer',
+  'super',
+  'interaction',
+  'targeted',
+  'friendly',
+  'always',
+  'alwayson',
+  'default',
+  'actions',
+  'object',
+  'self',
+  'about',
+  'from',
+  'into',
+  'this',
+  'that',
+  'and',
+  'the',
+  'with',
+  'off',
+  'on',
+]);
+
+// The words from an interaction name that could plausibly appear in a Sim saying what it
+// did. `atWorkActions_Daycare_Default` -> ['work', 'daycare']; `generic_Dance` -> ['dance'].
+export function activityWords(interaction: string): string[] {
+  return [
+    ...new Set(
+      pretty(interaction)
+        .toLowerCase()
+        .split(/[^a-z]+/)
+        .filter((word) => word.length >= 3 && !ACTIVITY_STOP_WORDS.has(word)),
+    ),
+  ];
+}
+
+// Whether an answer claims one of the day's activities. Prefix rather than exact match so
+// the tense a Sim naturally speaks in counts: `generic_Dance` gives "dance", and "I tried
+// to dance", "we danced" and "I was dancing" are all the same claim. This is morphology,
+// not a synonym table - it never decides that two DIFFERENT words mean the same thing,
+// which is the failure mode the likes question is manual to avoid. Irregular verbs are
+// where it stops ("sat" is not "sit" by any suffix rule), which is why a miss falls back
+// to a person rather than failing the answer.
+export function claimsActivity(answer: string, word: string): boolean {
+  // Drop a silent trailing 'e' so the stem survives an -ing: dance -> danc -> dancing.
+  const stem = word.toLowerCase().replace(/e$/, '');
+  if (stem.length < 3) {
+    return false;
+  }
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^a-z])${escaped}[a-z]{0,4}([^a-z]|$)`).test(answer.toLowerCase());
 }
 
 // First names are what a Sim actually says ("that's Mackenzie"), so matching on the full
@@ -476,7 +549,7 @@ function namesFor(dossier: SimDossier, ids: string[] | undefined): string[] {
  * Questions whose answer the dossier cannot supply are dropped rather than asked with no
  * oracle: an ungraded question in a graded battery is just noise.
  */
-export function buildQuestions(dossier: SimDossier, todaysMemories: string[] = []): BatteryQuestion[] {
+export function buildQuestions(dossier: SimDossier, todaysMemories: DayActivity[] = []): BatteryQuestion[] {
   const questions: BatteryQuestion[] = [];
   const family = dossier.family ?? {};
   const everyone = (dossier.relationships ?? []).map((edge) => edge.name ?? '').filter(Boolean);
@@ -672,12 +745,24 @@ export function buildQuestions(dossier: SimDossier, todaysMemories: string[] = [
   }
 
   if (todaysMemories.length > 0) {
+    // The verbs the game says this Sim ran today. A day can leave none - a day of nothing
+    // but conversation and inner monologue - and then there is nothing to grade against
+    // and the question goes back to being judged by a person.
+    const didToday = [
+      ...new Set(
+        todaysMemories.flatMap((activity) => (activity.interaction ? activityWords(activity.interaction) : [])),
+      ),
+    ];
     questions.push({
       id: 'MEM-today',
       question: 'What did you do earlier today?',
-      mode: 'manual',
-      expected: todaysMemories.slice(0, 5),
-      note: "graded against today's memory rows by a person",
+      mode: didToday.length > 0 ? 'activity' : 'manual',
+      expected: todaysMemories.map((activity) => activity.content).slice(0, 5),
+      accept: didToday,
+      note:
+        didToday.length > 0
+          ? `graded against the ${didToday.length} thing(s) the game says the Sim did today`
+          : 'no interactions on the record today; judged by a person',
     });
   }
 
@@ -743,7 +828,7 @@ export function gradeAnswer(question: BatteryQuestion, answer: string): Question
     return { ...base, pass: false, reason: 'no answer' };
   }
   if (question.mode === 'manual') {
-    return { ...base, pass: false, reason: 'needs a person to judge it' };
+    return { ...base, pass: false, reason: NEEDS_A_PERSON };
   }
 
   // Checked before the mode, because a relative in the wrong role is wrong in every mode
@@ -807,6 +892,18 @@ export function gradeAnswer(question: BatteryQuestion, answer: string): Question
       }
       return { ...base, pass: true, reason: 'denied it, correctly' };
     }
+    case 'activity': {
+      const did = (question.accept ?? []).find((word) => claimsActivity(trimmed, word));
+      if (did) {
+        return { ...base, pass: true, reason: `said "${did}", which the game says it did` };
+      }
+      // No match is NOT evidence the Sim is wrong. "I sat down" against `seating_Sit` is a
+      // correct answer no suffix rule reaches, and a Sim describing a real activity in its
+      // own words lands here too. Failing those would make the grader lie in the direction
+      // the likes question is manual to avoid, so this defers instead: excluded from the
+      // score, put in front of a person, exactly as a manual question is.
+      return { ...base, pass: false, reason: NEEDS_A_PERSON };
+    }
     default: {
       // Whole words only. A substring match passed "Somewhere between holding on and
       // letting go" as saying "old" - the grader finding the answer inside a word that
@@ -830,7 +927,7 @@ export function gradeBattery(
   });
   // A manual question is neither passed nor failed by the machine, so it is excluded from
   // the score rather than counted as a failure.
-  const auto = results.filter((result) => result.reason !== 'needs a person to judge it');
+  const auto = results.filter((result) => result.reason !== NEEDS_A_PERSON);
   return {
     simId,
     simName,

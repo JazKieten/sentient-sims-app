@@ -220,3 +220,43 @@ Judge each character from their own point of view; their private thoughts are th
 Respond with ONLY a JSON object in exactly this shape, covering every character, nothing else:
 {${names.map((name) => `"${name}": {"memory": <1-10>, "action": <1-10>, "action_reason": "...", "unfinished": <true|false>, "continue": <1-10>}`).join(', ')}}`;
 }
+
+// J6 (Jaz's 09-04 handoff, cause 6): a content-free social mixer gives the model nothing
+// to joke or gossip about, so it invents a shared past ("Remember that time Jaz got stuck
+// in the snowbank" - stored as an interaction memory and replayed into 137 later prompt
+// lines). The pre-action for these interactions carries one line telling the actors where
+// the material may come from. Matched on the game's interaction name, case-insensitively.
+export const CONTENT_FREE_SOCIAL_PATTERNS: RegExp[] = [
+  /insidejoke/i,
+  /tell_?funny_?story/i,
+  /tell_?story/i,
+  /gossip/i,
+  /reminisce/i,
+  /tell_?joke/i,
+  /share_?secret/i,
+];
+
+export const CONTENT_FREE_SOCIAL_HINT =
+  'The joke, story or gossip must be about something in this scene or the memories shown, or stay unspecific. Never invent a shared past event.';
+
+export function contentFreeSocialHint(interactionName?: string): string | undefined {
+  if (!interactionName) {
+    return undefined;
+  }
+  return CONTENT_FREE_SOCIAL_PATTERNS.some((pattern) => pattern.test(interactionName))
+    ? CONTENT_FREE_SOCIAL_HINT
+    : undefined;
+}
+
+// The pre-action as the prompt shows it, with the J6 hint appended when the interaction
+// is one of the content-free socials. Anything else is returned byte-identical.
+export function withContentFreeHint(
+  formattedPreAction: string | undefined,
+  interactionName?: string,
+): string | undefined {
+  const hint = contentFreeSocialHint(interactionName);
+  if (!hint || !formattedPreAction) {
+    return formattedPreAction;
+  }
+  return `${formattedPreAction} ${hint}`;
+}

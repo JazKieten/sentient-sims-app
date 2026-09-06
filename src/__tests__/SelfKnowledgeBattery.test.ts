@@ -631,3 +631,75 @@ describe('chat is a person too', () => {
     expect(bare.knownNames).toContain('Chat');
   });
 });
+
+// A role word asserts something checkable, and the grader could previously see only names.
+// Both halves of that failed live on the same household:
+//   Emma Vale, an infant, answered "Mommy and Daddy" - correct - and scored zero twice.
+//   Ehren Alder answered "My dads and Alex" - he has a father and a mother - and passed.
+describe('role words are answers, and they can be wrong', () => {
+  // Emma: mother Tessa, father Milo
+  const emma: SimDossier = {
+    sim_id: '343143310662438423',
+    name: 'Emma Vale',
+    age: 'INFANT',
+    gender: 'FEMALE',
+    family: { parents: ['1', '2'], siblings: [], children: [], steady_ids: [] },
+    household: { id: '800', name: 'Calder', member_ids: ['343143310662438423', '1', '2'] },
+    careers: [],
+    relationships: [
+      { sim_id: '1', name: 'Milo Calder', has_met: true, friendship: 100 },
+      { sim_id: '2', name: 'Tessa Vale', has_met: true, friendship: 100 },
+    ],
+  };
+  const GENDERS = { '1': 'm' as const, '2': 'f' as const };
+  const ask = (id: string, genders?: Record<string, 'm' | 'f'>) => {
+    const found = buildQuestions(emma, [], 'Jaz', genders).find((candidate) => candidate.id === id);
+    if (!found) throw new Error(`no ${id} question`);
+    return found;
+  };
+
+  it('credits an infant who names the roles instead of the names', () => {
+    const graded = gradeAnswer(ask('SELF-household', GENDERS), 'Emma Vale: Mommy and Daddy');
+    expect(graded.pass).toBe(true);
+    expect(graded.contradiction).toBe(false);
+    expect(graded.reason).toContain('who they are');
+  });
+
+  it('catches a plural masculine claim from a girl with one father', () => {
+    const graded = gradeAnswer(ask('SOC-bestfriend', GENDERS), 'Emma Vale: my dads');
+    expect(graded.pass).toBe(false);
+    expect(graded.contradiction).toBe(true);
+  });
+
+  it('catches the wrong role claim even when a real name rides along', () => {
+    // The live Ehren answer, which passed on the name and said something false beside it
+    const graded = gradeAnswer(ask('SOC-bestfriend', GENDERS), 'Emma Vale: My dads and Tessa');
+    expect(graded.pass).toBe(false);
+    expect(graded.contradiction).toBe(true);
+  });
+
+  it('does not report a role word as a person nobody has heard of', () => {
+    const graded = gradeAnswer(ask('SELF-parents', GENDERS), 'Emma Vale: Mommy Tessa and Daddy Milo');
+    expect(graded.pass).toBe(true);
+    expect(graded.warnings ?? []).not.toContain('Daddy');
+    expect(graded.warnings ?? []).not.toContain('Mommy');
+  });
+
+  it('asserts nothing about gender when the genders are unknown', () => {
+    // No genders supplied: "my dads" is unjudgeable rather than wrong, and must not be
+    // failed on a guess
+    const graded = gradeAnswer(ask('SOC-bestfriend'), 'Emma Vale: my dads');
+    expect(graded.contradiction).toBe(false);
+  });
+
+  it('leaves a loose plural neutral alone', () => {
+    // "my parents" with one parent on record is how people talk, and it passed live
+    const single: SimDossier = {
+      ...emma,
+      family: { parents: ['1'], siblings: [], children: [], steady_ids: [] },
+    };
+    const found = buildQuestions(single, [], 'Jaz', GENDERS).find((c) => c.id === 'SELF-household');
+    if (!found) throw new Error('no SELF-household');
+    expect(gradeAnswer(found, 'Emma Vale: my parents').contradiction).toBe(false);
+  });
+});

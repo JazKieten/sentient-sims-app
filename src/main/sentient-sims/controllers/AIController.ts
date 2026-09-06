@@ -180,7 +180,8 @@ export class AIController {
     // Resolved before the questions are built: the speaker's name belongs in knownNames, or
     // a Sim answering the person in front of it by name is reported as a confabulation.
     const speaker = body.speaker || this.ctx.settings.playerSpeakerName || 'Someone';
-    const all = buildQuestions(dossier, todaysMemories, speaker);
+    const genders = this.ctx.semanticMemory.gendersFor((dossier.relationships ?? []).map((edge) => edge.sim_id));
+    const all = buildQuestions(dossier, todaysMemories, speaker, genders);
     const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;
 
     const answers: { question: BatteryQuestion; answer: string; exchangeIds?: number[] }[] = [];

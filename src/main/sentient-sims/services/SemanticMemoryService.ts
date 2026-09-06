@@ -339,6 +339,22 @@ export class SemanticMemoryService {
    * this the facts block named people and left their gender to be guessed from the name,
    * and a sim called a male housemate "she" (live 2026-09-03).
    */
+  // 'm'/'f' for everyone this dossier names, for the battery's gendered role claims. Reads
+  // the same pronouns the prompts use, so the grader and the prompt can never disagree
+  // about who someone is.
+  gendersFor(simIds: string[]): Record<string, 'm' | 'f'> {
+    const genders: Record<string, 'm' | 'f'> = {};
+    for (const simId of simIds) {
+      const pronouns = this.pronounsFor(simId);
+      if (pronouns === 'he/him') {
+        genders[simId] = 'm';
+      } else if (pronouns === 'she/her') {
+        genders[simId] = 'f';
+      }
+    }
+    return genders;
+  }
+
   private pronounsFor(simId: string): string | undefined {
     try {
       const facts = this.facts.getCurrentFacts(simId);

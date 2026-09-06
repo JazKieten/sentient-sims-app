@@ -43,7 +43,31 @@ export type Role = (typeof Role)[keyof typeof Role];
 // from "I live with my parents, Travis and Ariel" (Ariel is his sister, and this passed).
 // Both are live answers from 2026-09-03.
 export const ROLE_WORDS: Record<Role, string[]> = {
-  [Role.PARENT]: ['dad', 'dads', 'mom', 'moms', 'mum', 'mums', 'father', 'mother', 'parent', 'parents', 'folks'],
+  // 'daddy'/'mommy' are how a small child says it, and without them an infant's correct
+  // "Mommy and Daddy" claimed no role at all (live 2026-09-06, Emma Vale).
+  [Role.PARENT]: [
+    'dad',
+    'dads',
+    'daddy',
+    'daddies',
+    'papa',
+    'mom',
+    'moms',
+    'mommy',
+    'mommies',
+    'momma',
+    'mama',
+    'mum',
+    'mums',
+    'mummy',
+    'father',
+    'fathers',
+    'mother',
+    'mothers',
+    'parent',
+    'parents',
+    'folks',
+  ],
   [Role.SIBLING]: ['sister', 'sisters', 'brother', 'brothers', 'sibling', 'siblings', 'sis', 'bro'],
   [Role.CHILD]: ['son', 'sons', 'daughter', 'daughters', 'kid', 'kids', 'child', 'children'],
   [Role.PARTNER]: [
@@ -58,6 +82,108 @@ export const ROLE_WORDS: Record<Role, string[]> = {
     'fiancé',
     'fiancée',
   ],
+};
+
+// What a role word actually claims: whose role, which gender, and how many. The grader
+// could previously see that a role word was present but not what it asserted, so it could
+// neither credit a correct role-only answer nor catch a wrong one. Both happened live:
+// Emma Vale's correct "Mommy and Daddy" scored zero, and "my dads" - from a girl with a
+// father and a mother - passed unremarked.
+type RoleSense = { role: Role; gender: 'm' | 'f' | 'n'; plural: boolean };
+
+const ROLE_SENSES: Record<string, RoleSense> = {
+  dad: { role: Role.PARENT, gender: 'm', plural: false },
+  daddy: { role: Role.PARENT, gender: 'm', plural: false },
+  papa: { role: Role.PARENT, gender: 'm', plural: false },
+  father: { role: Role.PARENT, gender: 'm', plural: false },
+  dads: { role: Role.PARENT, gender: 'm', plural: true },
+  daddies: { role: Role.PARENT, gender: 'm', plural: true },
+  fathers: { role: Role.PARENT, gender: 'm', plural: true },
+  mom: { role: Role.PARENT, gender: 'f', plural: false },
+  mommy: { role: Role.PARENT, gender: 'f', plural: false },
+  momma: { role: Role.PARENT, gender: 'f', plural: false },
+  mama: { role: Role.PARENT, gender: 'f', plural: false },
+  mum: { role: Role.PARENT, gender: 'f', plural: false },
+  mummy: { role: Role.PARENT, gender: 'f', plural: false },
+  mother: { role: Role.PARENT, gender: 'f', plural: false },
+  moms: { role: Role.PARENT, gender: 'f', plural: true },
+  mommies: { role: Role.PARENT, gender: 'f', plural: true },
+  mums: { role: Role.PARENT, gender: 'f', plural: true },
+  mothers: { role: Role.PARENT, gender: 'f', plural: true },
+  parent: { role: Role.PARENT, gender: 'n', plural: false },
+  parents: { role: Role.PARENT, gender: 'n', plural: true },
+  folks: { role: Role.PARENT, gender: 'n', plural: true },
+  brother: { role: Role.SIBLING, gender: 'm', plural: false },
+  bro: { role: Role.SIBLING, gender: 'm', plural: false },
+  brothers: { role: Role.SIBLING, gender: 'm', plural: true },
+  sister: { role: Role.SIBLING, gender: 'f', plural: false },
+  sis: { role: Role.SIBLING, gender: 'f', plural: false },
+  sisters: { role: Role.SIBLING, gender: 'f', plural: true },
+  sibling: { role: Role.SIBLING, gender: 'n', plural: false },
+  siblings: { role: Role.SIBLING, gender: 'n', plural: true },
+  son: { role: Role.CHILD, gender: 'm', plural: false },
+  sons: { role: Role.CHILD, gender: 'm', plural: true },
+  daughter: { role: Role.CHILD, gender: 'f', plural: false },
+  daughters: { role: Role.CHILD, gender: 'f', plural: true },
+  kid: { role: Role.CHILD, gender: 'n', plural: false },
+  kids: { role: Role.CHILD, gender: 'n', plural: true },
+  child: { role: Role.CHILD, gender: 'n', plural: false },
+  children: { role: Role.CHILD, gender: 'n', plural: true },
+  husband: { role: Role.PARTNER, gender: 'm', plural: false },
+  boyfriend: { role: Role.PARTNER, gender: 'm', plural: false },
+  wife: { role: Role.PARTNER, gender: 'f', plural: false },
+  girlfriend: { role: Role.PARTNER, gender: 'f', plural: false },
+  partner: { role: Role.PARTNER, gender: 'n', plural: false },
+  spouse: { role: Role.PARTNER, gender: 'n', plural: false },
+};
+
+// Every role word, for the confabulation check: "Daddy" is capitalised because it is being
+// used as a name, but it is not a person nobody has heard of (live 2026-09-06, Emma Vale
+// warned on 'Daddy' twice).
+const ROLE_VOCABULARY: ReadonlySet<string> = new Set(Object.keys(ROLE_SENSES));
+
+// The role claims an answer makes, deduplicated.
+export function roleClaims(answer: string): RoleSense[] {
+  const found: RoleSense[] = [];
+  for (const [word, sense] of Object.entries(ROLE_SENSES)) {
+    if (
+      containsPhrase(answer, word) &&
+      !found.some((f) => f.role === sense.role && f.gender === sense.gender && f.plural === sense.plural)
+    ) {
+      found.push(sense);
+    }
+  }
+  return found;
+}
+
+// Whether a role claim is true of this Sim's actual family.
+//
+// Gendered claims are checked for number, neutral ones are not, and that asymmetry is
+// deliberate: "my parents, Travis and Ariel" is how people talk even with one parent on
+// record (it passed live and must keep passing), while "my dads" said by someone with one
+// father and one mother is a specific, checkable error. A claim is only ever judged when
+// the genders are known; with none supplied nothing is asserted either way.
+export function roleClaimHolds(
+  sense: RoleSense,
+  roles: Record<string, Role>,
+  genders: Record<string, 'm' | 'f'> | undefined,
+): boolean | undefined {
+  const holders = Object.keys(roles).filter((name) => roles[name] === sense.role);
+  if (holders.length === 0) {
+    return false;
+  }
+  if (sense.gender === 'n' || !genders) {
+    return true;
+  }
+  const matching = holders.filter((name) => genders[name] === sense.gender);
+  return matching.length >= (sense.plural ? 2 : 1);
+}
+
+// A readable word per role and gender, so a reason reads as a sentence.
+const WORD_FOR_SENSE: Record<'m' | 'f' | 'n', Record<Role, string>> = {
+  m: { [Role.PARENT]: 'a father', [Role.SIBLING]: 'a brother', [Role.CHILD]: 'a son', [Role.PARTNER]: 'a husband' },
+  f: { [Role.PARENT]: 'a mother', [Role.SIBLING]: 'a sister', [Role.CHILD]: 'a daughter', [Role.PARTNER]: 'a wife' },
+  n: { [Role.PARENT]: 'a parent', [Role.SIBLING]: 'a sibling', [Role.CHILD]: 'a child', [Role.PARTNER]: 'a partner' },
 };
 
 export type BatteryQuestion = {
@@ -87,6 +213,9 @@ export type BatteryQuestion = {
   // Every name this Sim could legitimately say: everyone they have met, themselves, their
   // household. Anything else capitalised in an answer is reported as an unknown name.
   knownNames?: string[];
+  // 'm'/'f' by name, for the people this Sim is related to, so a gendered role claim
+  // ("my dads") can be checked against who those people actually are.
+  genders?: Record<string, 'm' | 'f'>;
   note?: string;
 };
 
@@ -484,7 +613,7 @@ export function unknownNames(answer: string, known: string[]): string[] {
         continue;
       }
       const lowered = word.toLowerCase();
-      if (NOT_A_NAME.has(lowered) || knownForms.has(lowered) || found.includes(word)) {
+      if (NOT_A_NAME.has(lowered) || ROLE_VOCABULARY.has(lowered) || knownForms.has(lowered) || found.includes(word)) {
         continue;
       }
       found.push(word);
@@ -575,6 +704,9 @@ export function buildQuestions(
   // confabulation warning (live 2026-09-06, Tessa Vale, SELF-parents). NON_SIM_PEOPLE is
   // folded in on top, so no caller has to remember that chat is a person too.
   speaker?: string,
+  // 'm'/'f' by sim id, from the fact store. Only the subject's own gender rides the
+  // dossier, so a gendered role claim about anyone else cannot be judged without this.
+  gendersBySimId?: Record<string, 'm' | 'f'>,
 ): BatteryQuestion[] {
   const questions: BatteryQuestion[] = [];
   const family = dossier.family ?? {};
@@ -810,10 +942,22 @@ export function buildQuestions(
     ...new Set([...everyone, dossier.name ?? '', dossier.household?.name ?? '', speaker ?? '', ...NON_SIM_PEOPLE]),
   ].filter(Boolean);
 
+  // Ids are what the fact store keys on; every question speaks names.
+  const genders: Record<string, 'm' | 'f'> = {};
+  for (const edge of dossier.relationships ?? []) {
+    const gender = gendersBySimId?.[edge.sim_id];
+    if (edge.name && gender) {
+      genders[edge.name] = gender;
+    }
+  }
+
   return questions.map((question) => ({
     ...question,
     roles,
     knownNames,
+    // Empty means UNKNOWN, not "nobody is male". Handed through as {} it made every
+    // gendered role claim false and broke four passing tests at once.
+    genders: Object.keys(genders).length > 0 ? genders : undefined,
     roleLabel: ROLE_LABELS[question.id],
     affirmations: question.mode === 'denial' ? AFFIRMATIONS[question.id] : undefined,
     denials: EXTRA_DENIALS[question.id],
@@ -893,9 +1037,32 @@ export function gradeAnswer(question: BatteryQuestion, answer: string): Question
           reason: `named ${wronglyNamed.join(', ')}, who is not${label}`,
         };
       }
-      return named.length > 0
-        ? { ...base, pass: true, reason: `named ${named.join(', ')}` }
-        : { ...base, pass: false, reason: 'named none of them' };
+      // A role word asserts something checkable about the family, whether or not a name
+      // came with it. "My dads", said by a Sim with a father and a mother, is wrong even
+      // when the rest of the answer is right - live 2026-09-05 it passed unremarked
+      // because the grader could only see names.
+      const claims = roleClaims(trimmed);
+      const falseClaim = claims.find((sense) => roleClaimHolds(sense, roles, question.genders) === false);
+      if (falseClaim) {
+        const said = `${falseClaim.plural ? 'more than one ' : ''}${WORD_FOR_SENSE[falseClaim.gender][falseClaim.role]}`;
+        return { ...base, pass: false, contradiction: true, reason: `claimed ${said}, which is not who they are` };
+      }
+      if (named.length > 0) {
+        return { ...base, pass: true, reason: `named ${named.join(', ')}` };
+      }
+      // No name, but a true role word that points at the people the question is about:
+      // "Mommy and Daddy" IS who an infant lives with, and it named nobody (live
+      // 2026-09-06, Emma Vale, scored zero on two questions she answered correctly).
+      const describing = claims.filter(
+        (sense) =>
+          roleClaimHolds(sense, roles, question.genders) === true &&
+          question.expected.some((name) => roles[name] === sense.role),
+      );
+      if (describing.length > 0) {
+        const words = describing.map((sense) => WORD_FOR_SENSE[sense.gender][sense.role]);
+        return { ...base, pass: true, reason: `said ${[...new Set(words)].join(' and ')}, which is who they are` };
+      }
+      return { ...base, pass: false, reason: 'named none of them' };
     }
     case 'denial': {
       // A denial may mention the Sim's own relatives in passing - "No siblings, just my

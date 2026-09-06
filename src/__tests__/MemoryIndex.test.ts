@@ -58,6 +58,31 @@ describe('MemoryIndexRepository', () => {
     expect(ctx.memoryIndexRepository.getEmbedding('9999', 'fake-model')).toBeUndefined();
   });
 
+  // Found live 2026-09-05: INSERT OR REPLACE rewrites the whole row, so annotating a memory
+  // dropped the game day it was stamped with at creation. 11,474 of 11,499 rows on the live
+  // save had lost theirs; the 25 that kept one were outcome rows, which carry no text to
+  // annotate. The memory-recall battery grades against that day, so it graded nothing.
+  it('keeps the game day a memory was stamped with when the annotator rates it', () => {
+    const ctx = loadedContext(`memory-index-game-day-${Math.random().toString(36).slice(2)}`);
+    ctx.memoryRepository.setOnMemoryUpserted(() => {});
+    ctx.memoryRepository.setGameDayProvider(() => 42);
+
+    const memory = createMemory(ctx, { content: 'walked to the gym before work' });
+    const memoryId = String(memory.id);
+    expect(ctx.memoryIndexRepository.getIndex(memoryId)?.game_day).toEqual(42);
+
+    ctx.memoryIndexRepository.upsertIndex({ memory_id: memoryId, importance: 8 });
+
+    expect(ctx.memoryIndexRepository.getIndex(memoryId)?.importance).toEqual(8);
+    expect(ctx.memoryIndexRepository.getIndex(memoryId)?.game_day).toEqual(42);
+
+    // And the owner still survives the same write, as it always has
+    ctx.memoryIndexRepository.upsertIndex({ memory_id: memoryId, owner_participant_id: 100 });
+    ctx.memoryIndexRepository.upsertIndex({ memory_id: memoryId, importance: 3 });
+    expect(String(ctx.memoryIndexRepository.getIndex(memoryId)?.owner_participant_id)).toEqual('100');
+    expect(ctx.memoryIndexRepository.getIndex(memoryId)?.game_day).toEqual(42);
+  });
+
   it('roundtrips index rows and per-model embeddings, cascading deletes with the memory', () => {
     const ctx = loadedContext('memory-index-crud');
     // Manual index management below must not race the automatic background annotation

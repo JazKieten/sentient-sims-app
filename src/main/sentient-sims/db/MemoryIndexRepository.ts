@@ -7,6 +7,7 @@ type MemoryIndexRow = {
   memory_id: bigint;
   importance?: bigint | null;
   owner_participant_id?: bigint | null;
+  game_day?: bigint | null;
 };
 
 type MemoryWithIndexRow = MemoryRow & {
@@ -42,6 +43,7 @@ export class MemoryIndexRepository extends Repository {
       memory_id: row.memory_id.toString(),
       importance: row.importance === null || row.importance === undefined ? row.importance : Number(row.importance),
       owner_participant_id: row.owner_participant_id,
+      game_day: row.game_day === null || row.game_day === undefined ? row.game_day : Number(row.game_day),
     };
   }
 
@@ -57,16 +59,31 @@ export class MemoryIndexRepository extends Repository {
   // deleted (or the db reloaded). The WHERE EXISTS guard makes a stale upsert a
   // silent no-op instead of a FOREIGN KEY error. An undefined owner keeps whatever
   // owner the row already has â€” the annotator overwrites ratings, never privacy.
+  //
+  // INSERT OR REPLACE deletes the row and writes a new one, so every column this
+  // statement does not name is lost. `game_day` (migration 019) was not carried through
+  // when it was added, and the annotator runs on every memory that has text: on the live
+  // save 11,474 of 11,499 rows had lost their day, and the 25 that kept one were all
+  // outcome rows, which have no content to annotate (found 2026-09-05).
   upsertIndex(index: MemoryIndexEntity) {
     const owner = index.owner_participant_id === undefined ? null : index.owner_participant_id;
     return this.dbService
       .getDb()
       .prepare(
-        `INSERT OR REPLACE INTO memory_index(memory_id, importance, owner_participant_id)
-         SELECT ?, ?, COALESCE(?, (SELECT owner_participant_id FROM memory_index WHERE memory_id = ?))
+        `INSERT OR REPLACE INTO memory_index(memory_id, importance, owner_participant_id, game_day)
+         SELECT ?, ?,
+                COALESCE(?, (SELECT owner_participant_id FROM memory_index WHERE memory_id = ?)),
+                (SELECT game_day FROM memory_index WHERE memory_id = ?)
          WHERE EXISTS (SELECT 1 FROM memory WHERE id = ?)`,
       )
-      .run([BigInt(index.memory_id), index.importance ?? null, owner, BigInt(index.memory_id), BigInt(index.memory_id)]);
+      .run([
+        BigInt(index.memory_id),
+        index.importance ?? null,
+        owner,
+        BigInt(index.memory_id),
+        BigInt(index.memory_id),
+        BigInt(index.memory_id),
+      ]);
   }
 
   // One row per (memory, model): re-embedding under the same model replaces in place,
@@ -82,7 +99,7 @@ export class MemoryIndexRepository extends Repository {
       .run([BigInt(embedding.memory_id), embedding.embedding_model, embedding.embedding, BigInt(embedding.memory_id)]);
   }
 
-  // Drops every model's vector for a memory — for when its text changed and the stored
+  // Drops every model's vector for a memory ï¿½ for when its text changed and the stored
   // embeddings no longer describe it.
   deleteEmbeddings(memoryId: string) {
     return this.dbService
@@ -93,12 +110,12 @@ export class MemoryIndexRepository extends Repository {
 
   // Recent memories involving any of the given participants, joined with their retrieval
   // metadata (LEFT JOINs: rows the annotator hasn't reached yet still show up, with null
-  // importance/embedding). Only the given model's embedding is joined — vectors from other
+  // importance/embedding). Only the given model's embedding is joined ï¿½ vectors from other
   // models aren't comparable to the query. Newest-first window that MemoryRetrievalService
   // scores in process.
   // ownerScope gates private rows: a memory with a non-null owner only surfaces when that
   // owner is in scope (a sim retrieving for itself, or a scene the owner is part of).
-  // Omitted scope means shared rows only — privacy fails closed.
+  // Omitted scope means shared rows only ï¿½ privacy fails closed.
   getRetrievalCandidates(
     participantIds: string[],
     limit: number,

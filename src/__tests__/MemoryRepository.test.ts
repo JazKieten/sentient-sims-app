@@ -379,3 +379,79 @@ describe('MemoryRepository', () => {
     expect(updated.interaction_name).toEqual('updated_name');
   });
 });
+
+// getOwnDayMemories is the battery's MEM-today oracle. Both halves of this were live bugs
+// on 2026-09-05, one after the other: first it returned other Sims' diaries about the
+// subject, then, tightened onto game_day, it returned nothing at all because 30,378 of
+// ~30,522 memory_index rows on the real save have game_day NULL.
+describe('getOwnDayMemories', () => {
+  const ME = '821650642008040319';
+  const SOMEONE_ELSE = '121340882759582053';
+
+  const load = () => {
+    const ctx = mockApiContext();
+    fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+    ctx.db.loadDatabase({ sessionId: '7981724', saveId: '3' });
+    return ctx;
+  };
+
+  it("returns the Sim's own rows even when nothing stamped a game day", () => {
+    const ctx = load();
+    // No gameDayProvider set, so every row lands with game_day NULL - the live case
+    ctx.memoryRepository.createMemory({
+      memory: { location_id: 1, content: "Ehren Alder tried 'dance'", interaction_name: 'generic_Dance' },
+      participants: [{ id: ME }],
+    });
+
+    const rows = ctx.memoryRepository.getOwnDayMemories(ME, 605, 20);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].interaction_name).toEqual('generic_Dance');
+  });
+
+  it("leaves out another Sim's diary that merely lists this Sim as present", () => {
+    const ctx = load();
+    // A reflection lists everyone who was in the scene, which is how a toddler's "today"
+    // used to come back as his parents' diaries about him
+    ctx.memoryRepository.createMemory({
+      memory: { location_id: 1, content: 'Jonah Alder (diary): today was quiet', event_type: 'reflection' },
+      participants: [{ id: ME }, { id: SOMEONE_ELSE }],
+      index: { owner: SOMEONE_ELSE },
+    });
+    ctx.memoryRepository.createMemory({
+      memory: { location_id: 1, content: 'Ehren Alder (diary): I danced', event_type: 'reflection' },
+      participants: [{ id: ME }],
+      index: { owner: ME },
+    });
+
+    const contents = ctx.memoryRepository.getOwnDayMemories(ME, 605, 20).map((row) => row.content);
+    expect(contents).toEqual(['Ehren Alder (diary): I danced']);
+  });
+
+  it('excludes a row explicitly stamped with a different day', () => {
+    const ctx = load();
+    ctx.memoryRepository.setGameDayProvider(() => 604);
+    ctx.memoryRepository.createMemory({
+      memory: { location_id: 1, content: 'yesterday' },
+      participants: [{ id: ME }],
+    });
+    ctx.memoryRepository.setGameDayProvider(() => 605);
+    ctx.memoryRepository.createMemory({
+      memory: { location_id: 1, content: 'today' },
+      participants: [{ id: ME }],
+    });
+
+    const contents = ctx.memoryRepository.getOwnDayMemories(ME, 605, 20).map((row) => row.content);
+    expect(contents).toEqual(['today']);
+  });
+
+  it('returns the newest rows, oldest first, when more exist than the limit', () => {
+    const ctx = load();
+    ['first', 'second', 'third'].forEach((content) => {
+      ctx.memoryRepository.createMemory({ memory: { location_id: 1, content }, participants: [{ id: ME }] });
+    });
+
+    // The limit has to bite on the NEWEST rows, but a day reads oldest-first
+    const contents = ctx.memoryRepository.getOwnDayMemories(ME, 605, 2).map((row) => row.content);
+    expect(contents).toEqual(['second', 'third']);
+  });
+});

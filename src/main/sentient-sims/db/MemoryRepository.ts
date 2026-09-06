@@ -314,6 +314,17 @@ export class MemoryRepository extends Repository {
   //
   // So: rows this Sim took part in, on this game day, minus OTHER Sims' diary prose. His own
   // reflection stays; it is a first-person account of his day, which is exactly the question.
+  //
+  // game_day is a HINT here, never a requirement, and that is not tidiness - requiring it
+  // returned nothing at all. Measured on the live save 2026-09-05: 30,378 of ~30,522
+  // memory_index rows have game_day NULL, against 13 on the current day. The stamp is
+  // written on create but only `if (gameDay !== undefined)`, and gameDayProvider is
+  // undefined whenever no state report is loaded, so most rows never get one. Ehren had
+  // 1,188 rows and none on day 605; the question was not built at all, which is worse than
+  // the bug it replaced. So an unstamped row is included and a row stamped with a DIFFERENT
+  // day is excluded, and the most-recent-N bound does the rest of the work: a Sim makes
+  // enough rows in a day that its newest `limit` are today's whether or not anyone said so.
+  // As stamping improves this tightens on its own and needs no second change.
   getOwnDayMemories(participantId: string, gameDay: number, limit: number): MemoryEntity[] {
     let participant: bigint;
     try {
@@ -327,19 +338,20 @@ export class MemoryRepository extends Repository {
         `
           SELECT DISTINCT memory.* FROM memory
           INNER JOIN memory_participants ON memory_participants.memory_id = memory.id
-          INNER JOIN memory_index ON memory_index.memory_id = memory.id
+          LEFT JOIN memory_index ON memory_index.memory_id = memory.id
           WHERE memory_participants.participant_id = ?
-            AND memory_index.game_day = ?
+            AND (memory_index.game_day IS NULL OR memory_index.game_day = ?)
             AND (memory.event_type IS NULL
                  OR memory.event_type != 'reflection'
                  OR memory_index.owner_participant_id = ?)
-          ORDER BY memory.timestamp ASC, memory.id ASC
+          ORDER BY memory.timestamp DESC, memory.id DESC
           LIMIT ?;
         `,
       )
       .safeIntegers()
       .all([participant, gameDay, participant, limit]) as MemoryRow[];
-    return rows.map(toMemoryEntity);
+    // Newest-first is how the LIMIT has to bite; oldest-first is how a day reads.
+    return rows.map(toMemoryEntity).reverse();
   }
 
   updateMemory(memory: MemoryEntity) {

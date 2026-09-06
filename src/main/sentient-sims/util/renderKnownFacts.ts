@@ -121,6 +121,14 @@ export function familyBitWords(bit: string): string {
     niecenephew: 'their niece or nephew',
     cousin: 'their cousin',
     spouse: 'their spouse',
+    // The game keeps step relations OUT of genealogy - a stepparent appears in nobody's
+    // family tree but their own - so the bit is the only record of one that exists. Live
+    // 2026-09-05: Alex Moyer read to her stepson Ehren as "you live together" and nothing
+    // more, while both his birth parents read as parents, and he spent the day guessing
+    // what she was to him ("my dads", "two moms", "Daddy Jonah and Alex").
+    stepparent: 'their stepparent',
+    stepchild: 'their stepchild',
+    stepsibling: 'their stepsibling',
   };
   return table[lowered] ?? `their ${pretty(role).toLowerCase()}`;
 }
@@ -245,6 +253,9 @@ const GENDERED_ROLES: Partial<Record<string, [string, string]>> = {
   'your parent': ['your father', 'your mother'],
   'your grandparent': ['your grandfather', 'your grandmother'],
   'your grandchild': ['your grandson', 'your granddaughter'],
+  'your stepparent': ['your stepfather', 'your stepmother'],
+  'your stepchild': ['your stepson', 'your stepdaughter'],
+  'your stepsibling': ['your stepbrother', 'your stepsister'],
 };
 
 function genderedRole(role: string, pronouns?: string): string {

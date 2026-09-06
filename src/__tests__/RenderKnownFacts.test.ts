@@ -219,4 +219,48 @@ describe('renderKnownFacts', () => {
     expect(brother()).toContain('- Mackenzie Scott: your sibling, you live together');
     expect(brother()).not.toContain('brother sister');
   });
+
+  it('names a stepparent, who appears in no genealogy at all', () => {
+    // The game keeps step relations out of genealogy - live 2026-09-05, Alex Moyer's own
+    // family tree labels Ehren "Stepson" while HIS tree has no Alex in it - so the family
+    // bit is the only record of one. Until it was carried, the woman raising him read as
+    // "you live together" and nothing more, while both birth parents read as parents, and
+    // he spent the day guessing ("my dads", "two moms").
+    const alex = (pronouns?: string) =>
+      render({
+        lifePeople: [
+          {
+            simId: '400',
+            name: 'Alex Moyer',
+            facts: [
+              fact(FactPredicate.FAMILY_BIT, 'family_Target_IsStepparentOf_Actor', '400'),
+              fact(FactPredicate.HOUSEHOLD_MEMBER, undefined, '400'),
+            ],
+            relationship: { hasMet: true, friendship: 60 },
+            pronouns,
+          },
+        ],
+      });
+    expect(alex('she/her')).toContain('- Alex Moyer (she/her): your stepmother, you live together');
+    expect(alex('he/him')).toContain('- Alex Moyer (he/him): your stepfather, you live together');
+    expect(alex()).toContain('- Alex Moyer: your stepparent, you live together');
+  });
+
+  it('names a stepchild from the other side', () => {
+    const ehren = render({
+      lifePeople: [
+        {
+          simId: '500',
+          name: 'Ehren Alder',
+          facts: [
+            fact(FactPredicate.FAMILY_BIT, 'family_Target_IsStepchildOf_Actor', '500'),
+            fact(FactPredicate.HOUSEHOLD_MEMBER, undefined, '500'),
+          ],
+          relationship: { hasMet: true, friendship: 100 },
+          pronouns: 'he/him',
+        },
+      ],
+    });
+    expect(ehren).toContain('- Ehren Alder (he/him): your stepson, you live together');
+  });
 });

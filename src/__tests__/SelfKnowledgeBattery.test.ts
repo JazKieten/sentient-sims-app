@@ -537,3 +537,29 @@ describe('MEM-today grades a Sim against what the game says the Sim did', () => 
     expect(graded.warnings).toContain('Jess');
   });
 });
+
+// A first name that is also an ordinary English word. There is a townie called Care Ren,
+// and matching her first name case-insensitively turned every "take care of me" into a
+// confabulation: live 2026-09-05, Ehren's answer came back as
+// `named Alex Moyer, Care Ren, who is not a parent`.
+describe('a bare first name has to look like a name', () => {
+  it('does not find Care Ren inside "take care of me"', () => {
+    expect(mentions('Jonah and Alex take care of me', 'Care Ren')).toBe(false);
+    expect(mentions('I need to take care of the plants', 'Care Ren')).toBe(false);
+  });
+
+  it('still finds her when she is actually named', () => {
+    expect(mentions('Care was there too', 'Care Ren')).toBe(true);
+    expect(mentions('I saw Care Ren at the park', 'Care Ren')).toBe(true);
+    // The full name is matched however it is capitalised - nobody types that by accident
+    expect(mentions('i saw care ren at the park', 'Care Ren')).toBe(true);
+  });
+
+  it('leaves ordinary first-name matching alone', () => {
+    expect(mentions('Ariel, mostly.', 'Ariel Scott')).toBe(true);
+    expect(mentions('Daddy Jonah and Alex', 'Alex Moyer')).toBe(true);
+    expect(mentions('I went to the arielle cafe', 'Ariel Scott')).toBe(false);
+    // A capitalised word that merely starts with the name is still not the name
+    expect(mentions('I was Careful about it', 'Care Ren')).toBe(false);
+  });
+});

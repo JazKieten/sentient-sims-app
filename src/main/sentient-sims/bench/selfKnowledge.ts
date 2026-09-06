@@ -222,13 +222,25 @@ export function containsPhrase(haystack: string, phrase: string): boolean {
   return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(haystack.toLowerCase());
 }
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export function mentions(answer: string, name: string): boolean {
-  const lowered = answer.toLowerCase();
-  return nameForms(name).some((form) => {
-    const needle = form.toLowerCase();
-    // Word-boundary match so "Ariel" does not match inside another word
-    return new RegExp(`(^|[^a-z])${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(lowered);
-  });
+  const [full, first] = nameForms(name);
+  // The FULL name however it is capitalised: nobody writes "care ren" by accident.
+  // Word-boundary match so "Ariel" does not match inside another word.
+  if (new RegExp(`(^|[^a-z])${escapeRegExp(full.toLowerCase())}([^a-z]|$)`).test(answer.toLowerCase())) {
+    return true;
+  }
+  if (!first) {
+    return false;
+  }
+  // A bare FIRST name has to look like a name, which means the capital. There is a townie
+  // called Care Ren, and matching "care" case-insensitively made every "take care of me" a
+  // confabulation against her: live 2026-09-05, Ehren's "Jonah and Alex take care of me"
+  // came back as `named Alex Moyer, Care Ren, who is not a parent`. Requiring the capital
+  // is one general rule and needs no list of which names happen to be English words - the
+  // same trap the 09-03 memory cleanup hit with LIKE '%Lil%' catching Khalil and lilting.
+  return new RegExp(`(^|[^A-Za-z])${escapeRegExp(first)}([^A-Za-z]|$)`).test(answer);
 }
 
 // A Sim denies something the way a person does, not the way a form does. The first live

@@ -563,3 +563,71 @@ describe('a bare first name has to look like a name', () => {
     expect(mentions('I was Careful about it', 'Care Ren')).toBe(false);
   });
 });
+
+// The person asking is not a stranger the Sim invented. Live 2026-09-06: Tessa Vale
+// answered "I don't have any, Jaz" and the run came back with
+// `warnings: ['SELF-parents: Jaz']` - the grader reporting the player as a confabulation.
+describe('the speaker is someone the Sim knows', () => {
+  const tessa: SimDossier = {
+    sim_id: '894834006093793345',
+    name: 'Tessa Vale',
+    age: 'YOUNGADULT',
+    gender: 'FEMALE',
+    family: { parents: [], siblings: [], children: [], steady_ids: [] },
+    household: { id: '800', name: 'Calder', member_ids: ['894834006093793345'] },
+    careers: [],
+    relationships: [],
+  };
+  const parents = (speaker?: string) => {
+    const found = buildQuestions(tessa, [], speaker).find((candidate) => candidate.id === 'SELF-parents');
+    if (!found) throw new Error('no SELF-parents question');
+    return found;
+  };
+
+  it('does not report the person asking as an unknown name', () => {
+    const graded = gradeAnswer(parents('Jaz'), "Tessa Vale: I don't have any, Jaz");
+    expect(graded.pass).toBe(true);
+    expect(graded.warnings ?? []).not.toContain('Jaz');
+  });
+
+  it('still reports a name that belongs to nobody', () => {
+    const graded = gradeAnswer(parents('Jaz'), "Tessa Vale: I don't have any, Jaz. Ask Bartholomew.");
+    expect(graded.warnings).toContain('Bartholomew');
+  });
+
+  it('reports the speaker again when nobody was named as the asker', () => {
+    // No speaker passed: "Jaz" is then genuinely someone the grader has never heard of
+    expect(gradeAnswer(parents(), "Tessa Vale: I don't have any, Jaz").warnings).toContain('Jaz');
+  });
+});
+
+// Chat is a person in the fiction with no sim_id: Sims address it by name, it answers, and
+// it votes on things that change the save. The grader has to know it exists.
+describe('chat is a person too', () => {
+  const tessa: SimDossier = {
+    sim_id: '894834006093793345',
+    name: 'Tessa Vale',
+    age: 'YOUNGADULT',
+    family: { parents: [], siblings: [], children: [], steady_ids: [] },
+    household: { id: '800', name: 'Calder', member_ids: ['894834006093793345'] },
+    careers: [],
+    relationships: [],
+  };
+  const question = () => {
+    const found = buildQuestions(tessa, [], 'Jaz').find((candidate) => candidate.id === 'SELF-parents');
+    if (!found) throw new Error('no SELF-parents question');
+    return found;
+  };
+
+  it('does not report chat as an invented person', () => {
+    const graded = gradeAnswer(question(), 'Tessa Vale: None, sorry Chat!');
+    expect(graded.warnings ?? []).not.toContain('Chat');
+    expect(graded.pass).toBe(true);
+  });
+
+  it('knows chat even when nobody passed a speaker', () => {
+    const bare = buildQuestions(tessa).find((candidate) => candidate.id === 'SELF-parents');
+    if (!bare) throw new Error('no SELF-parents question');
+    expect(bare.knownNames).toContain('Chat');
+  });
+});

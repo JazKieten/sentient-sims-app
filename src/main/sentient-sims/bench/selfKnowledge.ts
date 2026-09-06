@@ -21,6 +21,12 @@ export type GradeMode = 'names' | 'denial' | 'text' | 'activity' | 'manual';
 // these from the total, so it has to be the same string in every place that defers.
 export const NEEDS_A_PERSON = 'needs a person to judge it';
 
+// People in the conversation who are not Sims and have no sim_id to be found under. The
+// stream's chat is one of them: Sims address it by name, it answers, and it decides things
+// - it is a person in the fiction even though the game has never heard of it. Without this
+// a Sim saying "hi Chat" is reported as having invented someone.
+export const NON_SIM_PEOPLE = ['Chat'];
+
 // The roles a Sim can put someone in while answering. A const object rather than an enum,
 // for the reason FactPredicate is one: these strings travel through results and HTTP.
 export const Role = {
@@ -561,7 +567,15 @@ function namesFor(dossier: SimDossier, ids: string[] | undefined): string[] {
  * Questions whose answer the dossier cannot supply are dropped rather than asked with no
  * oracle: an ungraded question in a graded battery is just noise.
  */
-export function buildQuestions(dossier: SimDossier, todaysMemories: DayActivity[] = []): BatteryQuestion[] {
+export function buildQuestions(
+  dossier: SimDossier,
+  todaysMemories: DayActivity[] = [],
+  // Who is asking. A Sim answering "I don't have any, Jaz" is being polite, not
+  // inventing a person, and without this the speaker's own name came back as a
+  // confabulation warning (live 2026-09-06, Tessa Vale, SELF-parents). NON_SIM_PEOPLE is
+  // folded in on top, so no caller has to remember that chat is a person too.
+  speaker?: string,
+): BatteryQuestion[] {
   const questions: BatteryQuestion[] = [];
   const family = dossier.family ?? {};
   const everyone = (dossier.relationships ?? []).map((edge) => edge.name ?? '').filter(Boolean);
@@ -792,7 +806,9 @@ export function buildQuestions(dossier: SimDossier, todaysMemories: DayActivity[
   assign(children, Role.CHILD);
   assign(partners, Role.PARTNER);
 
-  const knownNames = [...new Set([...everyone, dossier.name ?? '', dossier.household?.name ?? ''])].filter(Boolean);
+  const knownNames = [
+    ...new Set([...everyone, dossier.name ?? '', dossier.household?.name ?? '', speaker ?? '', ...NON_SIM_PEOPLE]),
+  ].filter(Boolean);
 
   return questions.map((question) => ({
     ...question,

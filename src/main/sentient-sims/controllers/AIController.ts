@@ -177,9 +177,11 @@ export class AIController {
             .map((memory) => ({ content: memory.content ?? '', interaction: memory.interaction_name }))
             .filter((activity) => activity.content);
 
-    const all = buildQuestions(dossier, todaysMemories);
-    const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;
+    // Resolved before the questions are built: the speaker's name belongs in knownNames, or
+    // a Sim answering the person in front of it by name is reported as a confabulation.
     const speaker = body.speaker || this.ctx.settings.playerSpeakerName || 'Someone';
+    const all = buildQuestions(dossier, todaysMemories, speaker);
+    const questions = body.only?.length ? all.filter((question) => body.only?.includes(question.id)) : all;
 
     const answers: { question: BatteryQuestion; answer: string; exchangeIds?: number[] }[] = [];
     for (const question of questions) {

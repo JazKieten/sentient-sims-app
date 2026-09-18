@@ -167,13 +167,24 @@ export function playTTSLines(
 // Called as each scene line starts playing so the in-game subtitle appears in step
 // with the voice playback; the preamble (the scene's driving action) heads each
 // line's subtitle section in-game
-export function sendSceneLineToMod(line: DialogueLine & { preamble?: string }) {
+export function sendSceneLineToMod(line: DialogueLine & { preamble?: string; voiced?: boolean }) {
   sendModNotification({
     type: ModWebsocketMessageType.SCENE_LINE,
     speaker: line.speaker,
     // Scene lines land in the same Flash htmlText list as memories — see neutralizeMarkup
     text: neutralizeMarkup(line.text),
     preamble: line.preamble ? neutralizeMarkup(line.preamble) : line.preamble,
+    // false when no audio plays for the line (TTS off, fetch failed): the mod moves the
+    // speaker's mouth only while a voice is heard. Omitted (undefined) means voiced.
+    voiced: line.voiced,
+  });
+}
+
+// Called when a scene line's audio has finished so the mod stops the speaker's mouth
+export function sendSceneLineEndedToMod(line: DialogueLine) {
+  sendModNotification({
+    type: ModWebsocketMessageType.SCENE_LINE_ENDED,
+    speaker: line.speaker,
   });
 }
 

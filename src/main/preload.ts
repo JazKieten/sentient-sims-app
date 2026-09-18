@@ -149,8 +149,11 @@ const electronHandler = {
 
     return () => ipcRenderer.removeListener('on-voice', callback);
   },
-  notifySceneLineShown: (line: { speaker: string; text: string; preamble?: string }) => {
+  notifySceneLineShown: (line: { speaker: string; text: string; preamble?: string; voiced?: boolean }) => {
     ipcRenderer.send('scene-line-shown', line);
+  },
+  notifySceneLineEnded: (line: { speaker: string; text: string }) => {
+    ipcRenderer.send('scene-line-ended', line);
   },
   notifySceneDropped: (pacedText: string) => {
     ipcRenderer.send('scene-dropped', pacedText);

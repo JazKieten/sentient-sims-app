@@ -126,7 +126,11 @@ export function useElevenLabsTTS(): TTSHook {
   );
 
   const speakLines = useCallback(
-    async (lines: DialogueLine[], onLineStart?: (line: DialogueLine) => void): Promise<void> => {
+    async (
+      lines: DialogueLine[],
+      onLineStart?: (line: DialogueLine, voiced: boolean) => void,
+      onLineEnd?: (line: DialogueLine) => void,
+    ): Promise<void> => {
       setError(undefined);
       playSessionRef.current += 1;
       const session = playSessionRef.current;
@@ -170,8 +174,12 @@ export function useElevenLabsTTS(): TTSHook {
               stream.cancel().catch(() => {});
               break;
             }
-            onLineStart?.(speakable[0]);
-            await playStream(stream);
+            onLineStart?.(speakable[0], true);
+            try {
+              await playStream(stream);
+            } finally {
+              onLineEnd?.(speakable[0]);
+            }
             played = true;
           } catch (err: any) {
             // Fall back to the buffered path below
@@ -189,18 +197,23 @@ export function useElevenLabsTTS(): TTSHook {
             break;
           }
 
-          onLineStart?.(speakable[i]);
-          if (audioUrl) {
-            try {
-              await playUrl(audioUrl);
-            } catch (err: any) {
-              const errorMessage = `TTS playback failed: ${err instanceof Error ? err.message : String(err)}`;
-              log.error(errorMessage);
-              setError(errorMessage);
+          onLineStart?.(speakable[i], audioUrl !== null);
+          try {
+            if (audioUrl) {
+              try {
+                await playUrl(audioUrl);
+              } catch (err: any) {
+                const errorMessage = `TTS playback failed: ${err instanceof Error ? err.message : String(err)}`;
+                log.error(errorMessage);
+                setError(errorMessage);
+              }
+            } else {
+              // No audio to time the subtitle — hold for its reading time instead
+              await pacedDelay(sceneLineReadingHoldMs(speakable[i].text));
             }
-          } else {
-            // No audio to time the subtitle — hold for its reading time instead
-            await pacedDelay(sceneLineReadingHoldMs(speakable[i].text));
+          } finally {
+            // Whatever ended the line (audio done, error, stop()), the mod hears it
+            onLineEnd?.(speakable[i]);
           }
         }
 

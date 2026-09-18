@@ -70,9 +70,11 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
   // V-1: the game clock drives playback (user pause holds audio + the scene queue;
   // speed 2/3 paces faster). Mod-initiated pauses are filtered out in setClockState.
   useEffect(() => {
-    const remove = window.electron.onClockState((_event: unknown, state: { speed: string; paused: boolean; paused_by?: 'user' | 'mod' | null }) => {
-      setClockState(state);
-    });
+    const remove = window.electron.onClockState(
+      (_event: unknown, state: { speed: string; paused: boolean; paused_by?: 'user' | 'mod' | null }) => {
+        setClockState(state);
+      },
+    );
     return () => {
       remove();
     };
@@ -122,11 +124,18 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       if (lines.length === 0) return;
 
       const notifyLineShown = paced
-        ? (line: DialogueLine) => {
+        ? (line: DialogueLine, voiced: boolean) => {
             // A skipSceneLine line's subtitle was already sent directly by the main
             // process (e.g. a Twitch question) — reporting it again would double it
             if (line.skipSceneLine) return;
-            window.electron.notifySceneLineShown({ speaker: line.speaker, text: line.text, preamble });
+            window.electron.notifySceneLineShown({ speaker: line.speaker, text: line.text, preamble, voiced });
+          }
+        : undefined;
+      // The mod moves the speaker's mouth from line start to line end
+      const notifyLineEnded = paced
+        ? (line: DialogueLine) => {
+            if (line.skipSceneLine) return;
+            window.electron.notifySceneLineEnded({ speaker: line.speaker, text: line.text });
           }
         : undefined;
 
@@ -134,7 +143,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       const hasCastVoices = lines.some((line) => line.voiceId);
 
       if (aiSettings.ttsEnabled && (uniqueSpeakers.size > 1 || hasCastVoices) && tts?.speakLines) {
-        await tts.speakLines(lines, notifyLineShown);
+        await tts.speakLines(lines, notifyLineShown, notifyLineEnded);
         return;
       }
 
@@ -150,11 +159,15 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       // duration or, with TTS off, long enough to read
       for (let i = 0; i < lines.length; i += 1) {
         await waitWhileUserPaused();
-        notifyLineShown(lines[i]);
-        if (aiSettings.ttsEnabled) {
-          await speak(lines[i].text);
-        } else {
-          await pacedDelay(sceneLineReadingHoldMs(lines[i].text));
+        notifyLineShown(lines[i], aiSettings.ttsEnabled);
+        try {
+          if (aiSettings.ttsEnabled) {
+            await speak(lines[i].text);
+          } else {
+            await pacedDelay(sceneLineReadingHoldMs(lines[i].text));
+          }
+        } finally {
+          notifyLineEnded?.(lines[i]);
         }
         if (i < lines.length - 1) {
           await pacedDelay(sceneLineGapMs);

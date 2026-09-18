@@ -9,6 +9,8 @@ export enum ModWebsocketMessageType {
   MEMORY_CREATED = 'memory_created',
   ADD_BUFF = 'add_buff',
   SCENE_LINE = 'scene_line',
+  // The line's audio finished playing; the mod stops the speaker's mouth
+  SCENE_LINE_ENDED = 'scene_line_ended',
   ENQUEUE_INTERACTION = 'enqueue_interaction',
   // Cancels a previously pushed interaction the app has given up on (cognition's
   // pending timeout) — otherwise a push queued behind a long-running activity outlives
@@ -62,6 +64,12 @@ export type ModSceneLine = ModWebsocketMessage & {
   text: string;
   // The scene's driving action, shown above each line's subtitle section in-game
   preamble?: string;
+  // false when no audio plays for the line; omitted means voiced (older senders)
+  voiced?: boolean;
+};
+
+export type ModSceneLineEnded = ModWebsocketMessage & {
+  speaker: string;
 };
 
 export type ModAddBuff = ModWebsocketMessage & {
@@ -125,6 +133,7 @@ export type WebsocketNotification =
   | ModWebsocketNotificationMemoryCreated
   | ModAddBuff
   | ModSceneLine
+  | ModSceneLineEnded
   | ModEnqueueInteraction
   | ModRequestPerception
   | ModCancelInteraction

@@ -111,6 +111,16 @@ describe('parseMoodletVerdicts', () => {
     expect(parseMoodletVerdicts(JSON.stringify({ Elliot: { emotion: 'sad' } }), twins)).toEqual([]);
   });
 
+  it('maps a feeling the game has no mood for onto the nearest one', () => {
+    // Live 2026-09-22: llama answered "frustrated" for a sim stuck in a rut, and the moodlet was lost
+    const text = JSON.stringify({
+      'Bella Goth': { emotion: 'Frustrated', intensity: 2, duration_hours: 6, reason: 'x' },
+      'Mortimer Goth': { emotion: 'anxious', intensity: 1, reason: 'y' },
+    });
+    expect(parseMoodletVerdicts(text, CAST).map((verdict) => verdict.emotion)).toEqual(['angry', 'stressed']);
+    expect(buildMoodletSystemPrompt()).toContain('frustrated or annoyed is angry');
+  });
+
   it('keeps one verdict per sim', () => {
     const text = JSON.stringify({ 'Bella Goth': { emotion: 'sad' }, 'bella': { emotion: 'happy' } });
     expect(parseMoodletVerdicts(text, CAST).map((verdict) => verdict.emotion)).toEqual(['sad']);

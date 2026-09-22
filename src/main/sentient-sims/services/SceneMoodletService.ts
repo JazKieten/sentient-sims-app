@@ -40,6 +40,87 @@ export const MOODLET_EMOTIONS = [
 export type MoodletEmotion = (typeof MOODLET_EMOTIONS)[number];
 export type MoodletTier = 1 | 2 | 3;
 
+// Models reach for the feeling's own word ("frustrated", live 2026-09-22, dropped as
+// unknown and the moodlet with it). The nearest of the game's moods stands in.
+export const EMOTION_SYNONYMS: Record<string, MoodletEmotion> = {
+  frustrated: 'angry',
+  annoyed: 'angry',
+  irritated: 'angry',
+  furious: 'angry',
+  mad: 'angry',
+  resentful: 'angry',
+  bitter: 'angry',
+  anxious: 'stressed',
+  worried: 'stressed',
+  nervous: 'stressed',
+  tense: 'stressed',
+  overwhelmed: 'stressed',
+  pressured: 'stressed',
+  concerned: 'stressed',
+  troubled: 'stressed',
+  uncertain: 'stressed',
+  upset: 'sad',
+  hurt: 'sad',
+  lonely: 'sad',
+  disappointed: 'sad',
+  grieving: 'sad',
+  heartbroken: 'sad',
+  melancholy: 'sad',
+  gloomy: 'sad',
+  dejected: 'sad',
+  discouraged: 'sad',
+  afraid: 'scared',
+  fearful: 'scared',
+  terrified: 'scared',
+  frightened: 'scared',
+  ashamed: 'embarrassed',
+  humiliated: 'embarrassed',
+  mortified: 'embarrassed',
+  awkward: 'uncomfortable',
+  uneasy: 'uncomfortable',
+  guilty: 'uncomfortable',
+  disgusted: 'uncomfortable',
+  content: 'happy',
+  grateful: 'happy',
+  relieved: 'happy',
+  hopeful: 'happy',
+  joyful: 'happy',
+  cheerful: 'happy',
+  pleased: 'happy',
+  loved: 'happy',
+  touched: 'happy',
+  moved: 'happy',
+  comforted: 'happy',
+  supported: 'happy',
+  proud: 'confident',
+  reassured: 'confident',
+  determined: 'focused',
+  motivated: 'focused',
+  resolved: 'focused',
+  excited: 'energized',
+  thrilled: 'energized',
+  amused: 'playful',
+  giddy: 'playful',
+  romantic: 'flirty',
+  smitten: 'flirty',
+  curious: 'inspired',
+  creative: 'inspired',
+  confused: 'dazed',
+  numb: 'dazed',
+  shocked: 'dazed',
+  stunned: 'dazed',
+  indifferent: 'bored',
+  restless: 'bored',
+};
+
+export function resolveEmotion(raw: string): MoodletEmotion | undefined {
+  const word = raw.trim().toLowerCase();
+  if ((MOODLET_EMOTIONS as readonly string[]).includes(word)) {
+    return word as MoodletEmotion;
+  }
+  return EMOTION_SYNONYMS[word];
+}
+
 // Fewer heard lines than this is a greeting, not a conversation
 export const MIN_HEARD_LINES = 4;
 // What the model may answer per tier, in hours; the prompt asks for the middle of each
@@ -63,6 +144,7 @@ export function buildMoodletSystemPrompt(): string {
     'You judge the emotional residue a conversation leaves on each of the Sims who were in it, once it is over.',
     '',
     `Emotions, exactly one of: ${MOODLET_EMOTIONS.join(', ')} - or none.`,
+    'Use only those words. If the feeling has another name, pick the closest one on the list: frustrated or annoyed is angry, anxious or worried is stressed, hurt or disappointed is sad, ashamed is embarrassed, proud is confident, relieved or grateful is happy.',
     '',
     'How much a conversation weighs:',
     '- none: small talk, pleasantries, logistics, jokes with no sting, anything forgotten by dinner. This is the common case - most conversations leave nothing.',
@@ -156,8 +238,8 @@ export function parseMoodletVerdicts(rawText: string, cast: SceneCastMember[]): 
       return;
     }
     const verdict = value as { emotion?: unknown; intensity?: unknown; duration_hours?: unknown; reason?: unknown };
-    const emotion = (typeof verdict.emotion === 'string' ? verdict.emotion : 'none').trim().toLowerCase();
-    if (!(MOODLET_EMOTIONS as readonly string[]).includes(emotion)) {
+    const emotion = resolveEmotion(typeof verdict.emotion === 'string' ? verdict.emotion : 'none');
+    if (!emotion) {
       return;
     }
     seen.add(member.simId);
@@ -167,13 +249,11 @@ export function parseMoodletVerdicts(rawText: string, cast: SceneCastMember[]): 
     const rawHours = clampNumber(verdict.duration_hours);
     const hours = rawHours === undefined ? TIER_DEFAULT_HOURS[intensity] : Math.min(high, Math.max(low, rawHours));
     const reasonText = typeof verdict.reason === 'string' ? verdict.reason.trim() : '';
-    const reason = reasonText
-      ? reasonText.slice(0, MAX_REASON_CHARS)
-      : fallbackReason(member, emotion as MoodletEmotion, cast);
+    const reason = reasonText ? reasonText.slice(0, MAX_REASON_CHARS) : fallbackReason(member, emotion, cast);
     verdicts.push({
       simId: member.simId,
       name: member.name,
-      emotion: emotion as MoodletEmotion,
+      emotion,
       intensity,
       durationMinutes: Math.round(hours * 60),
       reason,

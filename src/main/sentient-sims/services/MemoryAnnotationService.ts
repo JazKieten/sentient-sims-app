@@ -5,6 +5,7 @@ import { ApiContext } from './ApiContext';
 import { embeddingToBuffer } from './EmbeddingService';
 import { IMPORTANCE_SYSTEM_PROMPT } from '../pipeline/prompts/utility';
 import { AIActionType } from '../models/AIActionType';
+import { memoryRecallText } from '../util/memoryRecallText';
 
 // When the rating generation fails (no provider configured, malformed reply), fall back
 // to a prior by memory kind: reflections are distilled and durable, outcomes are notable,
@@ -59,7 +60,9 @@ export class MemoryAnnotationService {
     }
 
     const session = this.ctx.db.sessionKey;
-    const text = memory.observation || memory.content || '';
+    // Rated and embedded as it is recalled: a reply to the player carries the question it
+    // answered, so a later question about the same thing can find it
+    const text = memory.observation || memory.content ? memoryRecallText(memory) : '';
     // A rating the pipeline already computed (scene reflection scores, stamped at
     // creation) wins over a fresh rating call — one score per memory, no double-spend
     const existing = this.ctx.memoryIndexRepository.getIndex(memory.id);
@@ -160,9 +163,7 @@ export class MemoryAnnotationService {
       return 0;
     }
 
-    const vectors = await this.ctx.embedding.embed(
-      textable.map((memory) => memory.observation || memory.content || ''),
-    );
+    const vectors = await this.ctx.embedding.embed(textable.map((memory) => memoryRecallText(memory)));
     if (this.ctx.db.sessionKey !== session) {
       log.debug('[Annotation] database changed during backfill batch, dropping results');
       return 0;

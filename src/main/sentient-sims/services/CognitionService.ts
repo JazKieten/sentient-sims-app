@@ -21,6 +21,30 @@ import {
   parseActionOptions,
   parseTickScores,
 } from '../util/formatCognitionPrompt';
+import { memoryRecallText } from '../util/memoryRecallText';
+
+// A sleeping sim has no tick. The gate used to compare `activity.running` to the bare
+// word 'sleep', but the mod reports the running interaction's tuning name — measured
+// live 2026-09-21: a sim asleep in bed runs `sleep_Passive` over `bed_sleep` — so it
+// never matched, and low energy kept the sim deliberation-eligible all night ("just want
+// to keep sleeping", four ticks in five minutes on the 09-21 log). The mod's whitelist
+// mapping of the same interaction (`running_action_key`) and the game's own `sim.sleeping`
+// flag (`self.asleep`) are the reliable reads; the name match is the fallback for an
+// older mod that sends neither.
+const SLEEP_ACTION_KEYS = new Set(['sleep', 'nap']);
+const SLEEP_INTERACTION_NAME = /(^|[_\s])(sleep|sleeping|nap|napping)([_\s]|$)|energyfailure|passout|pass_out/i;
+
+export function isAsleep(entry: SimStateEntry): boolean {
+  if (entry.self?.asleep) {
+    return true;
+  }
+  const key = entry.activity?.running_action_key;
+  if (key && SLEEP_ACTION_KEYS.has(key)) {
+    return true;
+  }
+  const running = entry.activity?.running ?? '';
+  return running.length > 0 && SLEEP_INTERACTION_NAME.test(running);
+}
 
 // Per-sim lifecycle. PENDING_OUTCOME is the never-re-push rule made structural: a sim
 // with an intent in flight cannot deliberate again until the outcome POST closes it or
@@ -580,8 +604,8 @@ export class CognitionService {
       // dialogue pipeline, not through competing tick intents
       return false;
     }
-    const running = entry.activity?.running ?? '';
-    if (running === 'sleep' || running === 'nap') {
+    if (isAsleep(entry)) {
+      // Asleep: nothing to deliberate, and a low motive must not wake the inner voice
       return false;
     }
 
@@ -596,6 +620,7 @@ export class CognitionService {
     // desire. A content, busy sim is left alone — continue-bias is structural, not a
     // prompt suggestion. Idle/stand animations count as idle: Emotion_Idle is the game
     // filling dead time.
+    const running = entry.activity?.running ?? '';
     const isIdle =
       (!running || isIdleAnimation(running)) &&
       (entry.activity?.queue ?? []).every((queued) => isIdleAnimation(queued));
@@ -1595,9 +1620,8 @@ export class CognitionService {
       if (retrieved.length === 0) {
         return undefined;
       }
-      const lines = retrieved.map(
-        (result) => result.memory.content ?? result.memory.observation ?? result.memory.pre_action ?? '',
-      );
+      // A reply to the player (chat window, Twitch) recalls WITH the line it answered
+      const lines = retrieved.map((result) => memoryRecallText(result.memory));
       return ['<RELEVANT_MEMORIES>', ...lines.filter(Boolean), '</RELEVANT_MEMORIES>'].join('\n');
     } catch (error) {
       log.warn('[Cognition] memory retrieval failed; deliberating without memories', error);

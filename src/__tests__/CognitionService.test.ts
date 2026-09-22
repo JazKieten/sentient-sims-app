@@ -1407,3 +1407,71 @@ describe('CognitionService', () => {
     expect(oneShotCalls[0]).toMatch(/^Cognition Monologue/);
   });
 });
+
+// 2026-09-21: a sleeping sim thought "just want to keep sleeping" four times in five
+// minutes. The gate compared the running interaction to the word 'sleep'; the mod sends
+// the tuning name (`sleep_Passive`), so it never matched, and low energy kept the sim
+// eligible all night.
+describe('a sleeping sim does not tick', () => {
+  const asleepInBed = {
+    sim_id: '100',
+    sim_name: 'Ehren',
+    location: { zone_id: 1 },
+    sims: [],
+    objects: [
+      { object_id: '900', action_keys: ['grab_snack'], name: 'object_fridge', tier: 'same_room' as const, distance: 4 },
+    ],
+  };
+
+  it('never deliberates on the running interaction name the mod actually sends', async () => {
+    const { cache, cognition, oneShotCalls } = buildCtx();
+    cache.ingest(
+      idleSimReport(1, {
+        sims: [
+          {
+            ...asleepInBed,
+            self: { mood: 'Fine', needs: { energy: -60 }, age: 'ADULT' },
+            activity: { queue: ['sleep_Passive'], running: 'sleep_Passive', in_social: false, running_action_key: 'sleep' },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(oneShotCalls).toEqual([]);
+    expect(cognition.getStats().deliberations).toBe(0);
+  });
+
+  it("trusts the game's own sleeping flag even with no interaction reported", async () => {
+    const { cache, oneShotCalls } = buildCtx();
+    cache.ingest(
+      idleSimReport(1, {
+        sims: [
+          {
+            ...asleepInBed,
+            self: { mood: 'Fine', needs: { energy: -60 }, age: 'ADULT', asleep: true },
+            activity: { queue: [], running: null, in_social: false },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(oneShotCalls).toEqual([]);
+  });
+
+  it('still lets a tired sim who is awake think about it', async () => {
+    const { cache, oneShotCalls } = buildCtx();
+    cache.ingest(
+      idleSimReport(1, {
+        sims: [
+          {
+            ...asleepInBed,
+            self: { mood: 'Fine', needs: { energy: -60 }, age: 'ADULT' },
+            activity: { queue: ['seating_Sit'], running: 'seating_Sit', in_social: false, running_action_key: 'sit' },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(oneShotCalls[0]).toMatch(/^Cognition Monologue/);
+  });
+});

@@ -114,6 +114,9 @@ export type SimSelfStatus = {
   age_blocked?: string[];
   mood?: string;
   on_active_lot?: boolean;
+  // The game's own sim.sleeping flag, sent only when true. Absent on older mod builds;
+  // the tick gate then falls back to the running interaction (CognitionService.isAsleep).
+  asleep?: boolean;
   // Household sims only; capped at 12 (durable goals first, wants fill the rest)
   goal_pool?: GoalPoolEntry[];
 };

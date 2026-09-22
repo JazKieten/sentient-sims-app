@@ -21,6 +21,7 @@ import { ApiContext } from './ApiContext';
 import { postureDescriptions, PostureType } from '../descriptions/postureDescriptions';
 import { buildAlsoPresentBlock } from '../util/alsoPresent';
 import { ObjectDescription, objectDescriptions } from '../descriptions/objectDescriptions';
+import { memoryRecallText } from '../util/memoryRecallText';
 
 // Per-Sim fact blocks are separated by a newline, so a model reading the prompt sees them
 // as separate points of view rather than one run-on list.
@@ -59,9 +60,8 @@ const canceledOutcomeSceneWindowMs = 10 * 60 * 1000;
 
 // A memory row can hold several kinds of text; pick the most factual one and keep it short.
 export function summarizeMemory(memory: MemoryEntity): string {
-  const text = (memory.observation || memory.content || memory.action || memory.pre_action || '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // A reply to the player recalls with the line that prompted it (memoryRecallText)
+  const text = memoryRecallText(memory).replace(/\s+/g, ' ').trim();
   if (text.length <= maxRelevantMemoryLength) {
     return text;
   }

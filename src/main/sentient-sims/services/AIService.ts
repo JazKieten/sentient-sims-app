@@ -2015,7 +2015,20 @@ ${factsBlock}
       if (newMemory.content) {
         markScenePaced(newMemory.content);
       }
-      this.ctx.memoryRepository.createMemory({ memory: newMemory, participants }, { modDisplayAction });
+      // A lone sim's reply to the player (Twitch chat, the app-saved paths) is that sim's
+      // own memory the way a tick thought is: owned, so no other sim's retrieval surfaces a
+      // conversation only they could hear, and priced by the scorer's memory score instead
+      // of the flat prior. Until 2026-09-21 these rows carried no index at all, so a viewer's
+      // question sat in the DB as an unowned, unscored reply. A scene with several
+      // performers stays shared — everyone in it heard it.
+      const index =
+        playerFacing && performers.length === 1
+          ? {
+              owner: performers[0].sim_id,
+              importance: this.findScore(sceneScores.scores, performers[0])?.memory,
+            }
+          : undefined;
+      this.ctx.memoryRepository.createMemory({ memory: newMemory, participants, index }, { modDisplayAction });
     }
 
     // The scene reaches the game one line at a time: the memory block's subtitle is

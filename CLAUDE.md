@@ -56,6 +56,14 @@ CognitionService.actOnConversation (source 'conversation', setting conversationA
 sentence chunks (util/airingChunks, `continues` on DialogueLine → 150 ms gap, mouth stays open in the mod). Sim-to-sim
 scenes keep the short-line rules. Bench: GET /bench/player-threads, POST /bench/player-thread/:index {simId}.
 
+Sentient Moodlets (2026-09-22): when a voice-mode scene closes (ran its course, or the game stopped it),
+ScenePlaybackRegistry hands `onSceneClosed` (cast + the lines actually heard) to services/SceneMoodletService,
+which runs ONE buff-stage call (StageId.BUFF / AIActionType.BUFF, so its provider config and prompt override
+apply) returning per sim an emotion or none, a tier 1-3 (+1 minor / +2 notable / +3 life-altering), hours
+inside the tier band, and a tooltip sentence; each verdict goes to the mod as `add_buff` with `intensity`
+and `duration_minutes`. Fewer than 4 heard lines or nobody with a sim id -> no call. The typed chat window's
+older classify-then-describe path (AIService.runBuff) is untouched. Test: SceneMoodletService.test.ts.
+
 IPC: ipcHandlers.ts registers Electron IPC handlers (dialog, settings, clipboard, navigation). Renderer uses window.electron.ipcRenderer for direct main process calls, and HTTP clients for Express API calls.
 
 Build: electron-vite (config at electron.vite.config.ts) builds main/preload/renderer to release/app/dist/{main,preload,renderer}/. All node_modules deps are bundled (build.externalizeDeps: false); only native modules from release/app/package.json (better-sqlite3) stay external. Packaging via electron-builder (Windows NSIS, macOS DMG, Linux AppImage).

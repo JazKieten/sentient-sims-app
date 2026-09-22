@@ -2091,7 +2091,15 @@ ${factsBlock}
         const simId = simIdByName.get(line.speaker);
         return simId ? { ...line, simId } : line;
       });
-      this.ctx.scenePlayback.roundQueued(sceneId, participantSimIds, round, castLines, finalText);
+      // The cast rides along for the appraisal at the scene's close: who was in it, and
+      // what they were like going in (the moodlet a talk leaves depends on the sim)
+      const sceneCast = event.sentient_sims.map((sim) => ({
+        simId: sim.sim_id,
+        name: sim.name,
+        traits: sim.traits,
+        moods: sim.moods,
+      }));
+      this.ctx.scenePlayback.roundQueued(sceneId, participantSimIds, round, castLines, finalText, sceneCast);
       this.playTtsLines(castLines, event.sentient_sims, {
         paced: true,
         priority: playbackOptions.priority,

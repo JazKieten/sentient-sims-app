@@ -249,9 +249,9 @@ export const STAGES: StageDefinition[] = [
   {
     id: StageId.BUFF,
     brainName: 'Utility',
-    job: 'The buff title and description shown in game',
+    job: 'Which moodlet a conversation leaves on each Sim, how strong and how long',
     legacyActionType: AIActionType.BUFF,
-    defaultMaxResponseTokens: 90,
+    defaultMaxResponseTokens: 400,
     usesLLM: true,
   },
   {

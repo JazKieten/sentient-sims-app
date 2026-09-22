@@ -87,6 +87,7 @@ import {
   setSceneMemoryObserver,
 } from '../util/notifyRenderer';
 import { ScenePlaybackRegistry } from './ScenePlaybackRegistry';
+import { SceneMoodletService } from './SceneMoodletService';
 import { PlayerConversationService } from './PlayerConversationService';
 import { ProviderConfigService } from './ProviderConfigService';
 import { SentientSimsAIService } from './SentientSimsAIService';
@@ -268,6 +269,7 @@ export class ApiContext {
   private readonly _sceneService: SceneService;
 
   private readonly _scenePlaybackRegistry: ScenePlaybackRegistry;
+  private readonly _sceneMoodletService: SceneMoodletService;
   private readonly _playerConversationService: PlayerConversationService;
   private readonly _actionDispatcherService: ActionDispatcherService;
 
@@ -393,8 +395,13 @@ export class ApiContext {
         });
       },
     });
+    this._sceneMoodletService = new SceneMoodletService(this);
     this._scenePlaybackRegistry = new ScenePlaybackRegistry({
       notifyStop: notifySceneStop,
+      // A conversation that closed is weighed for the moodlet it leaves on each sim
+      onSceneClosed: (closed) => {
+        void this._sceneMoodletService.appraise(closed);
+      },
       notifySceneEnded: (sceneId, reason) => {
         // The game ended the conversation (walk-away, left lot, zone unload): a player
         // thread riding that scene id is over too. 'finished' is just a round's playback
@@ -553,6 +560,10 @@ export class ApiContext {
 
   get scenePlayback(): ScenePlaybackRegistry {
     return this._scenePlaybackRegistry;
+  }
+
+  get sceneMoodlets(): SceneMoodletService {
+    return this._sceneMoodletService;
   }
 
   get playerConversations(): PlayerConversationService {

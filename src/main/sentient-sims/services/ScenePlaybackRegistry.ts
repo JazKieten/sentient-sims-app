@@ -18,6 +18,28 @@ const SCENE_TTL_MS = 10 * 60 * 1000;
 // stop and bail instead of airing into a conversation that is over.
 const STOPPED_TTL_MS = 5 * 60 * 1000;
 
+// Who was in a conversation, as the appraisal at its end needs them: the sim's id
+// (lines are tagged with it), the name the lines use, and what the sim was like
+// going in. Player personas are never cast members - they have no sim to feel it.
+export type SceneCastMember = {
+  simId: string;
+  name: string;
+  traits?: string[];
+  moods?: string[];
+};
+
+// Everything known about a conversation the moment it is over: who was in it and
+// the lines that actually reached the player, however it ended.
+export type SceneClosed = {
+  sceneId: string;
+  participantSimIds: string[];
+  cast: SceneCastMember[];
+  lines: DialogueLine[];
+  reason: 'finished' | 'stopped';
+  stopReason?: SceneStopReason;
+  mode?: SceneStopMode;
+};
+
 type SceneEntry = {
   participantSimIds: string[];
   // Rounds handed to the renderer that have not reported playback finished
@@ -34,6 +56,10 @@ type SceneEntry = {
   // Lines of round 1, and how many of them actually reached the player
   openingLines: DialogueLine[];
   airedLines: number;
+  // Every round's lines in airing order, so the conversation can be judged whole
+  allLines: DialogueLine[];
+  cast: SceneCastMember[];
+  closed: boolean;
 };
 
 export type ScenePlaybackDeps = {
@@ -43,6 +69,8 @@ export type ScenePlaybackDeps = {
   notifySceneEnded: (sceneId: string, reason: SceneEndedReason) => void;
   // Rewrite the scene's memory row to what was actually said
   trimMemory?: (memoryId: string, content: string) => void;
+  // The conversation is over and this is what was heard: appraise what it left behind
+  onSceneClosed?: (closed: SceneClosed) => void;
 };
 
 /**
@@ -62,15 +90,27 @@ export class ScenePlaybackRegistry {
   constructor(private readonly deps: ScenePlaybackDeps) {}
 
   /** A round's lines have been handed to the renderer. */
-  roundQueued(sceneId: string, participantSimIds: string[], round: number, lines: DialogueLine[], pacedText?: string) {
+  roundQueued(
+    sceneId: string,
+    participantSimIds: string[],
+    round: number,
+    lines: DialogueLine[],
+    pacedText?: string,
+    cast?: SceneCastMember[],
+  ) {
     const entry = this.entry(sceneId, participantSimIds);
     entry.pendingRounds += 1;
     entry.touchedAt = Date.now();
+    const spoken = lines.filter((line) => !line.skipSceneLine);
     if (round <= 1) {
       // Only the opening round is ever written to a shared memory row, so it is
       // the only transcript a cut can leave claiming more than was said
-      entry.openingLines = lines.filter((line) => !line.skipSceneLine);
+      entry.openingLines = spoken;
       entry.openingPacedText = pacedText;
+    }
+    entry.allLines.push(...spoken);
+    if (cast && cast.length > 0 && entry.cast.length === 0) {
+      entry.cast = cast;
     }
   }
 
@@ -140,6 +180,7 @@ export class ScenePlaybackRegistry {
     } catch (err) {
       log.error('[Scene] failed to report the scene ended', err);
     }
+    this.close(sceneId, entry, { reason: 'stopped', stopReason: reason, mode });
   }
 
   /** Every scene stops now: the lot is going away. */
@@ -189,6 +230,9 @@ export class ScenePlaybackRegistry {
       touchedAt: Date.now(),
       openingLines: [],
       airedLines: 0,
+      allLines: [],
+      cast: [],
+      closed: false,
     };
     this.scenes.set(sceneId, created);
     return created;
@@ -206,6 +250,47 @@ export class ScenePlaybackRegistry {
     } catch (err) {
       log.error('[Scene] failed to report the scene finished', err);
     }
+    this.close(sceneId, entry, { reason: 'finished' });
+  }
+
+  /**
+   * The conversation is over, one way or the other: hand what was heard to whoever
+   * judges what it leaves behind. Once per scene, and never in the way of the stop
+   * itself - an appraisal that throws is that appraisal's problem.
+   */
+  private close(
+    sceneId: string,
+    entry: SceneEntry,
+    ending: { reason: 'finished' | 'stopped'; stopReason?: SceneStopReason; mode?: SceneStopMode },
+  ) {
+    if (entry.closed || !this.deps.onSceneClosed) {
+      return;
+    }
+    entry.closed = true;
+    const closed: SceneClosed = {
+      sceneId,
+      participantSimIds: entry.participantSimIds,
+      cast: entry.cast,
+      lines: this.heardLines(entry, ending.reason, ending.mode),
+      reason: ending.reason,
+      stopReason: ending.stopReason,
+      mode: ending.mode,
+    };
+    try {
+      this.deps.onSceneClosed(closed);
+    } catch (err) {
+      log.error('[Scene] failed to hand the closed scene on', err);
+    }
+  }
+
+  // The lines the player actually heard. A scene that ran its course aired every
+  // line; a soft stop let the playing line finish; a hard stop cut it off mid-word.
+  private heardLines(entry: SceneEntry, reason: 'finished' | 'stopped', mode?: SceneStopMode): DialogueLine[] {
+    if (reason === 'finished') {
+      return entry.allLines;
+    }
+    const heard = mode === 'hard' ? Math.max(0, entry.airedLines - 1) : entry.airedLines;
+    return entry.allLines.slice(0, Math.min(heard, entry.allLines.length));
   }
 
   /**

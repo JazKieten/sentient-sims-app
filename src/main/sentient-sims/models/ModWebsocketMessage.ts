@@ -104,10 +104,19 @@ export type ModSceneEnded = ModWebsocketMessage & {
   reason: SceneEndedReason;
 };
 
+// A Sentient Moodlet for one sim. `mood` is one of the mod's 15 emotions;
+// `intensity` picks the buff tier (+1/+2/+3, absent = 1); `duration_minutes` is
+// written onto the buff's timer (absent = the tuning's 240). The scene appraisal
+// sends these when a conversation closes; the chat window's older path sends the
+// bare three fields.
 export type ModAddBuff = ModWebsocketMessage & {
   sim_id: string;
   mood: string;
   buff_description: string;
+  intensity?: 1 | 2 | 3;
+  duration_minutes?: number;
+  scene_id?: string;
+  source?: 'scene' | 'chat';
 };
 
 // Pushes a whitelisted action into a sim's interaction queue. The mod resolves the action key

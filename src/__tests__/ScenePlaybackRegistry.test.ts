@@ -1,6 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { DialogueLine } from 'main/sentient-sims/formatter/PromptFormatter';
-import { ScenePlaybackRegistry } from 'main/sentient-sims/services/ScenePlaybackRegistry';
+import { SceneClosed, ScenePlaybackRegistry } from 'main/sentient-sims/services/ScenePlaybackRegistry';
 
 const SCENE = 'scene-1';
 const PARTICIPANTS = ['1', '2'];
@@ -13,9 +13,15 @@ function build() {
   const notifyStop = vi.fn();
   const notifySceneEnded = vi.fn();
   const trimMemory = vi.fn();
-  const registry = new ScenePlaybackRegistry({ notifyStop, notifySceneEnded, trimMemory });
-  return { registry, notifyStop, notifySceneEnded, trimMemory };
+  const onSceneClosed = vi.fn<(closed: SceneClosed) => void>();
+  const registry = new ScenePlaybackRegistry({ notifyStop, notifySceneEnded, trimMemory, onSceneClosed });
+  return { registry, notifyStop, notifySceneEnded, trimMemory, onSceneClosed };
 }
+
+const CAST = [
+  { simId: '1', name: 'Alex Test' },
+  { simId: '2', name: 'Bella Test' },
+];
 
 describe('ScenePlaybackRegistry', () => {
   let harness: ReturnType<typeof build>;
@@ -158,6 +164,85 @@ describe('ScenePlaybackRegistry', () => {
     registry.stop(SCENE, 'walked_away', 'soft');
 
     expect(trimMemory).toHaveBeenCalledWith('900', 'Alex: Hello.');
+  });
+
+  it('hands a finished conversation on whole, with every round and the cast', () => {
+    const { registry, onSceneClosed } = harness;
+    registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.', 'Hi.'), 'paced', CAST);
+    registry.roundQueued(SCENE, PARTICIPANTS, 2, lines('Still here?', 'Yes.'), 'second');
+    registry.lineShown(SCENE);
+    registry.lineShown(SCENE);
+    registry.lineShown(SCENE);
+    registry.lineShown(SCENE);
+
+    registry.playbackEnded(SCENE, true);
+    expect(onSceneClosed).not.toHaveBeenCalled();
+    registry.playbackEnded(SCENE, true);
+
+    expect(onSceneClosed).toHaveBeenCalledTimes(1);
+    const closed = onSceneClosed.mock.calls[0][0];
+    expect(closed.sceneId).toBe(SCENE);
+    expect(closed.reason).toBe('finished');
+    expect(closed.cast).toEqual(CAST);
+    expect(closed.participantSimIds).toEqual(PARTICIPANTS);
+    expect(closed.lines.map((line) => line.text)).toEqual(['Hello.', 'Hi.', 'Still here?', 'Yes.']);
+  });
+
+  it('hands a softly stopped conversation on with the lines that were heard', () => {
+    const { registry, onSceneClosed } = harness;
+    registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.', 'Hi.', 'So anyway.'), 'paced', CAST);
+    registry.lineShown(SCENE);
+    registry.lineShown(SCENE);
+
+    registry.stop(SCENE, 'walked_away', 'soft');
+
+    const closed = onSceneClosed.mock.calls[0][0];
+    expect(closed.reason).toBe('stopped');
+    expect(closed.stopReason).toBe('walked_away');
+    expect(closed.mode).toBe('soft');
+    expect(closed.lines.map((line) => line.text)).toEqual(['Hello.', 'Hi.']);
+  });
+
+  it('leaves out the line a hard stop cut off, and hands the scene on once', () => {
+    const { registry, onSceneClosed } = harness;
+    registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.', 'Hi.', 'So anyway.'), 'paced', CAST);
+    registry.lineShown(SCENE);
+    registry.lineShown(SCENE);
+
+    registry.stop(SCENE, 'left_lot', 'hard');
+    registry.stop(SCENE, 'left_lot', 'hard');
+    registry.playbackEnded(SCENE, false);
+
+    expect(onSceneClosed).toHaveBeenCalledTimes(1);
+    expect(onSceneClosed.mock.calls[0][0].lines.map((line) => line.text)).toEqual(['Hello.']);
+  });
+
+  it('does not hand on lines whose subtitle went out some other way', () => {
+    const { registry, onSceneClosed } = harness;
+    registry.roundQueued(
+      SCENE,
+      PARTICIPANTS,
+      1,
+      [{ speaker: 'Chat', text: 'Question?', skipSceneLine: true }, ...lines('An answer.')],
+      'paced',
+      CAST,
+    );
+    registry.playbackEnded(SCENE, true);
+
+    expect(onSceneClosed.mock.calls[0][0].lines.map((line) => line.text)).toEqual(['An answer.']);
+  });
+
+  it('still reports the scene over when the appraisal throws', () => {
+    const { registry, notifySceneEnded, onSceneClosed } = harness;
+    onSceneClosed.mockImplementation(() => {
+      throw new Error('no model');
+    });
+    registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.'), 'paced', CAST);
+
+    expect(() => {
+      registry.playbackEnded(SCENE, true);
+    }).not.toThrow();
+    expect(notifySceneEnded).toHaveBeenCalledWith(SCENE, 'finished');
   });
 
   it('knows nothing about a conversation it was never told of', () => {

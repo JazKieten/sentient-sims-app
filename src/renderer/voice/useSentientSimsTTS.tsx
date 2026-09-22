@@ -247,6 +247,7 @@ export function useSentientSimsTTS(): TTSHook {
       lines: DialogueLine[],
       onLineStart?: (line: DialogueLine, voiced: boolean) => void,
       onLineEnd?: (line: DialogueLine) => void,
+      shouldContinue?: () => boolean,
     ): Promise<void> => {
       if (lines.length === 0) return;
 

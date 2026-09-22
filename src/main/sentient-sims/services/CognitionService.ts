@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { thoughtMemoryFloor } from '../constants';
 import { StageId } from '../pipeline/stages';
 import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
@@ -52,6 +53,9 @@ type SimRuntime = {
   armedDesire?: { score: number; reason?: string; thought?: string; at: number };
   // G-10: the dispatched intent with its remaining automatic retries (transient causes only)
   pendingIntent?: { intent: CognitionIntent; entry: SimStateEntry; retriesLeft: number };
+  // When this sim's unbroken run of feeling bad AWAY from home started, for the
+  // "I want to go home" rule. Cleared the moment the mood turns or they are home.
+  miserableSince?: number;
 };
 
 // G-10: outcome causes (mod's ss_failure_reasons) that mean "the moment was wrong, the
@@ -116,6 +120,17 @@ const LONG_RUNNING_PENDING_MS = 240_000;
 // re-offering it immediately produces an identical failure in a loop (observed live: a
 // mailbox with no payable bill lured 'pay_bills' retries every tick until fixed).
 const FAILED_ACTION_SUPPRESS_MS = 10 * 60_000;
+
+// Moods that mean "this place is doing this to me". A venue cannot fix any of them
+// the way home can - a seat, a bed, a bathroom, quiet - so a sim who has felt this
+// way continuously while OUT eventually wants to leave.
+const LEAVE_WORTHY_MOODS = new Set(['uncomfortable', 'tense', 'sad', 'angry', 'embarrassed', 'bored', 'dazed']);
+
+// How long that has to hold before the sim asks to go home. Reports arrive every
+// few seconds, so this is the real filter on the rule: anything the lot CAN fix
+// (a toilet, a chair, a drink) gets fixed inside this window by the sim's own
+// deliberation, and what is left is a bad time the place is causing.
+const MISERABLE_AWAY_MS = 5 * 60_000;
 
 // Benign closes — 'canceled' (engine churn bumped the push off the queue) and pending
 // timeouts (the world never answered) — never proved the action is impossible, so they
@@ -371,6 +386,14 @@ export class CognitionService {
         this.maybeGoHomeExhausted(entry, now);
       });
     }
+
+    // ...and so does one who has simply been having a bad time out. Runs for every
+    // entry, not just the away case, because the rule's clock has to be RESET at
+    // home — otherwise a sim who was miserable indoors asks to turn around the
+    // moment they arrive somewhere.
+    entries.forEach((entry) => {
+      this.maybeGoHomeMiserable(entry, now, report.lot?.is_home !== false);
+    });
 
     // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
     // at home send them home (go_home), at a venue walk them in (enter_lot); provenance
@@ -933,7 +956,7 @@ export class CognitionService {
           `Cognition Monologue: ${simLabel}`,
           TICK_MONOLOGUE_SYSTEM_PROMPT,
           situationPrompt,
-          120,
+          60,
           undefined,
           AIActionType.COGNITION,
           undefined,
@@ -941,7 +964,7 @@ export class CognitionService {
         ),
       );
       tickExchanges.push(monologue.exchange);
-      thought = monologue.text.trim().slice(0, 300);
+      thought = monologue.text.trim().slice(0, 180);
       if (thought.length <= 1) {
         log.warn(`[Cognition] sim ${simId} produced no monologue; continuing`);
         this.stats.continues += 1;
@@ -1278,6 +1301,12 @@ export class CognitionService {
     importance?: number,
   ) {
     if (!intent.thought) {
+      return;
+    }
+    // A routine moment is thought, not remembered. Gated before the trace below: a
+    // pending trace with no memory to attach to would ride along on the next row.
+    if (importance !== undefined && importance < thoughtMemoryFloor) {
+      log.debug(`[Cognition] sim ${entry.sim_id} thought scored ${importance}; not stored`);
       return;
     }
     // Dev mode reads this back on the thought memory: the deliberation (and review) that

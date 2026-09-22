@@ -187,7 +187,7 @@ describe('CognitionService', () => {
 
   it('a low action score means no action scene: the fast brain keeps the wheel', async () => {
     const { cache, cognition, dispatched, oneShotCalls, storedMemories } = buildCtx({
-      scoresJson: '{"memory": 2, "action": 2, "action_reason": "Happy as is."}',
+      scoresJson: '{"memory": 6, "action": 2, "action_reason": "Happy as is."}',
     });
     cache.ingest(idleSimReport(1));
     await settle();
@@ -195,8 +195,23 @@ describe('CognitionService', () => {
     expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual(['Cognition Monologue', 'Cognition Scores']);
     expect(dispatched).toHaveLength(0);
     expect(cognition.getStats().continues).toBe(1);
-    // The thought is still the sim's inner life — stored regardless of the score
+    // A memorable moment is still the sim's inner life — stored even with nothing to do
     expect(storedMemories).toHaveLength(1);
+  });
+
+  // The sim thinks on every tick; only the moments worth keeping are written down.
+  // Filing every routine monologue buried the Memories window and fed the sim its own
+  // small talk back on the next recall.
+  it('a forgettable tick thinks but stores nothing', async () => {
+    const { cache, cognition, oneShotCalls, storedMemories } = buildCtx({
+      scoresJson: '{"memory": 2, "action": 2, "action_reason": "Happy as is."}',
+    });
+    cache.ingest(idleSimReport(1));
+    await settle();
+
+    expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual(['Cognition Monologue', 'Cognition Scores']);
+    expect(cognition.getStats().continues).toBe(1);
+    expect(storedMemories).toHaveLength(0);
   });
 
   it('a scene-armed desire skips monologue and scores and stages the action scene directly', async () => {
@@ -280,7 +295,13 @@ describe('CognitionService', () => {
     expect(dispatched).toHaveLength(1);
 
     // Bumped from the queue: transient — one automatic retry after the delay
-    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-1', action: 'grab_snack', cause: 'bumped_from_queue' });
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'canceled',
+      request_id: 'req-1',
+      action: 'grab_snack',
+      cause: 'bumped_from_queue',
+    });
     expect(cognition.getPhase('100')).toBe('COOLDOWN');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(dispatched).toHaveLength(2);
@@ -288,7 +309,13 @@ describe('CognitionService', () => {
     expect(cognition.getPhase('100')).toBe('PENDING_OUTCOME');
 
     // Default retries is 1: a second transient close is a clean outcome, no re-dispatch
-    cognition.onOutcome({ sim_id: '100', outcome: 'canceled', request_id: 'req-2', action: 'grab_snack', cause: 'bumped_from_queue' });
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'canceled',
+      request_id: 'req-2',
+      action: 'grab_snack',
+      cause: 'bumped_from_queue',
+    });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(dispatched).toHaveLength(2);
     vi.useRealTimers();
@@ -300,7 +327,13 @@ describe('CognitionService', () => {
     cache.ingest(idleSimReport(1));
     await settle();
     expect(dispatched).toHaveLength(1);
-    cognition.onOutcome({ sim_id: '100', outcome: 'ineligible', request_id: 'req-1', action: 'grab_snack', cause: 'no_provider_on_lot' });
+    cognition.onOutcome({
+      sim_id: '100',
+      outcome: 'ineligible',
+      request_id: 'req-1',
+      action: 'grab_snack',
+      cause: 'no_provider_on_lot',
+    });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(dispatched).toHaveLength(1);
     vi.useRealTimers();
@@ -708,7 +741,7 @@ describe('CognitionService', () => {
     // ...and the other direction: an adult whose only company is a child
     const adult = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
     const adultReport = idleSimReport(1);
-    adultReport.sims![0].sims![0].age = 'CHILD';
+    adultReport.sims![0].sims[0].age = 'CHILD';
     adult.cache.ingest(adultReport);
     await settle();
     expect(adult.prompts[0]).toContain('OFFERED social actions');
@@ -721,7 +754,7 @@ describe('CognitionService', () => {
     // Child is the only company -> the verb is absent, and the target is named a child.
     const solo = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
     const soloReport = idleSimReport(1);
-    soloReport.sims![0].sims![0].age = 'CHILD';
+    soloReport.sims![0].sims[0].age = 'CHILD';
     solo.cache.ingest(soloReport);
     await settle();
     expect(solo.prompts[0]).toContain('OFFERED social actions');
@@ -731,7 +764,7 @@ describe('CognitionService', () => {
     // Mixed-age room -> offered, but labeled so the model aims it at the teen+ target
     const mixed = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
     const mixedReport = idleSimReport(1);
-    mixedReport.sims![0].sims!.push({
+    mixedReport.sims![0].sims.push({
       sim_id: '300',
       tier: 'same_room',
       name: 'Kid',
@@ -754,7 +787,7 @@ describe('CognitionService', () => {
       }),
     });
     const report = idleSimReport(1);
-    report.sims![0].sims![0].age = 'CHILD';
+    report.sims![0].sims[0].age = 'CHILD';
     cache.ingest(report);
     await settle();
 
@@ -1121,6 +1154,75 @@ describe('CognitionService', () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].action).toBe('go_home');
     expect(oneShotCalls).toHaveLength(0);
+  });
+
+  it('a sim having a bad time out asks to go home once it has gone on long enough', async () => {
+    // Live 2026-09-19: two sims stood Uncomfortable in a museum indefinitely and nothing
+    // ever proposed leaving. Low scores keep the model out of it, so the only dispatch
+    // that can appear is the rule's.
+    vi.useFakeTimers();
+    const { cache, dispatched } = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const miserableAtTheMuseum = (seq: number) => {
+      const report = idleSimReport(seq);
+      report.lot!.is_home = false;
+      report.sims![0].self!.mood = 'Uncomfortable';
+      return report;
+    };
+
+    cache.ingest(miserableAtTheMuseum(1));
+    await settle();
+    // The first report only starts the clock: a sim who just got somewhere and does not
+    // like it is not yet asking to leave
+    expect(dispatched.filter((intent) => intent.action === 'go_home')).toHaveLength(0);
+
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    cache.ingest(miserableAtTheMuseum(2));
+    await settle();
+
+    const goneHome = dispatched.filter((intent) => intent.action === 'go_home');
+    expect(goneHome).toHaveLength(1);
+    expect(goneHome[0].motivation).toContain('uncomfortable');
+  });
+
+  it('a bad mood that lifts resets the clock', async () => {
+    vi.useFakeTimers();
+    const { cache, dispatched } = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const atTheMuseum = (seq: number, mood: string) => {
+      const report = idleSimReport(seq);
+      report.lot!.is_home = false;
+      report.sims![0].self!.mood = mood;
+      return report;
+    };
+
+    cache.ingest(atTheMuseum(1, 'Uncomfortable'));
+    await settle();
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    cache.ingest(atTheMuseum(2, 'Happy'));
+    await settle();
+    vi.setSystemTime(Date.now() + 4 * 60_000);
+    cache.ingest(atTheMuseum(3, 'Uncomfortable'));
+    await settle();
+
+    expect(dispatched.filter((intent) => intent.action === 'go_home')).toHaveLength(0);
+  });
+
+  it('never asks to leave the lot they live on', async () => {
+    vi.useFakeTimers();
+    const { cache, dispatched } = buildCtx({ scoresJson: '{"memory": 2, "action": 1}' });
+    const miserableAtHome = (seq: number) => {
+      const report = idleSimReport(seq);
+      report.lot!.is_home = true;
+      report.sims![0].self!.mood = 'Uncomfortable';
+      return report;
+    };
+
+    cache.ingest(miserableAtHome(1));
+    await settle();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    cache.ingest(miserableAtHome(2));
+    await settle();
+
+    expect(dispatched.filter((intent) => intent.action === 'go_home')).toHaveLength(0);
   });
 
   it('an on-lot NPC never ticks its own inner life', async () => {

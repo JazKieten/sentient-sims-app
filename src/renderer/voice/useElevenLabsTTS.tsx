@@ -130,6 +130,7 @@ export function useElevenLabsTTS(): TTSHook {
       lines: DialogueLine[],
       onLineStart?: (line: DialogueLine, voiced: boolean) => void,
       onLineEnd?: (line: DialogueLine) => void,
+      shouldContinue?: () => boolean,
     ): Promise<void> => {
       setError(undefined);
       playSessionRef.current += 1;

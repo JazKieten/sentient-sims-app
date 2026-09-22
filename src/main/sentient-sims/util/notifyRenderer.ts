@@ -5,7 +5,7 @@ import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
 import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
-import { ModWebsocketMessageType, ModWebsocketNotificationType } from '../models/ModWebsocketMessage';
+import { ModWebsocketMessageType, ModWebsocketNotificationType, SceneEndedReason } from '../models/ModWebsocketMessage';
 import { CaughtError } from '../models/CaughtError';
 import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
@@ -72,13 +72,21 @@ export function notifyNewMemoryAdded(
   // the Twitch asker's name in the memories window while the stored row — and every prompt
   // that later reads it — keeps the clean speaker)
   const modBound = options?.modDisplayAction ? { ...memory, action: options.modDisplayAction } : memory;
+  const paced = consumePacedScene(memory.content);
+  if (paced && memory.content && memory.id) {
+    try {
+      sceneMemoryObserver?.(memory.content, memory.id);
+    } catch (err) {
+      log.warn('Scene memory observer failed', err);
+    }
+  }
   sendModNotification({
     type: ModWebsocketMessageType.MEMORY_CREATED,
     // The Flash memories window can't render a null content, and one bad row in its
     // list blanks the whole window on every redraw (see withDisplayContent). The name
     // tags are renderer-only (V-4).
     memory: withDisplayContent(toModMemory(modBound)),
-    paced: consumePacedScene(memory.content),
+    paced,
   });
 }
 

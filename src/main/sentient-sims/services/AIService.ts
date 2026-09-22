@@ -1,4 +1,5 @@
 import log from 'electron-log';
+import { randomUUID } from 'crypto';
 import { PLAYER_VOICE_PERSONA_LABELS, playerPersonaFlavor } from '../models/PlayerVoicePersona';
 import {
   ChatContinueInteractionEvent,
@@ -38,6 +39,7 @@ import {
   defaultWantsPrefixes,
   defaultWantsPrompt,
   directedSceneBudgetMs,
+  thoughtMemoryFloor,
 } from '../constants';
 import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import {
@@ -557,10 +559,15 @@ export class AIService {
         previousScene.startedAt,
       );
       // A quick hop through a lot (or a nap right after arriving) isn't a scene worth
-      // reflecting on — travel-heavy play was firing reflections back to back
-      if (sceneMemories.length < 2) {
+      // reflecting on — travel-heavy play was firing reflections back to back. Travel
+      // boundaries need a scene with some substance to it; the sleep boundary keeps the
+      // low bar because the same call sets tomorrow's goals, and a skipped plan costs
+      // more than a thin diary entry does.
+      const minSceneMemories = boundary === 'sleep' && pov ? 2 : 4;
+      if (sceneMemories.length < minSceneMemories) {
         log.info(
-          `[Reflection] Scene ${previousScene.sceneId} had ${sceneMemories.length} memories, skipping reflection` +
+          `[Reflection] Scene ${previousScene.sceneId} had ${sceneMemories.length} memories ` +
+            `(needs ${minSceneMemories}), skipping reflection` +
             (boundary === 'sleep' ? ' (sleep-path daily plan skipped too; the lazy planner covers it)' : ''),
         );
         return;
@@ -648,7 +655,7 @@ ${factsBlock}
         planContext ? 'Scene Reflection + Daily Plan' : 'Scene Reflection',
         systemPrompt,
         transcript,
-        planContext ? 900 : 250,
+        planContext ? 900 : 160,
         undefined,
         planContext ? AIActionType.DAILY_PLAN : AIActionType.REFLECTION,
         undefined,
@@ -823,13 +830,24 @@ ${factsBlock}
       // N-3: a weak-but-true line beats a contentless scene (the "popup/code glitch"
       // hallucination class). Junk tunings come back ignored; the name is logged so
       // the mapping browser work stays greppable.
-      const synthesized = synthesizeInteractionDescription(event.interaction_name, event.sentient_sims.length);
+      const synthesized = synthesizeInteractionDescription(
+        event.interaction_name,
+        event.sentient_sims.length,
+        event.interaction_display_name,
+        event.interaction_display_name_template,
+      );
       if (synthesized?.ignored) {
         log.debug(`[PreAction] unmapped '${event.interaction_name}' looks like scaffolding; ignored`);
         return { result: { status: InteractionEventStatus.IGNORED } };
       }
       if (synthesized?.pre_actions) {
         log.info(`[PreAction] UNMAPPED '${event.interaction_name}' -> synthesized "${synthesized.pre_actions[0]}"`);
+        // So it can be found and given real text in the mapping browser
+        this.ctx.interactionRepository.recordUnmappedInteraction(
+          event.interaction_name,
+          event.interaction_display_name,
+          synthesized.pre_actions[0],
+        );
         description = synthesized;
       } else {
         return { result: { status: InteractionEventStatus.UNMAPPED_INTERACTION } };
@@ -1980,7 +1998,17 @@ ${factsBlock}
       directorDirection,
     });
 
-    if (options.saveMemory) {
+    // A solo beat is the same inner voice the cognition tick produces, so it keeps to the
+    // same bar: routine narration ("I put the seed in the ground") is thought and spoken
+    // aloud, but never written down. Without this a sim alone filed a memory row for every
+    // chore she finished, burying the real beats and feeding her own small talk back
+    // through recall.
+    const memoryScore = score?.memory;
+    const storable = memoryScore === undefined || memoryScore >= thoughtMemoryFloor;
+    if (!storable) {
+      log.info(`[Pipeline] ${performer.name}'s thought scored ${memoryScore}; not stored`);
+    }
+    if (options.saveMemory && storable) {
       const participants = this.ctx.participantRepository.getParticipants([
         { id: performer.sim_id, fullName: performer.name },
       ]);
@@ -2314,7 +2342,14 @@ Write me a buff description based on the conversation so that ${buffRequest.name
   playTtsLines(
     lines: DialogueLine[],
     sims?: SentientSim[],
-    options?: { paced?: boolean; preamble?: string; pacedText?: string; priority?: boolean },
+    options?: {
+      paced?: boolean;
+      preamble?: string;
+      pacedText?: string;
+      priority?: boolean;
+      sceneId?: string;
+      participantSimIds?: string[];
+    },
   ) {
     playTTSLines(lines, sims, { ...options, ...this.voiceCastingOptions(sims) });
   }

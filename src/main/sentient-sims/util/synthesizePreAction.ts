@@ -4,6 +4,16 @@
 // from. A synthesized line says only what the tuning name says — the character is busy
 // with <that> — and never invents an object, a mood or an outcome.
 //
+// When the mod sends the interaction's pie-menu label the line is the game's own words,
+// "Audrey Bennett: Talk about Recent Studies (with Yuki Behr)", instead of the tuning
+// name picked apart ("is busy with 'archetype sage talk about recent studies'").
+//
+// The game renders that label against THIS save, so it can carry a real name: "Play with
+// Elliot Jr". The mod sends a second form with {actor.N} where the names were, and it is
+// the one to build the line from - the line goes in the prompt (where the formatter puts
+// the names back) AND is offered in the mapping browser as text to publish to every user
+// of the mod, none of whom have an Elliot Jr.
+//
 // Junk tunings (idles, passives, constraint satisfiers, carry proxies) are IGNORED rather
 // than synthesized: nobody wants a scene about sim_Stand.
 
@@ -56,6 +66,8 @@ function tokens(name: string): string[] {
 export function synthesizeInteractionDescription(
   interactionName: string | undefined,
   simCount: number,
+  displayName?: string,
+  displayNameTemplate?: string,
 ): InteractionDescription | undefined {
   if (!interactionName) {
     return undefined;
@@ -63,6 +75,18 @@ export function synthesizeInteractionDescription(
   const lowered = interactionName.toLowerCase();
   if (IGNORE_FRAGMENTS.some((fragment) => lowered.includes(fragment))) {
     return { ignored: true };
+  }
+  // The template's braces are its {actor.N} tokens and must survive; a rendered label's
+  // braces would only ever be an unfilled token, so those are still stripped
+  const template = displayNameTemplate?.replace(/\s+/g, ' ').trim();
+  const label = template || displayName?.replace(/[{}]/g, '').replace(/\s+/g, ' ').trim();
+  if (label) {
+    // A label that already names its target ("Chat with Yuki", "Give {actor.1} a hug")
+    // says so itself
+    const withTarget = simCount >= 2 && !/\bwith\b/i.test(label) && !label.includes('{actor.1}');
+    return {
+      pre_actions: [`{actor.0}: ${label}${withTarget ? ' (with {actor.1})' : ''}`],
+    };
   }
   const words = tokens(interactionName);
   if (words.length === 0) {

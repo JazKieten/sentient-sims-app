@@ -51,6 +51,14 @@ function sentVoiceLines(): DialogueLine[] {
   return call[1] as DialogueLine[];
 }
 
+function sentVoiceOptions(): Record<string, unknown> {
+  const call = send.mock.calls.find(([channel]) => channel === 'on-voice');
+  if (!call) {
+    throw new Error('No on-voice message was sent');
+  }
+  return call[2] as Record<string, unknown>;
+}
+
 describe('playTTS', () => {
   beforeEach(() => {
     send.mockClear();
@@ -133,6 +141,25 @@ describe('playTTSLines', () => {
     });
 
     expect(sentVoiceLines()[0].voiceId).toBeTruthy();
+  });
+
+  it('carries the conversation and its sims to the renderer', () => {
+    // The renderer needs both to tell the mod who is talking, and to find this
+    // conversation again when the game ends it partway
+    playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Been fishing here for years.', simId: '1' }], [ricky], {
+      voiceType: VoiceType.ElevenLabs,
+      paced: true,
+      sceneId: 'scene-7',
+      participantSimIds: ['1', '2'],
+    });
+
+    expect(sentVoiceOptions()).toMatchObject({
+      paced: true,
+      sceneId: 'scene-7',
+      participantSimIds: ['1', '2'],
+    });
+    // Casting rebuilds the lines — the speaker's id has to survive it
+    expect(sentVoiceLines()[0].simId).toEqual('1');
   });
 
   it('leaves lines uncast when no sims are supplied', () => {

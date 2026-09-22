@@ -21,7 +21,7 @@ export function buildDiaryRules(context: ReflectionPromptContext): string {
   const othersLine = context.hasOthers
     ? `Mention each of the people you spent this time with — ${context.namesList} — what passed between you and how they left you feeling.\n`
     : '';
-  return `Write a short diary entry — a few sentences in your own voice: first person, past tense, plain prose. No headers, no labels, no lists, and no greeting like "Dear Diary" — just the entry itself. Never refer to yourself in the third person.
+  return `Write a short diary entry — two or three sentences in your own voice: first person, past tense, plain prose. No headers, no labels, no lists, and no greeting like "Dear Diary" — just the entry itself. Never refer to yourself in the third person.
 Sum up what happened and how you feel about it now.
 ${othersLine}Keep it concise and grounded. Do not invent events that are not in the notes below.`;
 }

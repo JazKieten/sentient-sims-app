@@ -4,6 +4,21 @@ export type ModLogWebsocketMessage = {
   log?: LogMessage;
   // V-1: game clock speed changes (see ss_clock.broadcast_clock_state)
   clock_state?: ClockState;
+  // The game ending a conversation the app is airing (see scene/ss_scene_watch.py):
+  // the sims in it walked apart, or one of them left the lot.
+  scene_control?: SceneControl;
+};
+
+export type SceneControl = {
+  // 'stop' ends the named scene; 'stop_all' ends everything (the lot is going away)
+  action: 'stop' | 'stop_all';
+  // 'soft' lets the line already playing finish; 'hard' cuts it off now
+  mode: 'soft' | 'hard';
+  scene_id?: string;
+  reason: 'walked_away' | 'left_lot' | 'zone_unload' | 'cheat';
+  // Who ended it, and how far away they had got
+  sim_id?: string | null;
+  distance_m?: number | null;
 };
 
 export type ClockState = {

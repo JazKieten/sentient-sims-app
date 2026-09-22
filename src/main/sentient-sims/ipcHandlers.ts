@@ -65,13 +65,28 @@ export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputServi
   // so the in-game subtitle stays in step with the voices
   ipcMain.on(
     'scene-line-shown',
-    (_event: IpcMainEvent, line: DialogueLine & { preamble?: string; voiced?: boolean }) => {
+    (
+      _event: IpcMainEvent,
+      line: DialogueLine & {
+        preamble?: string;
+        voiced?: boolean;
+        sceneId?: string;
+        participantSimIds?: string[];
+      },
+    ) => {
+      // Counted so a conversation cut short can trim its memory row to what was heard
+      ctx.scenePlayback.lineShown(line.sceneId);
       sendSceneLineToMod(line);
     },
   );
   // ...and as each one's audio finishes, so the speaker's mouth stops with the voice
-  ipcMain.on('scene-line-ended', (_event: IpcMainEvent, line: DialogueLine) => {
+  ipcMain.on('scene-line-ended', (_event: IpcMainEvent, line: DialogueLine & { sceneId?: string }) => {
     sendSceneLineEndedToMod(line);
+  });
+  // A round's playback finished. `completed` false means the renderer cut it short, so
+  // the pipeline stops feeding the conversation more rounds.
+  ipcMain.on('scene-playback-ended', (_event: IpcMainEvent, payload: { sceneId: string; completed: boolean }) => {
+    ctx.scenePlayback.playbackEnded(payload.sceneId, payload.completed);
   });
   // A paced scene the renderer never played would otherwise display nowhere in-game: its
   // block subtitle was suppressed on the promise that lines would stream. Un-mark it so the

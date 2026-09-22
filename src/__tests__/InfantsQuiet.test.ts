@@ -51,9 +51,13 @@ describe('infants go quiet', () => {
   it('a travel boundary writes no diary for an infant, and still writes one for an adult', async () => {
     const ctx = mockApiContext();
     const scene: SceneState = { sceneId: 1, locationId: 10, startedAt: '2026-09-04T00:00:00.000Z' };
+    // Four rows: a travel boundary needs a scene with some substance before it earns a
+    // diary, so a two-row fixture would now skip for a reason this test isn't about
     const rows = [
       { id: '1', content: 'Travis: dinner is ready', location_id: 10 },
       { id: '2', content: 'Ariel: coming', location_id: 10 },
+      { id: '3', content: 'Travis: sit anywhere', location_id: 10 },
+      { id: '4', content: 'Ariel: it smells good', location_id: 10 },
     ] as unknown as MemoryEntity[];
     vi.spyOn(ctx.memoryRepository, 'getSceneMemories').mockReturnValue(rows);
     vi.spyOn(ctx.memoryRepository, 'getSceneParticipantIds').mockReturnValue(['500', '600']);
@@ -77,5 +81,32 @@ describe('infants go quiet', () => {
     await ctx.ai.runSceneReflection(scene, { simId: '500', simName: 'Travis Scott' }, 'travel');
     expect(oneShot).toHaveBeenCalledTimes(1);
     expect(oneShot.mock.calls[0][0]).toBe('Scene Reflection');
+  });
+
+  // A hop through a lot is not a day worth writing down. The sleep boundary keeps the
+  // lower bar because the same call also sets tomorrow's goals.
+  it('a thin travel scene earns no diary', async () => {
+    const ctx = mockApiContext();
+    const scene: SceneState = { sceneId: 2, locationId: 10, startedAt: '2026-09-17T00:00:00.000Z' };
+    const rows = [
+      { id: '1', content: 'Travis: nice day', location_id: 10 },
+      { id: '2', content: 'Ariel: it is', location_id: 10 },
+      { id: '3', content: 'Travis: heading off', location_id: 10 },
+    ] as unknown as MemoryEntity[];
+    vi.spyOn(ctx.memoryRepository, 'getSceneMemories').mockReturnValue(rows);
+    vi.spyOn(ctx.memoryRepository, 'getSceneParticipantIds').mockReturnValue(['500', '600']);
+    vi.spyOn(ctx.participantRepository, 'getParticipantNames').mockReturnValue(['Travis Scott', 'Ariel Scott']);
+    vi.spyOn(ctx.locationRepository, 'getLocation').mockReturnValue({ id: 10, name: 'Sandtrap Flat' } as never);
+    const oneShot = vi
+      .spyOn(ctx.ai, 'runOneShot')
+      .mockResolvedValue({ text: 'A quiet stop.', exchange: {} } as never);
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 1,
+      sims: [{ sim_id: '500', sim_name: 'Travis Scott', self: { age: 'ELDER' } }],
+    } as never);
+
+    await ctx.ai.runSceneReflection(scene, { simId: '500', simName: 'Travis Scott' }, 'travel');
+    expect(oneShot).not.toHaveBeenCalled();
   });
 });

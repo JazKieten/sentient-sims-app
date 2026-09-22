@@ -9,7 +9,9 @@ import { OpenAIService } from 'main/sentient-sims/services/OpenAIService';
 import { mockApiContext } from './util';
 
 const MONOLOGUE = 'I could really go for a snack.';
-const SCORES = '{"memory": 3, "action": 2, "action_reason": "Just a bit peckish."}';
+// memory 6: above the storage floor, so the tick's thought is written down and can
+// carry the trace this test reads back
+const SCORES = '{"memory": 6, "action": 2, "action_reason": "Just a bit peckish."}';
 
 function idleSimReport(seq: number): SimStateReport {
   return {

@@ -146,6 +146,16 @@ export class ParticipantRepository extends Repository {
     });
   }
 
+  // Every name this save knows, for checking text that is about to be published to
+  // everyone (see util/savedNames.ts). Unnamed rows are dropped.
+  getAllNames(): string[] {
+    const rows = this.dbService.getDb().prepare('SELECT name FROM participant WHERE name IS NOT NULL').all() as {
+      name: string | null;
+    }[];
+
+    return rows.map((row) => row.name).filter((name): name is string => Boolean(name));
+  }
+
   // Read-only name lookup for a set of ids (no insert-or-replace side effects like getParticipant).
   getParticipantNames(ids: string[]): string[] {
     if (ids.length === 0) {

@@ -7,6 +7,10 @@ import { mockEnvironment } from './util';
 const notifyMocks = vi.hoisted(() => ({
   sendPlayerVoiceMessageToMod: vi.fn(),
   notifyTwitchStatus: vi.fn(),
+  // Read by ApiContext when it builds the scene playback registry
+  notifySceneStop: vi.fn(),
+  sendSceneEndedToMod: vi.fn(),
+  setSceneMemoryObserver: vi.fn(),
 }));
 
 vi.mock('main/sentient-sims/util/notifyRenderer', () => notifyMocks);

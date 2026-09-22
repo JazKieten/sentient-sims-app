@@ -213,3 +213,12 @@ export const twitchFollowerCacheTtlMs = 600000;
 // Voice the app speaks viewer !ask questions with when none is configured (ElevenLabs
 // premade "Charlie": energetic, casual — distinct from the drama-cast sim voices)
 export const defaultTwitchChatVoiceId = 'IKne3meq5aSn9XLyUdCD';
+
+// A sim's inner voice is only written down when the salience stage says the moment was
+// worth remembering. Every tick used to file its monologue as a row, which buried the
+// Memories window — and the sim's own recall — under forgettable inner voice ("I should
+// get back to the dishes"). The sim still thinks either way: the monologue shapes the
+// scores and the beat that follows, it just isn't stored when nothing happened.
+// Shared by the cognition tick and the solo directed scene, which are two routes to the
+// same thing — a sim thinking to herself.
+export const thoughtMemoryFloor = 4;

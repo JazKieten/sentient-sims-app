@@ -11,6 +11,12 @@ export enum ModWebsocketMessageType {
   SCENE_LINE = 'scene_line',
   // The line's audio finished playing; the mod stops the speaker's mouth
   SCENE_LINE_ENDED = 'scene_line_ended',
+  // The whole conversation is over, however it ended. The mod stops watching the
+  // sims in it for the walk-away that would have cut it short.
+  SCENE_ENDED = 'scene_ended',
+  // A conversation thread between the player (voice, chat window, Twitch) and a sim
+  // closed on the sim's side; the chat window may show it
+  CONVERSATION_CLOSED = 'conversation_closed',
   ENQUEUE_INTERACTION = 'enqueue_interaction',
   // Cancels a previously pushed interaction the app has given up on (cognition's
   // pending timeout) — otherwise a push queued behind a long-running activity outlives
@@ -66,10 +72,36 @@ export type ModSceneLine = ModWebsocketMessage & {
   preamble?: string;
   // false when no audio plays for the line; omitted means voiced (older senders)
   voiced?: boolean;
+  // Which conversation this line belongs to, and who is in it. The mod follows the
+  // participants and ends the scene when they stop being together (walked into
+  // another room, left the lot). Sim ids are strings: they are 64-bit game handles.
+  // Absent on solo lines and from older app versions, which are simply not watched.
+  scene_id?: string;
+  speaker_sim_id?: string;
+  // More of the same line follows after a breath (a long reply aired in chunks)
+  continues?: boolean;
+  participant_sim_ids?: string[];
 };
 
 export type ModSceneLineEnded = ModWebsocketMessage & {
   speaker: string;
+  scene_id?: string;
+  // More of the same line follows (a long reply aired in chunks): the mouth stays open
+  continues?: boolean;
+};
+
+export type ModConversationClosed = ModWebsocketMessage & {
+  sim_ids: string[];
+  sim_names: string[];
+  speaker: string;
+  reason: string;
+};
+
+export type SceneEndedReason = 'finished' | 'stopped' | 'dropped';
+
+export type ModSceneEnded = ModWebsocketMessage & {
+  scene_id: string;
+  reason: SceneEndedReason;
 };
 
 export type ModAddBuff = ModWebsocketMessage & {
@@ -134,6 +166,8 @@ export type WebsocketNotification =
   | ModAddBuff
   | ModSceneLine
   | ModSceneLineEnded
+  | ModSceneEnded
+  | ModConversationClosed
   | ModEnqueueInteraction
   | ModRequestPerception
   | ModCancelInteraction

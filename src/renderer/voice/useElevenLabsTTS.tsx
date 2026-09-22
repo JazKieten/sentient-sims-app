@@ -2,7 +2,12 @@ import { useState, useCallback, useRef } from 'react';
 import log from 'electron-log';
 import { useAISettings } from 'renderer/providers/AISettingsProvider';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
-import { defaultElevenLabsEndpoint, sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/constants';
+import {
+  defaultElevenLabsEndpoint,
+  sceneChunkGapMs,
+  sceneLineGapMs,
+  sceneLineReadingHoldMs,
+} from 'main/sentient-sims/constants';
 import useSetting from 'renderer/hooks/useSetting';
 import { defaultElevenLabsTTSSettings, ElevenLabsTTSSettings } from 'main/sentient-sims/models/ElevenLabsTTSSettings';
 import { buildElevenLabsSpeechRequest, elevenLabsLineText } from 'main/sentient-sims/clients/ElevenLabsTTSRequest';
@@ -165,6 +170,9 @@ export function useElevenLabsTTS(): TTSHook {
 
       for (let i = 0; i < speakable.length; i += 1) {
         if (playSessionRef.current !== session) break;
+        // The conversation ended while the previous line was playing; that line got
+        // to finish, this one never starts
+        if (shouldContinue && !shouldContinue()) break;
         startFetch(i + 1);
 
         let played = false;
@@ -219,7 +227,7 @@ export function useElevenLabsTTS(): TTSHook {
         }
 
         if (i < speakable.length - 1 && playSessionRef.current === session) {
-          await pacedDelay(sceneLineGapMs);
+          await pacedDelay(speakable[i].continues ? sceneChunkGapMs : sceneLineGapMs);
         }
       }
 

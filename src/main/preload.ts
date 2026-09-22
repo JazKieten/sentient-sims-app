@@ -149,14 +149,33 @@ const electronHandler = {
 
     return () => ipcRenderer.removeListener('on-voice', callback);
   },
-  notifySceneLineShown: (line: { speaker: string; text: string; preamble?: string; voiced?: boolean }) => {
+  notifySceneLineShown: (line: {
+    speaker: string;
+    text: string;
+    preamble?: string;
+    voiced?: boolean;
+    simId?: string;
+    sceneId?: string;
+    participantSimIds?: string[];
+    continues?: boolean;
+  }) => {
     ipcRenderer.send('scene-line-shown', line);
   },
-  notifySceneLineEnded: (line: { speaker: string; text: string }) => {
+  notifySceneLineEnded: (line: { speaker: string; text: string; sceneId?: string; continues?: boolean }) => {
     ipcRenderer.send('scene-line-ended', line);
   },
   notifySceneDropped: (pacedText: string) => {
     ipcRenderer.send('scene-dropped', pacedText);
+  },
+  // A scene's playback is over: completed false means it was cut short
+  notifyScenePlaybackEnded: (payload: { sceneId: string; completed: boolean }) => {
+    ipcRenderer.send('scene-playback-ended', payload);
+  },
+  // The game ended a conversation partway (a sim walked away or left the lot)
+  onSceneStop: (callback: IpcCallback) => {
+    ipcRenderer.on('scene-stop', callback);
+
+    return () => ipcRenderer.removeListener('scene-stop', callback);
   },
   onClockState: (callback: IpcCallback) => {
     ipcRenderer.on('clock-state', callback);

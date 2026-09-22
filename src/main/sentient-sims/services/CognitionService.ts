@@ -738,6 +738,81 @@ export class CognitionService {
   // go_home; at a venue it is enter_lot (observed live: she traveled to a bar, spawned
   // on the street, and stood outside thinking wistful thoughts while three sims drank
   // inside — nothing ever walked her in).
+  // A sim who has been miserable for MISERABLE_AWAY_MS straight while OUT wants to go
+  // home. Live 2026-09-19: two sims stood Uncomfortable in a museum indefinitely and
+  // nothing in cognition ever proposed leaving — go_home IS offered there (the mod puts
+  // it in the lot's action keys off the home lot) and the model simply never picks it
+  // over whatever need is loudest. Mood is a fact about how the outing is GOING that no
+  // need score captures: a sim can have every motive in the green and still be having a
+  // bad time somewhere.
+  //
+  // This is a proposal, not a departure. The mod asks the player before anything travels
+  // (travel/ss_travel_consent), so firing costs a notification the player can wave away,
+  // and the mod keeps its own ten-minute cool-off per sim after they do.
+  private maybeGoHomeMiserable(entry: SimStateEntry, now: number, isHome: boolean) {
+    const simId = entry.sim_id;
+    if (!simId || entry.is_household === false) {
+      return;
+    }
+    const runtime = this.runtime(simId);
+    const mood = (entry.self?.mood ?? '').toLowerCase();
+    if (isHome || !LEAVE_WORTHY_MOODS.has(mood)) {
+      // Home, or feeling fine: the run is over either way. Any leave-worthy mood keeps
+      // the clock running, because "uncomfortable then tense" is still one unbroken bad
+      // time — it is the feeling bad that has to be continuous, not one flavour of it.
+      runtime.miserableSince = undefined;
+      return;
+    }
+    if (runtime.miserableSince === undefined) {
+      runtime.miserableSince = now;
+      return;
+    }
+    if (now - runtime.miserableSince < MISERABLE_AWAY_MS) {
+      return;
+    }
+    // The same courtesy every other rule lane shows: never talk over a conversation,
+    // never cut in on a sim already deciding or acting, never re-offer a verb the world
+    // just refused.
+    if (entry.self?.in_ww_scene || entry.activity?.in_social) {
+      return;
+    }
+    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+      return;
+    }
+    if (this.recentlyFailedActions(runtime).has('go_home')) {
+      return;
+    }
+    const minutes = Math.round((now - runtime.miserableSince) / 60_000);
+    const why = `${mood} for ${minutes} min out`;
+    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+      log.info(`[Cognition][suggest] sim ${simId} is having a bad time out (${why}); would go_home`);
+      runtime.miserableSince = now;
+      this.toCooldown(simId);
+      return;
+    }
+    try {
+      const requestId = this.ctx.actionDispatcher.dispatch({
+        sim_id: simId,
+        action: 'go_home',
+        motivation: `Been ${mood} this whole time out; this place is not working, time to head home.`,
+        source: 'cognition',
+      });
+      runtime.phase = 'PENDING_OUTCOME';
+      runtime.pendingRequestId = requestId;
+      runtime.pendingAction = 'go_home';
+      // Restart rather than clear: if the player says stay, the sim is still out and
+      // still miserable and may ask again later. The suppression window above is what
+      // keeps that from becoming nagging.
+      runtime.miserableSince = now;
+      this.stats.dispatches += 1;
+      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
+      log.info(`[Cognition] sim ${simId} is having a bad time out (${why}) -> go_home (rule, ${requestId})`);
+    } catch (error) {
+      log.warn(`[Cognition] miserable go_home dispatch refused for sim ${simId}`, error);
+      this.toCooldown(simId);
+    }
+  }
+
   private maybeRejoinLot(entry: SimStateEntry, now: number, isHome: boolean) {
     const simId = entry.sim_id;
     const action = isHome ? 'go_home' : 'enter_lot';
@@ -1018,10 +1093,140 @@ export class CognitionService {
       hiddenActions,
       venues,
     });
+    this.dispatchChosenIntent({ simId, entry, runtime, intent, source: 'cognition' });
+  }
+
+  // A reply to the player left this sim wanting to act — the scene's action score crossed
+  // the threshold ("you should go paint" answered with "yeah, I've been meaning to"). The
+  // Action Scene is staged NOW from the current snapshot instead of arming a desire for
+  // the next tick: over the sim's FULL offered vocabulary (no daily-loadout narrowing —
+  // the player may have brought up anything the sim can do right now), with what was just
+  // said as the situation, and dispatched as 'conversation', which the mod treats as the
+  // player talking (it does not yield to the player's own click the way cognition does).
+  // The tick's guards — autonomy echo, redispatch while busy, suggest mode — still apply.
+  // When the sim cannot be staged right now (no snapshot, a tick in flight, the feature
+  // off) the desire is armed for the next tick instead, which is what every scene did
+  // before 2026-09-21.
+  async actOnConversation(
+    simId: string,
+    desire: {
+      score: number;
+      reason?: string;
+      thought?: string;
+      speaker: string;
+      transcript: string;
+      // Stage and choose, but never dispatch (the bench replaying a conversation)
+      suggestOnly?: boolean;
+    },
+  ): Promise<{ acted: boolean; intent?: CognitionIntent }> {
+    if (desire.score < this.ctx.settings.cognitionActionScoreThreshold) {
+      return { acted: false };
+    }
+    if (!this.ctx.settings.conversationActionsEnabled || this.ctx.settings.cognitionAutonomyLevel === 'off') {
+      this.armDesireFromScene(simId, desire);
+      return { acted: false };
+    }
+    const entry = this.ctx.simStateCache.getSim(simId);
+    const report = this.ctx.simStateCache.getReport();
+    const runtime = this.runtime(simId);
+    if (!entry || !report || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+      this.armDesireFromScene(simId, desire);
+      return { acted: false };
+    }
+    runtime.phase = 'DELIBERATING';
+    this.stats.deliberations += 1;
+    const simLabel = entry.sim_name ?? simId;
+    log.info(
+      `[Cognition] sim ${simId} acting on the conversation with ${desire.speaker}: action ${desire.score}${
+        desire.reason ? ` (${desire.reason})` : ''
+      }`,
+    );
+    try {
+      const suppressed = this.recentlyFailedActions(runtime);
+      const ageBlocked = entry.self?.age_blocked ?? [];
+      const narrowed = new Set([...suppressed, ...ageBlocked]);
+      const hiddenActions = new Set(ageBlocked);
+      const entryView = this.withoutSuppressedActions(entry, narrowed);
+      const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
+      const reportView: SimStateReport =
+        narrowed.size === 0 || !report.lot
+          ? report
+          : { ...report, lot: { ...report.lot, action_keys: lotActionKeys.length > 0 ? lotActionKeys : undefined } };
+      const absoluteDay = report.lot?.clock?.absolute_day;
+      const plan =
+        entry.is_household !== false && absoluteDay !== undefined
+          ? this.ctx.dailyPlan.activePlan(simId, absoluteDay)
+          : undefined;
+      const planBlock =
+        plan && (plan.goals.length > 0 || plan.persona)
+          ? {
+              goals: plan.goals.map((goal) => ({
+                label: goal.label,
+                action_keys: goal.action_keys,
+                reachable: goal.reachable,
+              })),
+              persona: plan.persona,
+            }
+          : undefined;
+      const memoriesBlock = await this.relevantMemoriesBlock(entryView, absoluteDay);
+      const factsBlock = this.knownFactsBlock(simId, entry, absoluteDay);
+      const venues = lotActionKeys.includes('go_out') ? report.venues : undefined;
+      const situationPrompt = `${buildCognitionUserPrompt(
+        entryView,
+        reportView,
+        memoriesBlock,
+        [...suppressed],
+        planBlock,
+        hiddenActions,
+        factsBlock,
+        venues,
+      )}\n\nWhat was just said to you, in conversation with ${desire.speaker}:\n${desire.transcript}`;
+      const exchanges: LLMExchange[] = [];
+      const intent = await this.runActionScene({
+        entryView,
+        lotActionKeys,
+        situationPrompt,
+        simLabel,
+        thought: desire.thought,
+        actionReason: desire.reason,
+        exchanges,
+        hiddenActions,
+        venues,
+      });
+      const acted = this.dispatchChosenIntent({
+        simId,
+        entry,
+        runtime,
+        intent,
+        source: 'conversation',
+        motivation: desire.reason ? `After talking with ${desire.speaker}: ${desire.reason}` : undefined,
+        suggestOnly: desire.suggestOnly,
+      });
+      return { acted, intent: intent?.kind === 'action' ? intent : undefined };
+    } catch (error) {
+      log.warn(`[Cognition] sim ${simId} could not act on the conversation`, error);
+      this.toCooldown(simId);
+      return { acted: false };
+    }
+  }
+
+  // The chosen intent goes out — or does not. The guards that keep a busy or redundant
+  // pick from dispatching live here so the tick and a conversation's follow-through share
+  // them. Returns true when an action was dispatched.
+  private dispatchChosenIntent(params: {
+    simId: string;
+    entry: SimStateEntry;
+    runtime: SimRuntime;
+    intent: CognitionIntent | undefined;
+    source: 'cognition' | 'conversation';
+    motivation?: string;
+    suggestOnly?: boolean;
+  }): boolean {
+    const { simId, entry, runtime, intent, source } = params;
     if (!intent || intent.kind !== 'action' || !intent.action) {
       this.stats.continues += 1;
       this.toCooldown(simId);
-      return;
+      return false;
     }
 
     const runningNow = entry.activity?.running ?? '';
@@ -1039,7 +1244,7 @@ export class CognitionService {
         `[Cognition] sim ${simId} is already doing '${runningKey}' (autonomy); '${intent.action}' counted as continue`,
       );
       this.toCooldown(simId);
-      return;
+      return false;
     }
 
     // Redispatch guard survives Full Autonomy: a busy sim choosing the SAME action (or
@@ -1057,11 +1262,11 @@ export class CognitionService {
           `[Cognition] sim ${simId} is busy on recently dispatched '${runtime.lastDispatch.action}'; blocking '${intent.action}' (${sameAction ? 'same action' : 'same need'})`,
         );
         this.toCooldown(simId);
-        return;
+        return false;
       }
     }
 
-    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+    if (params.suggestOnly || this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
       this.stats.suggestions += 1;
       log.info(
         `[Cognition][suggest] sim ${simId} would ${intent.action}` +
@@ -1069,7 +1274,7 @@ export class CognitionService {
           (intent.motivation ? ` — ${intent.motivation}` : ''),
       );
       this.toCooldown(simId);
-      return;
+      return false;
     }
 
     try {
@@ -1079,8 +1284,13 @@ export class CognitionService {
         target_sim_id: intent.target_sim_id,
         target_object_id: intent.target_object_id,
         zone_id: intent.zone_id,
-        motivation: intent.motivation ?? intent.thought,
-        source: 'cognition',
+        motivation: params.motivation ?? intent.motivation ?? intent.thought,
+        source,
+        // A conversation's follow-through is the sim changing course on what was just
+        // said (an action score of 7+ is defined as wanting to change what they are
+        // doing now): whatever idle plan they were on is off. The tick keeps the mod's
+        // defaults for cognition.
+        ...(source === 'conversation' ? { priority: 'high' as const, preempt: true } : {}),
       });
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;
@@ -1090,11 +1300,13 @@ export class CognitionService {
       runtime.pendingIntent = { intent, entry, retriesLeft: Math.min(3, Math.max(0, intent.retries ?? 1)) };
       this.stats.dispatches += 1;
       this.armPendingTimeout(simId, runtime, entry, intent);
-      log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId})`);
+      log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId}, ${source})`);
+      return true;
     } catch (error) {
       // Dispatcher refused (already in flight — a race with a player push): back off
       log.warn(`[Cognition] dispatch refused for sim ${simId}`, error);
       this.toCooldown(simId);
+      return false;
     }
   }
 

@@ -336,6 +336,25 @@ export function defaultStore(cwd?: string) {
         type: 'number',
         default: 3,
       },
+      [SettingsEnum.PLAYER_REPLY_MAX_TOKENS.toString()]: {
+        type: 'number',
+        // A full answer with its reasons is a paragraph, not a line: 400 tokens is
+        // roughly 300 words. Sim-to-sim lines keep their own 120.
+        default: 400,
+      },
+      [SettingsEnum.PLAYER_CONVERSATION_IDLE_MINUTES.toString()]: {
+        type: 'number',
+        // Real minutes since the last line before a player conversation is forgotten
+        // as a thread (the memory rows remain). Five covers a pause to click around.
+        default: 5,
+      },
+      [SettingsEnum.CONVERSATION_ACTIONS_ENABLED.toString()]: {
+        type: 'boolean',
+        // A reply to the player may turn straight into an action ("you should go paint"
+        // gets the answer AND the walk to the easel) instead of arming a desire for the
+        // next cognition tick
+        default: true,
+      },
       [SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS.toString()]: {
         type: 'boolean',
         default: true,
@@ -1247,6 +1266,22 @@ export class SettingsService {
   get sceneMaxRounds(): number {
     const raw = Number(this.get(SettingsEnum.SCENE_MAX_ROUNDS));
     return Math.min(5, Math.max(1, Number.isFinite(raw) ? raw : 3));
+  }
+
+  // Player-facing replies: the actor's token budget when answering the player. Clamped so
+  // a typo cannot cut a reply below a sentence or run past the reply's share of the window.
+  get playerReplyMaxTokens(): number {
+    const raw = Number(this.get(SettingsEnum.PLAYER_REPLY_MAX_TOKENS));
+    return Math.min(1000, Math.max(120, Number.isFinite(raw) ? raw : 400));
+  }
+
+  get playerConversationIdleMinutes(): number {
+    const raw = Number(this.get(SettingsEnum.PLAYER_CONVERSATION_IDLE_MINUTES));
+    return Math.min(60, Math.max(1, Number.isFinite(raw) ? raw : 5));
+  }
+
+  get conversationActionsEnabled(): boolean {
+    return this.get(SettingsEnum.CONVERSATION_ACTIONS_ENABLED) !== false;
   }
 
   get voiceInputEndpoint(): string {

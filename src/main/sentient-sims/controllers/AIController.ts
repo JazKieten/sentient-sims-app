@@ -18,6 +18,8 @@ import { ImageGenerationRequest } from '../models/ImageGeneration';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 import { runTier0 } from '../bench/tier0';
 import { BatteryQuestion, buildQuestions, gradeBattery } from '../bench/selfKnowledge';
+import { PLAYER_THREAD_FIXTURES } from '../bench/playerThreadFixtures';
+import { runPlayerThread } from '../bench/playerThreads';
 
 export class AIController {
   private readonly ctx: ApiContext;
@@ -196,8 +198,9 @@ export class AIController {
       const result = await this.ctx.ai.runDirectedGeneration(body.event, {
         playerLine: { speaker, text: question.question },
         // The battery is a measurement, not a scene: its answers must not become memories
-        // the Sim then remembers having said.
+        // the Sim then remembers having said, nor a conversation thread it carries on.
         saveMemory: false,
+        standalone: true,
       });
       const exchangeIds = this.ctx.aiExchangeLog
         .list(20)
@@ -214,6 +217,42 @@ export class AIController {
         (graded.warnings.length > 0 ? `, ${graded.warnings.length} unknown name(s)` : ''),
     );
     return res.json(graded);
+  };
+
+  /** The player-thread bench's fixtures, so a caller can pick one and find its sim. */
+  @CatchErrors()
+  getPlayerThreadFixtures = (_req: Request, res: Response) => {
+    res.json(
+      PLAYER_THREAD_FIXTURES.map((fixture, index) => ({
+        index,
+        id: fixture.id,
+        title: fixture.title,
+        speaker: fixture.speaker,
+        simName: fixture.simName,
+        lines: fixture.lines,
+      })),
+    );
+  };
+
+  /**
+   * Replay one fixture conversation (bench/playerThreadFixtures) through the player-facing
+   * reply path against the loaded save. Body: { simId } — the fixture names the sim, the
+   * caller resolves the id (GET /participants), because a name can match two sims.
+   */
+  @CatchErrors()
+  playerThread = async (req: Request, res: Response) => {
+    const raw = Array.isArray(req.params.index) ? req.params.index[0] : req.params.index;
+    const index = Number(raw);
+    const fixture = Number.isInteger(index) ? PLAYER_THREAD_FIXTURES[index] : undefined;
+    if (!fixture) {
+      return res.status(404).json({ error: `no fixture ${raw}; GET /bench/player-threads lists them` });
+    }
+    const body = req.body as { simId?: string; lines?: string[] };
+    if (!body.simId) {
+      return res.status(400).json({ error: "simId is required (the id of the fixture's sim in this save)" });
+    }
+    const run = await runPlayerThread(this.ctx, fixture, body.simId, body.lines);
+    return res.json(run);
   };
 
   @CatchErrors()

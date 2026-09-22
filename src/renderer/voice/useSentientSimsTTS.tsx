@@ -5,7 +5,12 @@ import axios from 'axios';
 import { useAISettings } from 'renderer/providers/AISettingsProvider';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import useSetting from 'renderer/hooks/useSetting';
-import { defaultSentientSimsAIHost, sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/constants';
+import {
+  defaultSentientSimsAIHost,
+  sceneChunkGapMs,
+  sceneLineGapMs,
+  sceneLineReadingHoldMs,
+} from 'main/sentient-sims/constants';
 import {
   defaultSentientSimsAITTSSettings,
   SentientSimsAITTSSettings,
@@ -290,6 +295,9 @@ export function useSentientSimsTTS(): TTSHook {
       try {
         for (let i = 0; i < lines.length; i += 1) {
           if (speakSessionRef.current !== session) break;
+          // The conversation ended while the previous line was playing; that line got
+          // to finish, this one never starts
+          if (shouldContinue && !shouldContinue()) break;
           startFetch(i + 1);
           const audioUrl = (await audioPromises[i]) ?? null;
           if (speakSessionRef.current !== session) {
@@ -322,7 +330,7 @@ export function useSentientSimsTTS(): TTSHook {
           }
 
           if (i < lines.length - 1 && speakSessionRef.current === session) {
-            await pacedDelay(sceneLineGapMs);
+            await pacedDelay(lines[i].continues ? sceneChunkGapMs : sceneLineGapMs);
           }
         }
       } finally {

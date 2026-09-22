@@ -80,6 +80,14 @@ import { OpenRouterService } from './OpenRouterService';
 import { PatreonService } from './PatreonService';
 import { PromptRequestBuilderService } from './PromptRequestBuilderService';
 import { SceneService } from './SceneService';
+import {
+  notifySceneStop,
+  sendConversationClosedToMod,
+  sendSceneEndedToMod,
+  setSceneMemoryObserver,
+} from '../util/notifyRenderer';
+import { ScenePlaybackRegistry } from './ScenePlaybackRegistry';
+import { PlayerConversationService } from './PlayerConversationService';
 import { ProviderConfigService } from './ProviderConfigService';
 import { SentientSimsAIService } from './SentientSimsAIService';
 import { SentientSimsEmbeddingService } from './SentientSimsEmbeddingService';
@@ -258,6 +266,9 @@ export class ApiContext {
   private readonly _generationQueueService: GenerationQueueService;
   private readonly _mappingService: MappingService;
   private readonly _sceneService: SceneService;
+
+  private readonly _scenePlaybackRegistry: ScenePlaybackRegistry;
+  private readonly _playerConversationService: PlayerConversationService;
   private readonly _actionDispatcherService: ActionDispatcherService;
 
   private _voiceCommandService?: VoiceCommandService;
@@ -371,6 +382,36 @@ export class ApiContext {
     this._simFactRepository = new SimFactRepository(this._db);
 
     this._sceneService = new SceneService();
+    this._playerConversationService = new PlayerConversationService({
+      idleMs: () => this._settings.playerConversationIdleMinutes * 60_000,
+      notifyClosed: (conversation, reason) => {
+        sendConversationClosedToMod({
+          simIds: conversation.simIds,
+          simNames: conversation.simNames,
+          speaker: conversation.speaker,
+          reason,
+        });
+      },
+    });
+    this._scenePlaybackRegistry = new ScenePlaybackRegistry({
+      notifyStop: notifySceneStop,
+      notifySceneEnded: (sceneId, reason) => {
+        // The game ended the conversation (walk-away, left lot, zone unload): a player
+        // thread riding that scene id is over too. 'finished' is just a round's playback
+        // running out, which every reply does while the thread stays open.
+        if (reason === 'stopped') {
+          this._playerConversationService.onSceneStopped(sceneId);
+        }
+        sendSceneEndedToMod(sceneId, reason);
+      },
+      trimMemory: (memoryId, content) => {
+        const existing = this._memoryRepository.getMemory({ id: memoryId });
+        this._memoryRepository.updateMemory({ ...existing, content });
+      },
+    });
+    // A scene's transcript row is saved before a word of it is spoken; this is how a
+    // cut scene finds its row again to shrink it to what was actually said.
+    setSceneMemoryObserver((pacedText, memoryId) => this._scenePlaybackRegistry.attachMemory(pacedText, memoryId));
     this._actionDispatcherService = new ActionDispatcherService();
     this._simStateCache = new SimStateCache();
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
@@ -508,6 +549,14 @@ export class ApiContext {
 
   get sceneService(): SceneService {
     return this._sceneService;
+  }
+
+  get scenePlayback(): ScenePlaybackRegistry {
+    return this._scenePlaybackRegistry;
+  }
+
+  get playerConversations(): PlayerConversationService {
+    return this._playerConversationService;
   }
 
   // V-8: lazily built (needs ai + simStateCache + actionDispatcher, all on this context)

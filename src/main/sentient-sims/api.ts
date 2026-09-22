@@ -36,6 +36,10 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/ai/outcomes', ctx.controller.ai.getOutcomes);
   expressApp.get('/bench/tier0', ctx.controller.ai.getTier0);
   expressApp.post('/bench/self-knowledge/:simId', ctx.controller.ai.selfKnowledge);
+  // The five player-facing conversations from the 09-19..21 logs, replayed through the
+  // reply path with the thread, the status block and the follow-through action
+  expressApp.get('/bench/player-threads', ctx.controller.ai.getPlayerThreadFixtures);
+  expressApp.post('/bench/player-thread/:index', ctx.controller.ai.playerThread);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);

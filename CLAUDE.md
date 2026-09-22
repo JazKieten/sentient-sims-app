@@ -33,6 +33,7 @@ Backend (src/main/sentient-sims/):
     GenerationService           - Interface implemented by each AI provider
     ProviderConfigService       - Resolves named provider configs (AIProviderConfig: provider + model) with a default config and per-action overrides; legacy aiApiType stays two-way synced with the default config via SettingsService hooks
     PromptRequestBuilderService - Builds prompts from game state, memories, interaction context
+    PlayerConversationService   - The thread between the player (chat window, voice persona, Twitch chat) and a sim: each reply sees the exchange so far, and the thread closes when the sim has said their piece, on idle, or when the game stops the scene
     SettingsService             - Persists user settings via electron-store
     DirectoryService            - Manages Sims 4 mod/save file paths
     DbService                   - SQLite database via better-sqlite3
@@ -46,6 +47,14 @@ Frontend (src/renderer/):
   clients/     - HTTP client wrappers (at src/main/sentient-sims/clients/) for the local Express API
   providers/   - React context providers
   settings/    - Settings UI components
+
+Player-facing replies (2026-09-21): a directed scene driven by a playerLine (chat window, voice/conscience, Twitch !ask)
+is `playerFacing` in AIService.runDirectedGeneration — full-length straight answers (pipeline/prompts/scene.ts
+playerFacing branch, playerReplyMaxTokens), the sim's live <STATUS>/<TODAYS_PLAN> block (util/formatCognitionPrompt
+formatSelfStatus), the conversation thread as context, and the scorer's action verdict acting NOW through
+CognitionService.actOnConversation (source 'conversation', setting conversationActionsEnabled). Long replies air in
+sentence chunks (util/airingChunks, `continues` on DialogueLine → 150 ms gap, mouth stays open in the mod). Sim-to-sim
+scenes keep the short-line rules. Bench: GET /bench/player-threads, POST /bench/player-thread/:index {simId}.
 
 IPC: ipcHandlers.ts registers Electron IPC handlers (dialog, settings, clipboard, navigation). Renderer uses window.electron.ipcRenderer for direct main process calls, and HTTP clients for Express API calls.
 

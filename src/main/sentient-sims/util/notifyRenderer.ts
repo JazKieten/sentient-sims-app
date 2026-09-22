@@ -57,6 +57,16 @@ export function notifyTwitchStatus(status: TwitchChatStatus) {
   notifyAllWindows('twitch-status', status);
 }
 
+// A scene's transcript row is written before any of it is spoken, and nothing on it
+// names the scene. The observer is how ScenePlaybackRegistry recognises the row for a
+// conversation it is airing (matched on the paced text), so a scene cut short can shrink
+// its memory to what was actually said.
+let sceneMemoryObserver: ((pacedText: string, memoryId: string) => void) | undefined;
+
+export function setSceneMemoryObserver(observer?: (pacedText: string, memoryId: string) => void) {
+  sceneMemoryObserver = observer;
+}
+
 export function notifyNewMemoryAdded(
   memory: MemoryEntity,
   options?: { notifyMod?: boolean; modDisplayAction?: string },
@@ -157,6 +167,9 @@ export function playTTSLines(
     pacedText?: string;
     // V-2: front of the renderer's scene queue
     priority?: boolean;
+    // Which conversation these lines belong to, so the game can end it partway
+    sceneId?: string;
+    participantSimIds?: string[];
   },
 ) {
   log.debug('Sending on-voice');
@@ -169,13 +182,28 @@ export function playTTSLines(
     preamble: options?.preamble,
     pacedText: options?.pacedText,
     priority: options?.priority ?? false,
+    sceneId: options?.sceneId,
+    participantSimIds: options?.participantSimIds,
   });
+}
+
+// The game ending a conversation partway: the renderer drops whatever of that scene
+// it has left. 'hard' also cuts the line that is playing right now.
+export function notifySceneStop(payload: { sceneId: string; mode: 'soft' | 'hard' }) {
+  notifyAllWindows('scene-stop', payload);
 }
 
 // Called as each scene line starts playing so the in-game subtitle appears in step
 // with the voice playback; the preamble (the scene's driving action) heads each
 // line's subtitle section in-game
-export function sendSceneLineToMod(line: DialogueLine & { preamble?: string; voiced?: boolean }) {
+export function sendSceneLineToMod(
+  line: DialogueLine & {
+    preamble?: string;
+    voiced?: boolean;
+    sceneId?: string;
+    participantSimIds?: string[];
+  },
+) {
   sendModNotification({
     type: ModWebsocketMessageType.SCENE_LINE,
     speaker: line.speaker,
@@ -185,14 +213,50 @@ export function sendSceneLineToMod(line: DialogueLine & { preamble?: string; voi
     // false when no audio plays for the line (TTS off, fetch failed): the mod moves the
     // speaker's mouth only while a voice is heard. Omitted (undefined) means voiced.
     voiced: line.voiced,
+    // Who is talking to whom, so the mod can end the conversation when they stop
+    // being together. A scene with no ids (a solo reply) is simply not watched.
+    scene_id: line.sceneId,
+    speaker_sim_id: line.simId,
+    participant_sim_ids: line.participantSimIds,
+    // More of this same line follows (a long reply aired in sentence chunks): the mod
+    // keeps the mouth open through the gap instead of closing it at this chunk's end
+    continues: line.continues,
   });
 }
 
 // Called when a scene line's audio has finished so the mod stops the speaker's mouth
-export function sendSceneLineEndedToMod(line: DialogueLine) {
+export function sendSceneLineEndedToMod(line: DialogueLine & { sceneId?: string }) {
   sendModNotification({
     type: ModWebsocketMessageType.SCENE_LINE_ENDED,
     speaker: line.speaker,
+    scene_id: line.sceneId,
+    continues: line.continues,
+  });
+}
+
+// A conversation thread between the player and a sim closed on the sim's side (they said
+// their piece, or the thread went idle): the chat window can say so. Nothing else changes.
+export function sendConversationClosedToMod(payload: {
+  simIds: string[];
+  simNames: string[];
+  speaker: string;
+  reason: string;
+}) {
+  sendModNotification({
+    type: ModWebsocketMessageType.CONVERSATION_CLOSED,
+    sim_ids: payload.simIds,
+    sim_names: payload.simNames,
+    speaker: payload.speaker,
+    reason: payload.reason,
+  });
+}
+
+// The conversation is over, however it ended: the mod stops watching its sims.
+export function sendSceneEndedToMod(sceneId: string, reason: SceneEndedReason) {
+  sendModNotification({
+    type: ModWebsocketMessageType.SCENE_ENDED,
+    scene_id: sceneId,
+    reason,
   });
 }
 

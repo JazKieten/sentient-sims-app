@@ -98,6 +98,12 @@ export enum SettingsEnum {
   OUTCOME_INSTANT_SUCCESS_MS = 'outcomeInstantSuccessMs',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // Player-facing replies (chat window, voice, conscience, Twitch): the actor's token
+  // budget for a reply to the player, how long a conversation thread stays open between
+  // the player's lines, and whether a reply may turn straight into an action
+  PLAYER_REPLY_MAX_TOKENS = 'playerReplyMaxTokens',
+  PLAYER_CONVERSATION_IDLE_MINUTES = 'playerConversationIdleMinutes',
+  CONVERSATION_ACTIONS_ENABLED = 'conversationActionsEnabled',
   // V-6: write a first description for undescribed sims/lots instead of the stock default
   GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
   GAME_APP_PATH = 'gameAppPath',

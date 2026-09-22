@@ -2,7 +2,7 @@ import { createContext, ReactNode, use, useCallback, useEffect, useMemo, useRef,
 import log from 'electron-log';
 import { ApiType } from 'main/sentient-sims/models/ApiType';
 import { DialogueLine } from 'main/sentient-sims/formatter/PromptFormatter';
-import { sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/constants';
+import { sceneChunkGapMs, sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/constants';
 import { useElevenLabsTTS } from 'renderer/voice/useElevenLabsTTS';
 import { useSentientSimsTTS } from 'renderer/voice/useSentientSimsTTS';
 import { useAISettings } from './AISettingsProvider';
@@ -103,8 +103,22 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
   // whole-block in-game subtitle was suppressed on their behalf); the preamble (the
   // scene's driving action) heads each line's subtitle section
   const maxQueuedScenes = 3;
-  const sceneQueueRef = useRef<{ lines: DialogueLine[]; paced: boolean; preamble?: string; pacedText?: string }[]>([]);
+  type QueuedScene = {
+    lines: DialogueLine[];
+    paced: boolean;
+    preamble?: string;
+    pacedText?: string;
+    // Which conversation this round belongs to (see ScenePlaybackRegistry). A scene the
+    // game ends partway is found by this id, in the queue and mid-playback.
+    sceneId?: string;
+    participantSimIds?: string[];
+  };
+  const sceneQueueRef = useRef<QueuedScene[]>([]);
   const drainingRef = useRef(false);
+  // The round being spoken right now, and the conversations the game has ended.
+  // 'soft' lets the line in progress finish; 'hard' cuts it off.
+  const currentSceneRef = useRef<QueuedScene | undefined>(undefined);
+  const stoppedScenesRef = useRef(new Map<string, 'soft' | 'hard'>());
 
   // A dropped paced scene will never stream its lines, so tell the main process to
   // un-suppress its in-game subtitle block before the memory arrives from the mod
@@ -115,12 +129,19 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
   }, []);
 
   const stop = useCallback(() => {
+    // Whatever is playing is being pre-empted, so the conversation it belongs to is
+    // over: mark it stopped, and its round reports back as cut short
+    const current = currentSceneRef.current;
+    if (current?.sceneId) {
+      stoppedScenesRef.current.set(current.sceneId, 'hard');
+    }
     sceneQueueRef.current.splice(0).forEach(reportDroppedScene);
     tts?.stop();
   }, [tts, reportDroppedScene]);
 
   const speakDialogueLines = useCallback(
-    async (lines: DialogueLine[], paced: boolean, preamble?: string) => {
+    async (scene: QueuedScene) => {
+      const { lines, paced, preamble, sceneId } = scene;
       if (lines.length === 0) return;
 
       const notifyLineShown = paced
@@ -128,22 +149,42 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
             // A skipSceneLine line's subtitle was already sent directly by the main
             // process (e.g. a Twitch question) — reporting it again would double it
             if (line.skipSceneLine) return;
-            window.electron.notifySceneLineShown({ speaker: line.speaker, text: line.text, preamble, voiced });
+            window.electron.notifySceneLineShown({
+              speaker: line.speaker,
+              text: line.text,
+              preamble,
+              voiced,
+              // Who is speaking and who they are with, so the game can end the
+              // conversation when they stop being together
+              simId: line.simId,
+              sceneId,
+              participantSimIds: scene.participantSimIds,
+              continues: line.continues,
+            });
           }
         : undefined;
-      // The mod moves the speaker's mouth from line start to line end
+      // The mod moves the speaker's mouth from line start to line end (and through the
+      // gap when more of the same line follows)
       const notifyLineEnded = paced
         ? (line: DialogueLine) => {
             if (line.skipSceneLine) return;
-            window.electron.notifySceneLineEnded({ speaker: line.speaker, text: line.text });
+            window.electron.notifySceneLineEnded({
+              speaker: line.speaker,
+              text: line.text,
+              sceneId,
+              continues: line.continues,
+            });
           }
         : undefined;
+      // False once the game has ended this conversation: the line playing right now
+      // finishes, and nothing after it starts
+      const shouldContinue = () => !sceneId || !stoppedScenesRef.current.has(sceneId);
 
       const uniqueSpeakers = new Set(lines.map((line) => line.speaker));
       const hasCastVoices = lines.some((line) => line.voiceId);
 
       if (aiSettings.ttsEnabled && (uniqueSpeakers.size > 1 || hasCastVoices) && tts?.speakLines) {
-        await tts.speakLines(lines, notifyLineShown, notifyLineEnded);
+        await tts.speakLines(lines, notifyLineShown, notifyLineEnded, shouldContinue);
         return;
       }
 
@@ -158,6 +199,9 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       // in-game subtitles still arrive one line at a time, each held for its audio's
       // duration or, with TTS off, long enough to read
       for (let i = 0; i < lines.length; i += 1) {
+        // tts.stop() cannot interrupt this loop (it has no session to bump), so the
+        // end of the conversation has to be checked here too
+        if (!shouldContinue()) break;
         await waitWhileUserPaused();
         notifyLineShown(lines[i], aiSettings.ttsEnabled);
         try {
@@ -170,7 +214,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
           notifyLineEnded?.(lines[i]);
         }
         if (i < lines.length - 1) {
-          await pacedDelay(sceneLineGapMs);
+          await pacedDelay(lines[i].continues ? sceneChunkGapMs : sceneLineGapMs);
         }
       }
     },
@@ -186,7 +230,18 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
         await waitWhileUserPaused();
         const scene = sceneQueueRef.current.shift();
         if (!scene) continue;
-        await speakDialogueLines(scene.lines, scene.paced, scene.preamble);
+        currentSceneRef.current = scene;
+        try {
+          await speakDialogueLines(scene);
+        } finally {
+          currentSceneRef.current = undefined;
+          if (scene.paced && scene.sceneId) {
+            // completed false = the conversation was cut short, so the pipeline stops
+            // generating rounds for it
+            const stopped = stoppedScenesRef.current.has(scene.sceneId);
+            window.electron.notifyScenePlaybackEnded({ sceneId: scene.sceneId, completed: !stopped });
+          }
+        }
       }
     } finally {
       drainingRef.current = false;
@@ -198,14 +253,29 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       (
         _event: any,
         lines: DialogueLine[],
-        options?: { paced?: boolean; preamble?: string; pacedText?: string; priority?: boolean },
+        options?: {
+          paced?: boolean;
+          preamble?: string;
+          pacedText?: string;
+          priority?: boolean;
+          sceneId?: string;
+          participantSimIds?: string[];
+        },
       ) => {
-        const scene = {
+        const scene: QueuedScene = {
           lines,
           paced: options?.paced ?? false,
           preamble: options?.preamble,
           pacedText: options?.pacedText,
+          sceneId: options?.sceneId,
+          participantSimIds: options?.participantSimIds,
         };
+        if (scene.sceneId && stoppedScenesRef.current.has(scene.sceneId)) {
+          // A round that finished generating after the game ended the conversation
+          log.debug('TTS scene arrived for a conversation that already ended — dropping it');
+          reportDroppedScene(scene);
+          return;
+        }
         if (options?.priority) {
           // V-2: the reply to the player's own words plays next, never fourth
           sceneQueueRef.current.unshift(scene);
@@ -242,6 +312,34 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       removeListener();
     };
   }, [stop]);
+
+  // The game ended a conversation: a sim walked out of the room, or left the lot.
+  // Soft lets the line being spoken finish and drops the rest; hard cuts it off now.
+  useEffect(() => {
+    const removeListener = window.electron.onSceneStop(
+      (_event: any, payload: { sceneId: string; mode: 'soft' | 'hard' }) => {
+        const { sceneId, mode } = payload;
+        log.info(`[TTS] the game ended scene ${sceneId} (${mode}); dropping the rest of it`);
+        stoppedScenesRef.current.set(sceneId, mode);
+        // Rounds of this conversation still waiting their turn never play
+        const remaining: QueuedScene[] = [];
+        sceneQueueRef.current.forEach((queued) => {
+          if (queued.sceneId === sceneId) {
+            reportDroppedScene(queued);
+          } else {
+            remaining.push(queued);
+          }
+        });
+        sceneQueueRef.current = remaining;
+        if (mode === 'hard' && currentSceneRef.current?.sceneId === sceneId) {
+          tts?.stop();
+        }
+      },
+    );
+    return () => {
+      removeListener();
+    };
+  }, [tts, reportDroppedScene]);
 
   const contextValue = useMemo(() => {
     return {

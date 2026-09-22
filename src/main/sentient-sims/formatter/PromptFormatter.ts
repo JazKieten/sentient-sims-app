@@ -534,6 +534,14 @@ export type DialogueLine = {
   // This line's in-game subtitle was already sent directly (e.g. a Twitch question), so the
   // renderer must not report it again via notifySceneLineShown when it starts playing
   skipSceneLine?: boolean;
+  // Which sim is speaking, when one is: the mod watches sims by id, and two sims in a
+  // household can share a first name. Player personas ('The Voice', 'Chat') have none.
+  simId?: string;
+  // This line is one sentence-sized chunk of a longer line and more of the same line
+  // follows (util/airingChunks): the renderer leaves only a breath before the next chunk,
+  // and the mod keeps the speaker's mouth going through it instead of closing it at the
+  // chunk's end. Absent or false on the last chunk and on every ordinary line.
+  continues?: boolean;
 };
 
 const dialogueLineRegex = /^([A-Za-z][A-Za-z'-]*(?:\s[A-Za-z][A-Za-z'-]*){0,2}):\s*(?:\(([^)]*)\)\s*)?"([^"]+)"\s*$/;

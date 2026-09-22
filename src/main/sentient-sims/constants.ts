@@ -80,6 +80,9 @@ export const defaultWantsPrompt =
 // Scene dialogue paces like a real conversation: each line runs for its audio's duration
 // (or a reading-time estimate when there is no audio), then the next follows after a beat
 export const sceneLineGapMs = 700;
+// A long reply airs as sentence-sized chunks of one line (util/airingChunks); between two
+// chunks of the same line there is only a breath, not a turn-taking beat
+export const sceneChunkGapMs = 150;
 
 // How long a subtitle line needs on screen when no audio is timing it
 export function sceneLineReadingHoldMs(text: string): number {

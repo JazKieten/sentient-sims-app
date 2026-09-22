@@ -190,32 +190,15 @@ export function describePlanGoal(goal: { label: string; action_keys?: string[]; 
   return goal.label;
 }
 
-export function buildCognitionUserPrompt(
-  entry: SimStateEntry,
-  report: SimStateReport | undefined,
-  memoriesBlock?: string,
-  unavailableActions?: string[],
-  plan?: TodaysPlanBlock,
-  // Keys hidden from this sim today — off today's loadout, or forbidden by their age.
-  // Filtered out of the rendered social lists (object/lot channels are narrowed upstream).
-  // Never listed as "NOT possible": a hidden key is ABSENT from the prompt, not named.
-  hiddenActions?: Set<string>,
-  // <KNOWN_FACTS> (Phase 3.1 H3): what this sim actually knows about itself and the
-  // people here, from the semantic store. Empty string when the store has nothing, so
-  // the prompt is byte-identical to the pre-3.1 one until facts exist.
-  factsBlock?: string,
-  // go_out destinations (the mod's venue directory, same-world first); rendered only
-  // when go_out is actually offered this tick
-  venues?: VenueEntry[],
-): string {
+// The Sim's own status as the tick prompt renders it: <STATUS> (mood, needs worst-first,
+// live wants, feelings, next aspiration step, careers), <TODAYS_PLAN>, and what they are
+// doing right now. One section per block so the tick prompt joins them exactly as before.
+// Shared with the player-facing reply prompt (AIService.runDirectedGeneration): a Sim asked
+// "what do you want" answers from the same ground truth the tick deliberates over —
+// measured 09-19..09-21, replies without it were "I don't know" nine times out of ten
+// direct questions, because the chat prompt carried no wants at all.
+export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlanBlock): string[] {
   const sections: string[] = [];
-  // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
-  // worse than the id
-  const name = entry.sim_name || entry.sim_id;
-  sections.push(`You are ${name} (sim_id ${entry.sim_id}).`);
-
-  sections.push(formatPerception(entry));
-
   const self = entry.self;
   if (self) {
     const selfLines: string[] = ['<STATUS>'];
@@ -271,6 +254,40 @@ export function buildCognitionUserPrompt(
     const queued = activity.queue?.length ? ` Queued next: ${activity.queue.map(pretty).join(', ')}.` : '';
     sections.push(`${doing}${queued}`);
   }
+  return sections;
+}
+
+// The same blocks as one string, for a prompt that embeds them (the player-facing reply)
+export function formatSelfStatus(entry: SimStateEntry, plan?: TodaysPlanBlock): string {
+  return formatSelfStatusSections(entry, plan).join('\n');
+}
+
+export function buildCognitionUserPrompt(
+  entry: SimStateEntry,
+  report: SimStateReport | undefined,
+  memoriesBlock?: string,
+  unavailableActions?: string[],
+  plan?: TodaysPlanBlock,
+  // Keys hidden from this sim today — off today's loadout, or forbidden by their age.
+  // Filtered out of the rendered social lists (object/lot channels are narrowed upstream).
+  // Never listed as "NOT possible": a hidden key is ABSENT from the prompt, not named.
+  hiddenActions?: Set<string>,
+  // <KNOWN_FACTS> (Phase 3.1 H3): what this sim actually knows about itself and the
+  // people here, from the semantic store. Empty string when the store has nothing, so
+  // the prompt is byte-identical to the pre-3.1 one until facts exist.
+  factsBlock?: string,
+  // go_out destinations (the mod's venue directory, same-world first); rendered only
+  // when go_out is actually offered this tick
+  venues?: VenueEntry[],
+): string {
+  const sections: string[] = [];
+  // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
+  // worse than the id
+  const name = entry.sim_name || entry.sim_id;
+  sections.push(`You are ${name} (sim_id ${entry.sim_id}).`);
+
+  sections.push(formatPerception(entry));
+  sections.push(...formatSelfStatusSections(entry, plan));
 
   const lot = report?.lot;
   if (lot) {

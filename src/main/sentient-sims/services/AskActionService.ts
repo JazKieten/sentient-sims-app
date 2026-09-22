@@ -114,7 +114,10 @@ export class AskActionService {
       `[AskAction] ${sim.name} ${decision.willing ? 'accepts' : 'refuses'} [${matched.intent.action}]: ${decision.thought}`,
     );
 
-    if (decision.willing) {
+    if (decision.willing && options.suggestActionsOnly) {
+      // The bench replaying a conversation: the sim's yes is reported, never dispatched
+      log.info(`[AskAction][suggest] ${sim.name} would ${matched.intent.action} for "${playerLine.text}"`);
+    } else if (decision.willing) {
       try {
         this.ctx.actionDispatcher.dispatch({
           sim_id: sim.sim_id,
@@ -320,7 +323,9 @@ Will you do it?`;
         `Ask Decision: ${sim.name}`,
         decisionSystemPrompt,
         decisionUserText,
-        150,
+        // A full answer, not a clipped one: the same budget class as a player-facing
+        // reply (playerReplyMaxTokens), since this IS the sim's spoken answer
+        300,
         undefined,
         AIActionType.ASK_DECISION,
         interactionActionType,
@@ -330,7 +335,7 @@ Will you do it?`;
       // Loose: this stage asks for a prose "thought", and the answer comes back with it
       // unquoted often enough that a strict parse threw the sim's decision away silently
       const parsed = firstJsonBlockLoose(shot.text) as { willing?: unknown; thought?: unknown } | undefined;
-      const thought = typeof parsed?.thought === 'string' ? parsed.thought.trim().slice(0, 300) : '';
+      const thought = typeof parsed?.thought === 'string' ? parsed.thought.trim().slice(0, 1200) : '';
       if (!parsed || typeof parsed.willing !== 'boolean' || thought.length <= 1) {
         log.warn(
           `[AskAction] ${sim.name}'s decision was unusable; received: ${JSON.stringify(shot.text.slice(0, 200))}`,

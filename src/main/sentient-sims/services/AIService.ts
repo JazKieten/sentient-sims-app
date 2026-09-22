@@ -76,6 +76,9 @@ import {
   splitLinesForPacing,
 } from '../formatter/PromptFormatter';
 import { sleepPlanDays } from '../models/DailyPlan';
+import { splitLinesForAiring } from '../util/airingChunks';
+import { formatSelfStatus, TodaysPlanBlock } from '../util/formatCognitionPrompt';
+import { PlayerConversation, PlayerConversationService } from './PlayerConversationService';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
 import { InputFormatter } from '../formatter/InputOutputFormatting';
 import { MythoMaxFormatter } from '../formatter/MythoMaxFormatter';
@@ -131,7 +134,13 @@ export function isForeignSpeakerLine(text: string, actorName: string | undefined
 // Actors answer in a two-line SAY/THINK format. Models drift — labels missing, reordered,
 // text on the line after the label — so parsing is tolerant: tagged lines win, and with no
 // tags at all the first non-empty line is taken as the spoken one (the pre-monologue shape).
-export function parseActorPerformance(rawText: string, speakerNames: string[]): { say: string; think: string } {
+// multiLineSay (player-facing replies): a SAY that runs to several paragraphs keeps every
+// untagged line that follows it until THINK, instead of airing only its first paragraph.
+export function parseActorPerformance(
+  rawText: string,
+  speakerNames: string[],
+  options: { multiLineSay?: boolean } = {},
+): { say: string; think: string } {
   const lines = cleanupAIOutput(rawText)
     .split('\n')
     .map((line) => line.trim())
@@ -139,6 +148,8 @@ export function parseActorPerformance(rawText: string, speakerNames: string[]): 
   let say = '';
   let think = '';
   let pendingTag: 'SAY' | 'THINK' | undefined;
+  // The tag the previous line was assigned to, so a paragraph break inside SAY continues it
+  let lastTag: 'SAY' | 'THINK' | undefined;
   const untagged: string[] = [];
   const assign = (tag: 'SAY' | 'THINK', text: string) => {
     if (tag === 'SAY' && !say) {
@@ -146,6 +157,7 @@ export function parseActorPerformance(rawText: string, speakerNames: string[]): 
     } else if (tag === 'THINK' && !think) {
       think = text;
     }
+    lastTag = tag;
   };
   lines.forEach((line) => {
     const tagMatch = /^(SAY|THINK)\s*[:-]\s*(.*)$/i.exec(line);
@@ -164,6 +176,13 @@ export function parseActorPerformance(rawText: string, speakerNames: string[]): 
     if (pendingTag) {
       assign(pendingTag, extractSubtitle(line, speakerNames));
       pendingTag = undefined;
+      return;
+    }
+    if (options.multiLineSay && lastTag === 'SAY' && say && !think) {
+      const more = extractSubtitle(line, speakerNames);
+      if (more) {
+        say = `${say} ${more}`;
+      }
       return;
     }
     untagged.push(line);
@@ -186,6 +205,9 @@ export type SceneScore = {
   // already misbehaved by continuing on its own
   unfinished?: boolean;
   continue?: number;
+  // Player-facing beats only: the character has said their piece to the player and would
+  // let the conversation end here. Closes the conversation thread.
+  done?: boolean;
 };
 
 // The scores stage answers with one JSON object mapping character names to their scores.
@@ -224,24 +246,26 @@ export function parseSceneScores(rawText: string, names: string[]): Map<string, 
       action_reason?: unknown;
       unfinished?: unknown;
       continue?: unknown;
+      done?: unknown;
     };
     const memory = clamp(verdict.memory);
     const action = clamp(verdict.action);
     if (memory === undefined && action === undefined) {
       return;
     }
-    const unfinished =
-      typeof verdict.unfinished === 'boolean'
-        ? verdict.unfinished
-        : typeof verdict.unfinished === 'string'
-          ? verdict.unfinished.trim().toLowerCase() === 'true'
-          : undefined;
+    const flag = (raw: unknown): boolean | undefined => {
+      if (typeof raw === 'boolean') {
+        return raw;
+      }
+      return typeof raw === 'string' ? raw.trim().toLowerCase() === 'true' : undefined;
+    };
     scores.set(name, {
       memory: memory ?? 3,
       action: action ?? 1,
       action_reason: typeof verdict.action_reason === 'string' ? verdict.action_reason : undefined,
-      unfinished,
+      unfinished: flag(verdict.unfinished),
       continue: clamp(verdict.continue),
+      done: flag(verdict.done),
     });
   });
   return scores;
@@ -280,6 +304,10 @@ export type DirectedGenerationOptions = {
   // mod's POST /memories lands the transcript
   round?: number;
   carriedLines?: DialogueLine[];
+  // Identifies the whole conversation across its rounds. Minted on round 1 and carried
+  // into every continuation, so the game can end all of it at once when the sims in it
+  // walk apart or one leaves the lot (ScenePlaybackRegistry).
+  sceneId?: string;
   // A chat beat opens with a line the player already typed: it drives the scene and seeds the
   // transcript the actors reply to, the sim who said it takes no actor turn, and it stays out
   // of the aired scene (the mod already showed it, and it rides along as the memory's action)
@@ -303,6 +331,13 @@ export type DirectedGenerationOptions = {
   // still comes from the direct playerLine send, so the prepended TTS line is flagged
   // skipSceneLine. Continuations never set this (playerLine is cleared alongside it).
   speakPlayerLine?: { voiceId: string; spokenText: string };
+  // A measurement, not a conversation (the self-knowledge battery): the reply joins no
+  // thread and starts none
+  standalone?: boolean;
+  // The bench replaying a conversation: a reply's follow-through action is chosen but never
+  // dispatched, and every verdict is reported here
+  suggestActionsOnly?: boolean;
+  onConversationAction?: (result: { simId: string; acted: boolean; action?: string; target?: string }) => void;
 };
 
 export type DeferredInteractionResult = {
@@ -452,9 +487,20 @@ export class AIService {
   private async handleSceneBoundary(event: SSEvent) {
     const { boundary, previousScene } = this.ctx.sceneService.checkSceneBoundary(event);
     if (boundary && previousScene) {
+      // A new location: no conversation thread with the player survives the move. (Inside
+      // the branch — the first cut closed every thread on every event, live 2026-09-21.)
+      try {
+        this.ctx.playerConversations.closeAll('scene_boundary');
+      } catch (error) {
+        log.debug(`[Conversation] could not close threads at the scene boundary: ${String(error)}`);
+      }
       // The event driving this boundary belongs to the NEW location — as do any other prefetches
       // already queued there — so only pending work from other (old) locations is flushed.
       this.ctx.generationQueue.flushToFallback(event.environment.location_id);
+      // A conversation belongs to the lot it was held on. The mod says so too when the
+      // zone unloads, but that message can be lost to a websocket reconnect mid-travel,
+      // and dialogue from the old lot playing over the new one is exactly what this is for.
+      this.ctx.scenePlayback.stopAll('zone_unload');
       // The traveller is the player's sim — the reflection is their private recollection
       const traveller = event.sentient_sims.find((sentientSim) => sentientSim.is_player_sim);
       await this.runSceneReflection(
@@ -1088,6 +1134,22 @@ ${factsBlock}
 
   async handleChatContinue(chatContinueEvent: ChatContinueInteractionEvent) {
     const primaryEvent = toPrimaryInteractionEvent(chatContinueEvent);
+    // Continue inside an open conversation thread with the player: the sim keeps talking
+    // to the player (who said nothing new) or wraps up — never the two sims talking on to
+    // each other over the player's head
+    const speakerSim = primaryEvent.sentient_sims[0];
+    const others = primaryEvent.sentient_sims.slice(1);
+    const openThread = this.openConversation(
+      others.map((sim) => sim.sim_id),
+      speakerSim.name,
+    );
+    if (openThread && openThread.lines.length > 0) {
+      return this.runDirectedGeneration(
+        primaryEvent,
+        { continueScene: true, playerLine: { speaker: speakerSim.name, text: '' }, sceneId: openThread.sceneId },
+        { priority: true },
+      );
+    }
     if (this.ctx.settings.directedScenesEnabled && primaryEvent.sentient_sims.length >= 2) {
       // Directed continue needs prior memories to pick up from; fall through when there are none
       const directed = await this.tryDirectedGeneration(primaryEvent, { continueScene: true });
@@ -1412,11 +1474,33 @@ ${factsBlock}
     // something rather than talk. The ask-action sub-type triages it, and only a fully
     // completed run (matched action + in-character yes/no, refusals included) replaces
     // the scene — any miss falls through to the ordinary reply below.
+    // The conversation thread this reply belongs to (a player-facing round): it lends the
+    // scene id and the lines so far, and hears the verdict once the round airs
+    const thread = this.conversationFor(event, options);
     if (!options.continueScene && options.playerLine && event.sentient_sims.length === 1) {
       const asked = await this.ctx.askAction.tryAskedAction(event, options, playbackOptions);
       if (asked) {
+        // The request and the sim's spoken answer to it are part of the conversation too
+        // (live 2026-09-21: "it's time to go on a date" triaged as a request, and the next
+        // line found a sim with no memory of having just answered it)
+        if (thread) {
+          const answer = (asked.memory?.content ?? '').replace(/^[^\n]*?\(to self\):\s*/, '').trim();
+          this.ctx.playerConversations.record(
+            thread.key,
+            [options.playerLine, ...(answer ? [{ speaker: event.sentient_sims[0].name, text: answer }] : [])],
+            { landed: false },
+          );
+        }
         return asked;
       }
+    }
+    const sceneId = options.sceneId ?? thread?.sceneId ?? randomUUID();
+    // A conversation the game has already ended must not spend another round of
+    // generation on itself, let alone air it
+    const sceneStopped = () => this.ctx.scenePlayback.isStopped(sceneId);
+    if (options.continueScene && sceneStopped()) {
+      log.info(`[Pipeline] Scene ${sceneId} was ended in-game; dropping the continuation`);
+      return { status: InteractionEventStatus.NOOP };
     }
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
@@ -1442,8 +1526,14 @@ ${factsBlock}
       .filter((part) => part && part.trim().length > 0)
       .join('\n');
 
-    const recentMemories = promptRequest.memories.slice(-6);
-    const carried = (options.carriedLines ?? []).length > 0 ? toTranscript(options.carriedLines ?? []) : '';
+    const carriedLines = options.carriedLines ?? (thread ? this.ctx.playerConversations.contextLines(thread) : []);
+    // A thread's earlier replies are memory rows by now too; the same line twice under
+    // "Previously" reads as the sim repeating themselves
+    const threadTexts = carriedLines.map((line) => line.text.trim()).filter((text) => text.length > 20);
+    const recentMemories = promptRequest.memories
+      .slice(-6)
+      .filter((memory) => !threadTexts.some((text) => memory.content.includes(text)));
+    const carried = carriedLines.length > 0 ? toTranscript(carriedLines) : '';
     const previously = [formatPreviouslyInScene(recentMemories), carried].filter(Boolean).join('\n');
     const previouslyBlock = previously ? `Previously in this scene:\n${previously}\n\n` : '';
 
@@ -1455,6 +1545,10 @@ ${factsBlock}
     // The player's line is already spoken, so that sim takes no turn — everyone else replies to it
     const performers = event.sentient_sims.filter((sim) => !playerLine || sim.name !== playerLine.speaker);
     const performerNames = performers.map((sim) => sim.name);
+    // Player-facing: a reply to a line the player typed or said (chat window, voice,
+    // conscience, Twitch). Full-length straight answers, the sim's live status in the
+    // prompt, the thread as context, and a reply that may act on what was said.
+    const playerFacing = Boolean(playerLine);
 
     let sceneAction: string | undefined;
     // The beat as it HAPPENED, with none of the prompt scaffolding the actors are given
@@ -1464,12 +1558,20 @@ ${factsBlock}
     // between friends". Anything a sim can read back uses this; only the model sees
     // sceneAction.
     let displayAction: string | undefined;
-    if (continuingScene) {
+    if (continuingScene && playerLine) {
+      // The chat window's Continue inside an open thread: the sim keeps talking to the
+      // player, who said nothing new — or wraps up
+      sceneAction = `You are still talking to ${playerLine.speaker}, who is waiting. Say what else you have to say about what was said, or wrap the conversation up.`;
+    } else if (continuingScene) {
       sceneAction =
         'The scene continues. Pick up the conversation exactly where it left off and move it forward — do not repeat or rephrase anything already said.';
     } else if (playerLine) {
       const audience = performerNames.length > 0 ? ` to ${formatListToString(performerNames)}` : '';
-      sceneAction = `${playerLine.speaker} just said${audience}: "${playerLine.text}" — play the reply. Answer what was actually said, in the flow of the conversation already underway.`;
+      // A resumed thread: the exchange so far is above, and this line answers into it
+      const resumed = Boolean(thread && thread.lines.length > 0);
+      sceneAction = resumed
+        ? `${playerLine.speaker} replies${audience}: "${playerLine.text}" — play the reply, in the flow of the conversation above.`
+        : `${playerLine.speaker} just said${audience}: "${playerLine.text}" — play the reply. Answer what was actually said, in the flow of the conversation already underway.`;
       // V-3: the one semantic spot where the sim learns WHAT is speaking to them
       const persona = this.ctx.settings.playerVoicePersona;
       if (options.playerLineFlavor) {
@@ -1516,11 +1618,24 @@ ${factsBlock}
     const overBudget = () => Date.now() - startedAt > directedSceneBudgetMs;
 
     // 1. Director splits the full context into one complete, self-contained prompt per actor
+    // Player-facing: every performer's live status goes to the director too, so the Want
+    // it writes is the sim's real one
+    const directorStatus = playerFacing
+      ? performers
+          .map((sim) => {
+            const status = this.selfStatusBlock(sim.sim_id);
+            return status ? `${sim.name} right now:\n${status}` : '';
+          })
+          .filter(Boolean)
+          .join('\n\n')
+      : '';
     const briefingSystemPrompt = buildBriefingSystemPrompt({
       simNames,
       performerNames,
       sceneContext,
       monologueOnly,
+      playerFacing,
+      statusBlock: directorStatus || undefined,
     });
 
     // A failed briefing is recoverable � actors fall back to the raw scene context below
@@ -1575,12 +1690,18 @@ ${factsBlock}
     //    programmatically after) plus one line of private inner monologue that no other
     //    actor ever sees — it feeds only the scores stage and the sim's own private memory.
     //    A chat beat seeds the transcript with the player's line so the reply answers it.
-    const sceneLines: DialogueLine[] = playerLine ? [playerLine] : [];
+    const sceneLines: DialogueLine[] = playerLine && playerLine.text ? [playerLine] : [];
     const performedLines: DialogueLine[] = [];
     const monologueBySim = new Map<string, string>();
     // Fix D: the reviewer reads the same facts the actors did, keyed by speaker name
     const factsBySim = new Map<string, string>();
     for (let i = 0; i < performers.length; i += 1) {
+      // Checked between turns: a walk-away lands mid-generation more often than not,
+      // and every further turn is a request paid for and thrown away
+      if (options.continueScene && sceneStopped()) {
+        log.info(`[Pipeline] Scene ${sceneId} ended in-game mid-performance; dropping it`);
+        return { status: InteractionEventStatus.NOOP, exchanges };
+      }
       const sim = performers[i];
       let actorFacts: string;
       try {
@@ -1599,6 +1720,8 @@ ${factsBlock}
         actorPrompt: actorPrompts.get(sim.name) ?? '',
         monologueOnly,
         factsBlock: actorFacts,
+        playerFacing,
+        statusBlock: playerFacing ? this.selfStatusBlock(sim.sim_id) || undefined : undefined,
       });
 
       const conversationSoFar = toTranscript(sceneLines);
@@ -1615,7 +1738,9 @@ ${factsBlock}
           `Actor: ${sim.name}`,
           actorSystemPrompt,
           actorUserText,
-          120,
+          // A reply to the player is a full answer (playerReplyMaxTokens); sim-to-sim
+          // banter stays a line
+          playerFacing ? this.ctx.settings.playerReplyMaxTokens : 120,
           // actorModels is parallel to the full sim list, not the performers subset
           options.actorModels?.[event.sentient_sims.indexOf(sim)],
           AIActionType.DIRECTED_SCENE_ACTOR,
@@ -1625,7 +1750,7 @@ ${factsBlock}
         exchanges.push(performance.exchange);
         this.logExchange(performance.exchange);
 
-        const parsed = parseActorPerformance(performance.text, simNames);
+        const parsed = parseActorPerformance(performance.text, simNames, { multiLineSay: playerFacing });
         // In a solo beat everything the actor produced is thought — an untagged reply
         // (parsed as say) is still the monologue
         let say = monologueOnly ? '' : parsed.say;
@@ -1678,6 +1803,11 @@ ${factsBlock}
       return { status: InteractionEventStatus.NOOP, exchanges };
     }
 
+    if (options.continueScene && sceneStopped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ended in-game before the review; dropping it`);
+      return { status: InteractionEventStatus.NOOP, exchanges };
+    }
+
     // 3. Reviewer: the director reviews the whole conversation and locks the final cut
     const compileSystemPrompt = buildSceneReviewSystemPrompt({
       simNames,
@@ -1706,9 +1836,10 @@ ${factsBlock}
           'Director Review',
           compileSystemPrompt,
           `${previouslyBlock}What the actors were directed to play: ${directionSummary}\n\n${
-            playerLine ? `The line being replied to:\n${toTranscript([playerLine])}\n\n` : ''
+            playerLine && playerLine.text ? `The line being replied to:\n${toTranscript([playerLine])}\n\n` : ''
           }The ${performedLines.length} delivered line(s) to review, numbered — return exactly these ${performedLines.length} lines (same numbers, same order), kept or repaired, and nothing after them:\n${numbered}`,
-          400,
+          // The reviewer returns the lines whole; a full answer to the player needs room
+          playerFacing ? 700 : 400,
           options.directorModel,
           AIActionType.DIRECTED_SCENE_REVIEWER,
           interactionActionType,
@@ -1749,12 +1880,17 @@ ${factsBlock}
     //    Memory scores become each sim's importance on their private monologue row; action
     //    scores are the Full Autonomy trigger — over threshold, the sim graduates to an
     //    Action Scene (wired in the next phase).
+    if (options.continueScene && sceneStopped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ended in-game before scoring; dropping it`);
+      return { status: InteractionEventStatus.NOOP, exchanges };
+    }
     const sceneScores = await this.runSceneScores(
       sharedScene || sceneAction,
       dialogueText,
       performers.map((sim) => ({ name: sim.name, think: monologueBySim.get(sim.sim_id) })),
       options.directorModel,
       interactionActionType,
+      playerFacing && playerLine ? { speaker: playerLine.speaker } : undefined,
     );
     if (sceneScores.exchange) {
       exchanges.push(sceneScores.exchange);
@@ -1768,7 +1904,35 @@ ${factsBlock}
         .join('; ');
       log.info(`[Pipeline] Scene scores — ${summary}`);
     }
-    this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
+    if (playerFacing && playerLine) {
+      // The scorer's action verdict on a player-facing beat acts NOW (CognitionService
+      // .actOnConversation) instead of arming the next tick: the player said something
+      // and the sim follows through while it is still the subject
+      this.actOnConversation(
+        performers,
+        sceneScores.scores,
+        monologueBySim,
+        playerLine.speaker,
+        [...carriedLines, ...(playerLine.text ? [playerLine] : []), ...finalLines],
+        options,
+      );
+    } else {
+      this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
+    }
+    // The thread hears the verdict: every performer has said their piece (the scorer's
+    // "done"; without one, a beat that landed — nothing hanging, no pull for another round)
+    const landed =
+      performers.length > 0 &&
+      performers.every((sim) => {
+        const score = this.findScore(sceneScores.scores, sim);
+        if (!score) {
+          return false;
+        }
+        if (score.done !== undefined) {
+          return score.done;
+        }
+        return score.unfinished !== true && (score.continue ?? 10) <= 3;
+      });
 
     // V-5a: multi-round conversations. The scorer says whether the exchange is still open
     // and how strongly the scene wants another round; capped by sceneMaxRounds and the
@@ -1786,8 +1950,8 @@ ${factsBlock}
     // as their own thought (live 2026-08-17: "The Voice: Let's just say I've been
     // watching…" aired as Ehren's inner monologue). The player speaks next, not the sim.
     const partnerless = Boolean(playerLine) && performers.length === 1;
-    const continueNext =
-      wantsMore && roundsAllowed && !overBudget() && !monologueOnly && !partnerless && !options.saveMemory;
+    // (a monologue-only beat returned above, so it never reaches this gate)
+    const continueNext = wantsMore && roundsAllowed && !overBudget() && !partnerless && !options.saveMemory;
     if (wantsMore && !continueNext) {
       log.info(
         `[Pipeline] Scene wants another round but ${
@@ -1829,7 +1993,7 @@ ${factsBlock}
       location_id: event.environment.location_id,
       event_type: event.event_type,
     };
-    if (playerLine) {
+    if (playerLine && playerLine.text) {
       // Stored attributed so the next scene's history reads as dialogue rather than
       // an anonymous line of narration
       newMemory.action = toTranscript([playerLine]);
@@ -1857,18 +2021,36 @@ ${factsBlock}
     // The scene reaches the game one line at a time: the memory block's subtitle is
     // suppressed (paced flag on memory_created) and the renderer streams each line to
     // the mod as it starts playing, with the preaction heading each line's section.
+    // The mod watches sims by id: two sims in one household can share a first name,
+    // and a speaker label is all a scene line otherwise carries.
+    const simIdByName = new Map(event.sentient_sims.map((sim) => [sim.name, sim.sim_id]));
+    const participantSimIds = performers.map((sim) => sim.sim_id);
+
     const play = once(() => {
+      if (sceneStopped()) {
+        // Ended in-game while this round was still generating (or waiting on a
+        // deferred prefetch): none of it describes the world any more
+        log.info(`[Pipeline] Scene ${sceneId} ended in-game before playback; not airing it`);
+        return;
+      }
       // Inner monologue becomes each sim's own PRIVATE memory the moment the scene
       // actually airs — a canceled prefetch leaves no trace. The shared transcript row
       // still arrives via the mod's POST /memories when the interaction completes.
       this.storeMonologues(event, performers, monologueBySim, sceneScores.scores);
       markScenePaced(finalText);
+      if (thread) {
+        this.ctx.playerConversations.record(
+          thread.key,
+          [...(playerLine && playerLine.text ? [playerLine] : []), ...finalLines],
+          { landed },
+        );
+      }
       // The paced memory block is suppressed in-game, so the player's line — which lives on
       // the memory as `action`, not in the streamed reply — would never reach the in-game
       // memories window live (it only shows up on re-hydrate). Send it as the opening scene
       // line: the Flash side appends it to the window, and suppresses the subtitle while the
       // chat window is open. It is not TTS-voiced — the player already said it.
-      if (playerLine) {
+      if (playerLine && playerLine.text) {
         sendSceneLineToMod({
           speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
           text: playerLine.text,
@@ -1888,18 +2070,32 @@ ${factsBlock}
               },
             ]
           : [];
-      this.playTtsLines([...spokenQuestion, ...finalLines], event.sentient_sims, {
+      // Tagged with who is speaking so the mod can follow the conversation's sims;
+      // player personas ('The Voice', 'Chat') match no sim and stay untagged.
+      // A long reply airs in sentence-sized chunks (util/airingChunks); the memory row and
+      // the chat window keep the whole line
+      const castLines = [...spokenQuestion, ...splitLinesForAiring(finalLines)].map((line) => {
+        const simId = simIdByName.get(line.speaker);
+        return simId ? { ...line, simId } : line;
+      });
+      this.ctx.scenePlayback.roundQueued(sceneId, participantSimIds, round, castLines, finalText);
+      this.playTtsLines(castLines, event.sentient_sims, {
         paced: true,
         priority: playbackOptions.priority,
         preamble: preActionLine ? `(${preActionLine})` : undefined,
         pacedText: finalText,
+        sceneId,
+        participantSimIds,
       });
       if (continueNext) {
         log.info(
           `[Pipeline] Scene round ${round + 1}/${this.ctx.settings.sceneMaxRounds}: continuing the conversation`,
         );
-        const carriedLines = [...(options.carriedLines ?? []), ...(playerLine ? [playerLine] : []), ...finalLines];
-        // Fire-and-forget: the continuation is its own generation with its own memory row
+        const nextRoundLines = [...(options.carriedLines ?? []), ...(playerLine ? [playerLine] : []), ...finalLines];
+        // Fire-and-forget: the continuation is its own generation with its own memory row.
+        // Registered as in-flight so the scene is not declared finished while a round is
+        // still being written — and so a stop from the game reaches it.
+        this.ctx.scenePlayback.generationStarted(sceneId);
         void this.runDirectedGeneration(
           event,
           {
@@ -1908,12 +2104,17 @@ ${factsBlock}
             playerLine: undefined,
             speakPlayerLine: undefined,
             round: round + 1,
-            carriedLines,
+            carriedLines: nextRoundLines,
+            sceneId,
           },
           { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
-        ).catch((error: unknown) => {
-          log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);
-        });
+        )
+          .catch((error: unknown) => {
+            log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);
+          })
+          .finally(() => {
+            this.ctx.scenePlayback.generationFinished(sceneId);
+          });
       }
     });
     if (playbackOptions.deferPlayback) {
@@ -2056,12 +2257,13 @@ ${factsBlock}
     performances: { name: string; think?: string }[],
     model?: string,
     interactionActionType?: AIActionType,
+    playerFacing?: { speaker: string },
   ): Promise<{ scores: Map<string, SceneScore>; exchange?: LLMExchange }> {
     const names = performances.map((performance) => performance.name);
     if (names.length === 0) {
       return { scores: new Map() };
     }
-    const systemPrompt = buildSceneSalienceSystemPrompt({ names });
+    const systemPrompt = buildSceneSalienceSystemPrompt({ names, playerFacing });
 
     const thoughts = performances
       .filter((performance) => performance.think)
@@ -2091,6 +2293,143 @@ ${factsBlock}
       log.warn('[Pipeline] Scene scores stage failed; continuing without scores', error);
       return { scores: new Map() };
     }
+  }
+
+  // The open conversation thread between these sims and this speaker, if any
+  private openConversation(simIds: string[], speaker: string | undefined): PlayerConversation | undefined {
+    if (!speaker || simIds.length === 0) {
+      return undefined;
+    }
+    try {
+      const existing = this.ctx.playerConversations.get(PlayerConversationService.keyFor(simIds, speaker));
+      return existing && !existing.closed ? existing : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // The conversation thread a player-facing round belongs to: resumed or started on an
+  // opening round, looked up (never started) on a Continue. None for a measurement
+  // (standalone), a sim-to-sim scene, or a scene's own continuation.
+  private conversationFor(event: SSEvent, options: DirectedGenerationOptions): PlayerConversation | undefined {
+    const { playerLine } = options;
+    if (!playerLine || options.standalone) {
+      return undefined;
+    }
+    const performers = event.sentient_sims.filter((sim) => sim.name !== playerLine.speaker);
+    if (performers.length === 0) {
+      return undefined;
+    }
+    const simIds = performers.map((sim) => sim.sim_id);
+    if (options.continueScene) {
+      return this.openConversation(simIds, playerLine.speaker);
+    }
+    try {
+      const { conversation, resumed } = this.ctx.playerConversations.begin({
+        simIds,
+        simNames: performers.map((sim) => sim.name),
+        speaker: playerLine.speaker,
+      });
+      if (resumed) {
+        log.info(
+          `[Conversation] ${playerLine.speaker} -> ${performers.map((sim) => sim.name).join(' & ')}: ` +
+            `continuing thread ${conversation.sceneId} (${conversation.lines.length} lines so far)`,
+        );
+      }
+      return conversation;
+    } catch (error) {
+      // A context without the service (tests, an older wiring) replies as before
+      log.debug(`[Conversation] no thread for this reply: ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  // The sim's live <STATUS>/<TODAYS_PLAN> as the cognition tick renders it; '' when the mod
+  // has reported nothing for them (older mod, an alias-only Twitch target)
+  private selfStatusBlock(simId: string): string {
+    try {
+      const entry = this.ctx.simStateCache.getSim(simId);
+      if (!entry) {
+        return '';
+      }
+      const absoluteDay = this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+      const plan =
+        entry.is_household !== false && absoluteDay !== undefined
+          ? this.ctx.dailyPlan.activePlan(simId, absoluteDay)
+          : undefined;
+      const planBlock: TodaysPlanBlock | undefined =
+        plan && (plan.goals.length > 0 || plan.persona)
+          ? {
+              goals: plan.goals.map((goal) => ({
+                label: goal.label,
+                action_keys: goal.action_keys,
+                reachable: goal.reachable,
+              })),
+              persona: plan.persona,
+            }
+          : undefined;
+      return formatSelfStatus(entry, planBlock);
+    } catch {
+      return '';
+    }
+  }
+
+  // The scorer keys its verdicts by the name it was given, which is the performer's; a
+  // first-name key is accepted only when it is unambiguous
+  private findScore(scores: Map<string, SceneScore>, sim: SentientSim): SceneScore | undefined {
+    const exact = scores.get(sim.name);
+    if (exact) {
+      return exact;
+    }
+    const matches = [...scores.entries()].filter(([name]) =>
+      sim.name.toLowerCase().startsWith(`${name.toLowerCase()} `),
+    );
+    return matches.length === 1 ? matches[0][1] : undefined;
+  }
+
+  // A player-facing beat's action verdicts go to CognitionService.actOnConversation, which
+  // stages the Action Scene now over the sim's full vocabulary (D, 2026-09-21). Fire and
+  // forget; a missing cognition service must never break the reply.
+  private actOnConversation(
+    performers: SentientSim[],
+    scores: Map<string, SceneScore>,
+    monologueBySim: Map<string, string>,
+    speaker: string,
+    lines: DialogueLine[],
+    options: DirectedGenerationOptions,
+  ) {
+    const transcript = toTranscript(lines);
+    performers.forEach((sim) => {
+      const score = this.findScore(scores, sim);
+      if (!score) {
+        return;
+      }
+      try {
+        void this.ctx.cognitionService
+          .actOnConversation(sim.sim_id, {
+            score: score.action,
+            reason: score.action_reason,
+            thought: monologueBySim.get(sim.sim_id),
+            speaker,
+            transcript,
+            suggestOnly: options.suggestActionsOnly,
+          })
+          .then((result) => {
+            options.onConversationAction?.({
+              simId: sim.sim_id,
+              acted: result.acted,
+              action: result.intent?.action,
+              target: result.intent?.target_sim_id ?? result.intent?.target_object_id,
+            });
+            return result;
+          })
+          .catch((error: unknown) => {
+            log.debug(`[Pipeline] conversation action for ${sim.name} failed: ${String(error)}`);
+          });
+      } catch (error) {
+        log.debug(`[Pipeline] could not stage a conversation action for ${sim.name}: ${String(error)}`);
+      }
+    });
   }
 
   // A scene's action scores feed Full Autonomy: every participant whose score crossed

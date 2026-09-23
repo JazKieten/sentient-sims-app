@@ -155,7 +155,7 @@ export function buildMoodletSystemPrompt(): string {
     'Rules:',
     '- Judge each listed Sim separately: the same talk can leave one of them sad and the other angry, or one moved and the other untouched.',
     '- Only the Sims listed get a verdict. Lines by anyone else are people they were talking to; a listener can be moved by what they heard.',
-    "- The reason is one or two present-tense sentences from inside the Sim's life, naming who they were talking with. No quotes, no game terms, no mention of moodlets, tiers or hours.",
+    "- The reason is the tooltip line under the emotion, written the way the game writes its own (\"That was a fairly tasty dish.\"): ONE short past-tense sentence, twelve words or fewer, first names only, about what was said and what it left behind. Say \"Talking with Yoltic about his art got her own ideas flowing.\", not \"She is talking with Yoltic Xicoténcatl about his creative energy and what inspires him\". No quotes, no game terms, no mention of moodlets, tiers or hours.",
     '',
     'Answer with only a JSON object whose keys are the exact names given, one entry per Sim:',
     '{"Name": {"emotion": "sad", "intensity": 3, "duration_hours": 18, "reason": "..."}, "Other Name": {"emotion": "none"}}',

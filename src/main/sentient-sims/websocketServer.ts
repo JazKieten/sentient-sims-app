@@ -4,6 +4,7 @@ import log from 'electron-log';
 import { notifyClockState } from './util/notifyRenderer';
 import { ModLogWebsocketMessage } from './models/ModLogWebsocketMessage';
 import { formatLog } from './util/format';
+import { mirrorModLog } from './util/modLogMirror';
 import { RendererWebsocketMessage } from './models/RendererWebsocketMessage';
 import { LogLevel } from './models/LogLevel';
 import { WebsocketNotification } from './models/ModWebsocketMessage';
@@ -149,6 +150,8 @@ export const startWebSocketServer = (ctx: ApiContext) => {
         return;
       }
 
+      // INFO and above also go to main.log, next to the app's own lines (see modLogMirror)
+      mirrorModLog(parsedData.log);
       const formattedLog = formatLog(parsedData.log);
       ctx.logs.appendLog([formattedLog]).catch((e: unknown) => {
         log.error('Unable to append to logs.txt', e);

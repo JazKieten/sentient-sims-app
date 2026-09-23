@@ -93,8 +93,28 @@ const COMMON_WORDS = new Set(
    inside instead later leave listen maybe mind minute moment morning night nobody nothing
    nowhere obviously outside perfect perhaps probably quick quiet ready remember seriously
    simply someone something somewhere sounds speak start thanks though today tonight totally
-   trust truly until upstairs whatever whenever wherever whether whose yours yourself`.split(/\s+/),
+   trust truly until upstairs whatever whenever wherever whether whose yours yourself
+   alien bluff chat main mainly party people real stream streamer twitch world`.split(/\s+/),
 );
+
+// "Aliens", "Looks", "Mainly": inflections of everyday words are everyday words too
+function isCommonWord(lowered: string): boolean {
+  if (COMMON_WORDS.has(lowered)) {
+    return true;
+  }
+  const stems = [lowered.replace(/s$/, ''), lowered.replace(/es$/, ''), lowered.replace(/ly$/, ''), lowered.replace(/ing$/, ''), lowered.replace(/ed$/, '')];
+  return stems.some((stem) => stem !== lowered && stem.length >= 3 && COMMON_WORDS.has(stem));
+}
+
+// Contraction endings that never close a name ("Aren't" became Brent, live 09-22)
+const CONTRACTION = /[’'](t|re|ve|ll|d|m)$/;
+
+// Whisper keeps a name's first sound even when it garbles the rest (Lily/Lillie,
+// Meika/Mika, Ren/Wren). A different first sound is a different word: "People" ->
+// Temple, "Looks" -> Socks, "San" -> Ian (live 09-17..09-22)
+function firstSound(text: string): string {
+  return text.replace(/^c/, 'k')[0] ?? '';
+}
 
 // Snap tokens within a small edit distance of a known first/last name to that name.
 // Conservative on purpose: never touch common speech, never touch exact dictionary words
@@ -149,13 +169,20 @@ export function correctNames(transcript: string, knownNames: string[], onLotName
     }
     // Sentence-initial capitalization is indistinguishable from a name, so everyday
     // speech needs its own guard
-    if (COMMON_WORDS.has(lowered)) {
+    if (isCommonWord(lowered)) {
+      return token;
+    }
+    // "It's" -> Ito's, "He's" -> Lee's (live 09-17..09-22): a contraction is not a name,
+    // and a possessive needs a stem long enough to be one
+    if (CONTRACTION.test(token.toLowerCase()) || lowered.length < 3) {
       return token;
     }
     const spoken = phonetic(lowered);
-    const allowed = spoken.length <= 4 ? 1 : spoken.length <= 7 ? 2 : 3;
+    // One edit covers every real mishearing seen live (Meika, Chapman, Nauki, Margot,
+    // Rin); two let "Mainly" become Mayumi and "Aliens" become Alena
+    const allowed = spoken.length <= 8 ? 1 : 2;
     const best = closestName(lowered, spoken, canonical, onLot);
-    if (best && best.distance <= allowed) {
+    if (best && best.distance <= allowed && firstSound(spoken) === firstSound(phonetic(best.name))) {
       const possessive = /[’']s$/.test(token) ? token.slice(-2) : '';
       return `${best.name}${possessive}`;
     }

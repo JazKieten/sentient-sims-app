@@ -96,4 +96,40 @@ describe('STT dictionary (V-7)', () => {
     expect(correctNames('Mora, over here', pool, ['Mira Stone'])).toBe('Mira, over here');
     expect(correctNames('Mora, over here', pool, ['Mira Stone', 'Mara Stone'])).toBe('Mora, over here');
   });
+
+  // Live 09-17..09-22: whisper heard every one of these right and the post-pass broke
+  // them; "Aliens took her" -> "Alena took her" sent Lillie hunting Alena's motives
+  it('leaves the everyday words it snapped live alone', () => {
+    const pool = [
+      'Naoki Ito',
+      'Kiyoshi Ito',
+      'Shirley Temple',
+      'Socks Lee',
+      'Mayumi Tan',
+      'Brent Cole',
+      'Alena Ross',
+      'Ian Park',
+      'Chad Cole',
+      'Paris Vane',
+      'Lillie Cason',
+    ];
+    const heard = [
+      "Oh, you can tell me. It's fine.",
+      "He's like a really nice single father.",
+      "Aren't you jealous?",
+      'People in the real world are watching you.',
+      "Looks like you're desperate for fun.",
+      'Mainly just the fact that my father is moving.',
+      'Aliens took her.',
+      "You know she's still living with Jake in San Sequoia, right?",
+      'I guess Chat might be one of them.',
+      'You just went to Party House.',
+    ];
+    heard.forEach((line) => expect(correctNames(line, pool)).toBe(line));
+    // while the real mishearings still land
+    expect(correctNames('Hey Lily, how are you?', pool)).toBe('Hey Lillie, how are you?');
+    expect(correctNames('What do you think of Nauki?', pool)).toBe('What do you think of Naoki?');
+    expect(correctNames("Mazie's here", ['Macy Rowe'])).toBe("Macy's here");
+    expect(correctNames('Tell Ito hi', pool)).toBe('Tell Ito hi');
+  });
 });

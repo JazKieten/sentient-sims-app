@@ -1915,6 +1915,7 @@ ${factsBlock}
         playerLine.speaker,
         [...carriedLines, ...(playerLine.text ? [playerLine] : []), ...finalLines],
         options,
+        sceneId,
       );
     } else {
       this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
@@ -2409,8 +2410,9 @@ ${factsBlock}
   }
 
   // A player-facing beat's action verdicts go to CognitionService.actOnConversation, which
-  // stages the Action Scene now over the sim's full vocabulary (D, 2026-09-21). Fire and
-  // forget; a missing cognition service must never break the reply.
+  // holds them until this scene has finished airing and then stages the Action Scene over
+  // the sim's vocabulary minus the idle verbs nobody mentioned (D, 2026-09-21; tamed
+  // 2026-09-22). Fire and forget; a missing cognition service must never break the reply.
   private actOnConversation(
     performers: SentientSim[],
     scores: Map<string, SceneScore>,
@@ -2418,6 +2420,7 @@ ${factsBlock}
     speaker: string,
     lines: DialogueLine[],
     options: DirectedGenerationOptions,
+    sceneId: string,
   ) {
     const transcript = toTranscript(lines);
     performers.forEach((sim) => {
@@ -2433,6 +2436,7 @@ ${factsBlock}
             thought: monologueBySim.get(sim.sim_id),
             speaker,
             transcript,
+            sceneId,
             suggestOnly: options.suggestActionsOnly,
           })
           .then((result) => {

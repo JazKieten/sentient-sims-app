@@ -51,8 +51,12 @@ Frontend (src/renderer/):
 Player-facing replies (2026-09-21): a directed scene driven by a playerLine (chat window, voice/conscience, Twitch !ask)
 is `playerFacing` in AIService.runDirectedGeneration — full-length straight answers (pipeline/prompts/scene.ts
 playerFacing branch, playerReplyMaxTokens), the sim's live <STATUS>/<TODAYS_PLAN> block (util/formatCognitionPrompt
-formatSelfStatus), the conversation thread as context, and the scorer's action verdict acting NOW through
-CognitionService.actOnConversation (source 'conversation', setting conversationActionsEnabled). Long replies air in
+formatSelfStatus), the conversation thread as context, and the scorer's action verdict acting through
+CognitionService.actOnConversation (source 'conversation'; settings conversationActionsEnabled and
+conversationActionScoreThreshold, default 8, both on the Settings page). Since 2026-09-22 that action is HELD until
+the reply's scene closes (ScenePlaybackRegistry.onSceneClosed -> releaseConversationActions), the Action Scene
+omits idle/self-care verbs the transcript never mentioned (util/conversationActions), and the dispatch carries no
+priority/preempt — it queues like a cognition push and the mod lets the player's click win. Long replies air in
 sentence chunks (util/airingChunks, `continues` on DialogueLine → 150 ms gap, mouth stays open in the mod). Sim-to-sim
 scenes keep the short-line rules. Bench: GET /bench/player-threads, POST /bench/player-thread/:index {simId}.
 
@@ -63,6 +67,12 @@ apply) returning per sim an emotion or none, a tier 1-3 (+1 minor / +2 notable /
 inside the tier band, and a tooltip sentence; each verdict goes to the mod as `add_buff` with `intensity`
 and `duration_minutes`. Fewer than 4 heard lines or nobody with a sim id -> no call. The typed chat window's
 older classify-then-describe path (AIService.runBuff) is untouched. Test: SceneMoodletService.test.ts.
+
+Mod log lines (2026-09-22): every `log` message from the mod is appended to Mods/sentient-sims/logs.txt under
+modsDirectory (util/format formatLog, timestamps in UTC) and, at INFO and above, mirrored into electron-log's
+main.log as `[Mod] <LEVEL> <message>` (util/modLogMirror), so the mod's game-thread stall watchdog lines
+(`game thread stall: ...`, `game thread slow ...`) sit next to [Scene]/PUSHDIAG with local timestamps. DEBUG never
+reaches main.log. Test: ModLogMirror.test.ts.
 
 IPC: ipcHandlers.ts registers Electron IPC handlers (dialog, settings, clipboard, navigation). Renderer uses window.electron.ipcRenderer for direct main process calls, and HTTP clients for Express API calls.
 

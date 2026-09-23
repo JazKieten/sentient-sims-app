@@ -350,10 +350,16 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.CONVERSATION_ACTIONS_ENABLED.toString()]: {
         type: 'boolean',
-        // A reply to the player may turn straight into an action ("you should go paint"
-        // gets the answer AND the walk to the easel) instead of arming a desire for the
-        // next cognition tick
+        // A reply to the player may turn into an action ("you should go paint" gets the
+        // answer AND, once the reply has aired, the walk to the easel) instead of arming a
+        // desire for the next cognition tick
         default: true,
+      },
+      [SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD.toString()]: {
+        type: 'number',
+        // Above the tick's 6: on the 09-22 stream 78 of 119 player-facing beats crossed
+        // 6 and most of them were casual lines. 8 is "I really should" territory.
+        default: 8,
       },
       [SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS.toString()]: {
         type: 'boolean',
@@ -1282,6 +1288,11 @@ export class SettingsService {
 
   get conversationActionsEnabled(): boolean {
     return this.get(SettingsEnum.CONVERSATION_ACTIONS_ENABLED) !== false;
+  }
+
+  get conversationActionScoreThreshold(): number {
+    const raw = Number(this.get(SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD));
+    return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
   }
 
   get voiceInputEndpoint(): string {

@@ -104,6 +104,9 @@ export enum SettingsEnum {
   PLAYER_REPLY_MAX_TOKENS = 'playerReplyMaxTokens',
   PLAYER_CONVERSATION_IDLE_MINUTES = 'playerConversationIdleMinutes',
   CONVERSATION_ACTIONS_ENABLED = 'conversationActionsEnabled',
+  // The scorer's action verdict a reply must reach before it may act (its own bar, above
+  // the tick's: a chat is not an invitation to go do chores)
+  CONVERSATION_ACTION_SCORE_THRESHOLD = 'conversationActionScoreThreshold',
   // V-6: write a first description for undescribed sims/lots instead of the stock default
   GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
   GAME_APP_PATH = 'gameAppPath',

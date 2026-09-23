@@ -398,9 +398,11 @@ export class ApiContext {
     this._sceneMoodletService = new SceneMoodletService(this);
     this._scenePlaybackRegistry = new ScenePlaybackRegistry({
       notifyStop: notifySceneStop,
-      // A conversation that closed is weighed for the moodlet it leaves on each sim
+      // A conversation that closed is weighed for the moodlet it leaves on each sim, and
+      // a reply to the player that wanted to act may act now that it has been heard
       onSceneClosed: (closed) => {
         void this._sceneMoodletService.appraise(closed);
+        this._cognitionService.releaseConversationActions(closed.sceneId);
       },
       notifySceneEnded: (sceneId, reason) => {
         // The game ended the conversation (walk-away, left lot, zone unload): a player

@@ -22,6 +22,7 @@ import {
   parseTickScores,
 } from '../util/formatCognitionPrompt';
 import { memoryRecallText } from '../util/memoryRecallText';
+import { deniedConversationActions } from '../util/conversationActions';
 
 // A sleeping sim has no tick. The gate used to compare `activity.running` to the bare
 // word 'sleep', but the mod reports the running interaction's tuning name — measured
@@ -77,6 +78,15 @@ type SimRuntime = {
   armedDesire?: { score: number; reason?: string; thought?: string; at: number };
   // G-10: the dispatched intent with its remaining automatic retries (transient causes only)
   pendingIntent?: { intent: CognitionIntent; entry: SimStateEntry; retriesLeft: number };
+  // A reply to the player wants to act, but the reply is still airing: held until the
+  // scene it came from closes (releaseConversationActions). Latest wins.
+  pendingConversation?: {
+    desire: ConversationDesire;
+    sceneId: string;
+    at: number;
+    timer: ReturnType<typeof setTimeout>;
+    resolve: (result: ConversationActionResult) => void;
+  };
   // When this sim's unbroken run of feeling bad AWAY from home started, for the
   // "I want to go home" rule. Cleared the moment the mood turns or they are home.
   miserableSince?: number;
@@ -224,6 +234,25 @@ const RELEVANT_MEMORY_COUNT = 4;
 // eligible (the conversation to end, the cooldown to pass). Past this, the moment
 // has passed — a desire from an hour-old scene should not fire out of nowhere.
 const ARMED_DESIRE_TTL_MS = 10 * 60_000;
+// A conversation action held for a scene that never closes (renderer gone, round never
+// queued) is dropped after this rather than firing into some later, unrelated moment.
+const PENDING_CONVERSATION_TTL_MS = 5 * 60_000;
+
+// What a player-facing scene's scorer left a sim wanting (see actOnConversation)
+export type ConversationDesire = {
+  score: number;
+  reason?: string;
+  thought?: string;
+  speaker: string;
+  transcript: string;
+  // The directed scene the reply airs in. Given, the action waits for that scene to
+  // close so it never cancels the very reply it came from.
+  sceneId?: string;
+  // Stage and choose, but never dispatch (the bench replaying a conversation)
+  suggestOnly?: boolean;
+};
+
+export type ConversationActionResult = { acted: boolean; intent?: CognitionIntent; deferred?: boolean };
 
 // A hung provider request (no response, no error) left a runtime in DELIBERATING
 // forever and — with maxConcurrent 1 — deadlocked every future tick (observed live:
@@ -1122,34 +1151,28 @@ export class CognitionService {
   }
 
   // A reply to the player left this sim wanting to act — the scene's action score crossed
-  // the threshold ("you should go paint" answered with "yeah, I've been meaning to"). The
-  // Action Scene is staged NOW from the current snapshot instead of arming a desire for
-  // the next tick: over the sim's FULL offered vocabulary (no daily-loadout narrowing —
-  // the player may have brought up anything the sim can do right now), with what was just
-  // said as the situation, and dispatched as 'conversation', which the mod treats as the
-  // player talking (it does not yield to the player's own click the way cognition does).
-  // The tick's guards — autonomy echo, redispatch while busy, suggest mode — still apply.
-  // When the sim cannot be staged right now (no snapshot, a tick in flight, the feature
-  // off) the desire is armed for the next tick instead, which is what every scene did
-  // before 2026-09-21.
-  async actOnConversation(
-    simId: string,
-    desire: {
-      score: number;
-      reason?: string;
-      thought?: string;
-      speaker: string;
-      transcript: string;
-      // Stage and choose, but never dispatch (the bench replaying a conversation)
-      suggestOnly?: boolean;
-    },
-  ): Promise<{ acted: boolean; intent?: CognitionIntent }> {
-    if (desire.score < this.ctx.settings.cognitionActionScoreThreshold) {
+  // the conversation threshold ("you should go paint" answered with "yeah, I've been
+  // meaning to"). The Action Scene is staged from the current snapshot once the reply has
+  // finished airing (the scene it came from closes — see releaseConversationActions), over
+  // the sim's offered vocabulary without the daily-loadout narrowing (the player may have
+  // brought up anything the sim can do right now) but WITHOUT the idle/self-care verbs the
+  // conversation never mentioned (util/conversationActions: on the 09-22 stream casual
+  // lines turned into sit, use_toilet, practice_speech). Dispatched as 'conversation' with
+  // the mod's default priority: it queues behind what the sim is doing and yields to the
+  // player's own click like any cognition push. The tick's guards — autonomy echo,
+  // redispatch while busy, suggest mode — still apply. When the sim cannot be staged
+  // right now (no snapshot, a tick in flight, the feature off) the desire is armed for
+  // the next tick instead, which is what every scene did before 2026-09-21.
+  async actOnConversation(simId: string, desire: ConversationDesire): Promise<ConversationActionResult> {
+    if (desire.score < this.ctx.settings.conversationActionScoreThreshold) {
       return { acted: false };
     }
     if (!this.ctx.settings.conversationActionsEnabled || this.ctx.settings.cognitionAutonomyLevel === 'off') {
       this.armDesireFromScene(simId, desire);
       return { acted: false };
+    }
+    if (desire.sceneId && !desire.suggestOnly) {
+      return this.holdConversationAction(simId, desire, desire.sceneId);
     }
     const entry = this.ctx.simStateCache.getSim(simId);
     const report = this.ctx.simStateCache.getReport();
@@ -1169,8 +1192,12 @@ export class CognitionService {
     try {
       const suppressed = this.recentlyFailedActions(runtime);
       const ageBlocked = entry.self?.age_blocked ?? [];
-      const narrowed = new Set([...suppressed, ...ageBlocked]);
-      const hiddenActions = new Set(ageBlocked);
+      // Idle and self-care verbs the conversation never brought up are off the menu:
+      // out of the vocabulary the director sees AND caught by validateIntent if a stage
+      // names one anyway
+      const denied = deniedConversationActions(desire.transcript);
+      const narrowed = new Set([...suppressed, ...ageBlocked, ...denied]);
+      const hiddenActions = new Set([...ageBlocked, ...denied]);
       const entryView = this.withoutSuppressedActions(entry, narrowed);
       const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
       const reportView: SimStateReport =
@@ -1233,6 +1260,72 @@ export class CognitionService {
       this.toCooldown(simId);
       return { acted: false };
     }
+  }
+
+  // The reply is still airing: hold the action until the scene closes. On the 09-22
+  // stream the follow-through dispatched while the voiced reply was playing and, with
+  // preempt set, cancelled the social carrying it (15+ "[Scene] stopped (hard):
+  // preempted", moodlets appraised on 0 heard lines). A second desire for the same sim
+  // before release replaces the first — the player kept talking and the later line is
+  // the subject now.
+  private holdConversationAction(
+    simId: string,
+    desire: ConversationDesire,
+    sceneId: string,
+  ): Promise<ConversationActionResult> {
+    const runtime = this.runtime(simId);
+    this.dropPendingConversation(runtime, { acted: false, deferred: true });
+    log.info(
+      `[Cognition] sim ${simId} holds a conversation action (${desire.score}${
+        desire.reason ? `, ${desire.reason}` : ''
+      }) until scene ${sceneId} closes`,
+    );
+    return new Promise<ConversationActionResult>((resolve) => {
+      const timer = setTimeout(() => {
+        if (runtime.pendingConversation?.sceneId !== sceneId) {
+          return;
+        }
+        log.info(`[Cognition] sim ${simId}: scene ${sceneId} never closed; dropping the held conversation action`);
+        this.dropPendingConversation(runtime, { acted: false, deferred: true });
+      }, PENDING_CONVERSATION_TTL_MS);
+      timer.unref?.();
+      runtime.pendingConversation = { desire, sceneId, at: Date.now(), timer, resolve };
+    });
+  }
+
+  private dropPendingConversation(runtime: SimRuntime, result: ConversationActionResult) {
+    const pending = runtime.pendingConversation;
+    if (!pending) {
+      return;
+    }
+    runtime.pendingConversation = undefined;
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+  }
+
+  /**
+   * The scene has closed (ran its course, or the game stopped it): every conversation
+   * action held for it is staged now, from a fresh snapshot, with the reply fully heard.
+   * Wired from ScenePlaybackRegistry.onSceneClosed.
+   */
+  releaseConversationActions(sceneId: string) {
+    this.runtimes.forEach((runtime, simId) => {
+      const pending = runtime.pendingConversation;
+      if (!pending || pending.sceneId !== sceneId) {
+        return;
+      }
+      runtime.pendingConversation = undefined;
+      clearTimeout(pending.timer);
+      log.info(`[Cognition] sim ${simId}: scene ${sceneId} closed; acting on the conversation now`);
+      this.actOnConversation(simId, { ...pending.desire, sceneId: undefined })
+        .then((result) => {
+          pending.resolve(result);
+        })
+        .catch((error: unknown) => {
+          log.warn(`[Cognition] sim ${simId} released conversation action failed`, error);
+          pending.resolve({ acted: false });
+        });
+    });
   }
 
   // The chosen intent goes out — or does not. The guards that keep a busy or redundant
@@ -1310,12 +1403,11 @@ export class CognitionService {
         target_object_id: intent.target_object_id,
         zone_id: intent.zone_id,
         motivation: params.motivation ?? intent.motivation ?? intent.thought,
+        // The mod's default priority for both sources. Until 2026-09-22 a conversation's
+        // follow-through went out high-priority with preempt, on the reasoning that an
+        // action score of 7+ means changing course now; live, that cancelled the voiced
+        // reply it came from and the player's own clicks. It now queues like any push.
         source,
-        // A conversation's follow-through is the sim changing course on what was just
-        // said (an action score of 7+ is defined as wanting to change what they are
-        // doing now): whatever idle plan they were on is off. The tick keeps the mod's
-        // defaults for cognition.
-        ...(source === 'conversation' ? { priority: 'high' as const, preempt: true } : {}),
       });
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;

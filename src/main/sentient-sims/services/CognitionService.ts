@@ -53,6 +53,14 @@ export function isAsleep(entry: SimStateEntry): boolean {
 // WORKING — cancel-and-repush resets the walk from zero).
 type SimPhase = 'IDLE' | 'DELIBERATING' | 'PENDING_OUTCOME' | 'COOLDOWN';
 
+type PendingConversation = {
+  desire: ConversationDesire;
+  sceneId: string;
+  at: number;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (result: ConversationActionResult) => void;
+};
+
 type SimRuntime = {
   phase: SimPhase;
   cooldownUntil: number;
@@ -80,13 +88,7 @@ type SimRuntime = {
   pendingIntent?: { intent: CognitionIntent; entry: SimStateEntry; retriesLeft: number };
   // A reply to the player wants to act, but the reply is still airing: held until the
   // scene it came from closes (releaseConversationActions). Latest wins.
-  pendingConversation?: {
-    desire: ConversationDesire;
-    sceneId: string;
-    at: number;
-    timer: ReturnType<typeof setTimeout>;
-    resolve: (result: ConversationActionResult) => void;
-  };
+  pendingConversation?: PendingConversation;
   // When this sim's unbroken run of feeling bad AWAY from home started, for the
   // "I want to go home" rule. Cleared the moment the mood turns or they are home.
   miserableSince?: number;
@@ -1288,7 +1290,7 @@ export class CognitionService {
         log.info(`[Cognition] sim ${simId}: scene ${sceneId} never closed; dropping the held conversation action`);
         this.dropPendingConversation(runtime, { acted: false, deferred: true });
       }, PENDING_CONVERSATION_TTL_MS);
-      timer.unref?.();
+      timer.unref();
       runtime.pendingConversation = { desire, sceneId, at: Date.now(), timer, resolve };
     });
   }
@@ -1317,15 +1319,17 @@ export class CognitionService {
       runtime.pendingConversation = undefined;
       clearTimeout(pending.timer);
       log.info(`[Cognition] sim ${simId}: scene ${sceneId} closed; acting on the conversation now`);
-      this.actOnConversation(simId, { ...pending.desire, sceneId: undefined })
-        .then((result) => {
-          pending.resolve(result);
-        })
-        .catch((error: unknown) => {
-          log.warn(`[Cognition] sim ${simId} released conversation action failed`, error);
-          pending.resolve({ acted: false });
-        });
+      void this.actOnReleasedConversation(simId, pending);
     });
+  }
+
+  private async actOnReleasedConversation(simId: string, pending: PendingConversation): Promise<void> {
+    try {
+      pending.resolve(await this.actOnConversation(simId, { ...pending.desire, sceneId: undefined }));
+    } catch (error: unknown) {
+      log.warn(`[Cognition] sim ${simId} released conversation action failed`, error);
+      pending.resolve({ acted: false });
+    }
   }
 
   // The chosen intent goes out — or does not. The guards that keep a busy or redundant

@@ -39,7 +39,7 @@ function mentions(transcript: string, phrases: readonly string[]): boolean {
  * "how was your day" keeps none of them.
  */
 export function deniedConversationActions(transcript: string): Set<string> {
-  const text = transcript ?? '';
+  const text = transcript;
   return new Set(
     Object.entries(CONVERSATION_IDLE_ACTIONS)
       .filter(([, phrases]) => !mentions(text, phrases))

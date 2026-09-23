@@ -39,7 +39,7 @@ export default function ConversationActionsSettingsComponent() {
           aria-label="Conversation action score threshold"
           disabled={!enabled.value}
           value={threshold.value}
-          onChange={(change, value) => {
+          onChange={(change: Event, value: number | number[]) => {
             void threshold.setSetting(Array.isArray(value) ? value[0] : value);
           }}
           step={1}

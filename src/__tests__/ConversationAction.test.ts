@@ -133,11 +133,9 @@ describe('acting on a conversation', () => {
 
     const result = await cognition.actOnConversation('100', desire);
 
-    expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual([
-      'Action Options',
-      'Action Choice',
-      'Action Review',
-    ]);
+    // The transcript never mentioned food, so grab_snack is off the menu: one valid option
+    // is left and the choice stage is skipped (the sim takes it, review still runs)
+    expect(oneShotCalls.map((label) => label.split(':')[0])).toEqual(['Action Options', 'Action Review']);
     expect(prompts[0]).toContain('What was just said to you, in conversation with Conscience:');
     expect(prompts[0]).toContain('Jonah Alder: Zoe. She listens.');
     expect(result.acted).toBe(true);
@@ -271,12 +269,15 @@ describe('what a conversation may turn into', () => {
     const { cache, cognition, dispatched, prompts } = buildCtx({ pick: PICK_SECOND });
     cache.ingest(report());
 
-    // The director still names grab_snack (OPTIONS); the sim picks it; it dies in validation
+    // The director still names grab_snack (OPTIONS); it dies in validation, so the only
+    // option left is the chat, and a pick of "2" never reaches a choice stage
     const result = await cognition.actOnConversation('100', desire);
 
-    expect(prompts[0]).not.toContain('grab_snack');
-    expect(result.acted).toBe(false);
-    expect(dispatched).toEqual([]);
+    // The prompt prints action keys with spaces
+    expect(prompts[0]).not.toContain('grab snack');
+    expect(result.acted).toBe(true);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({ action: 'chat', target_sim_id: '200' });
   });
 
   it('offers it when the player brought it up', async () => {
@@ -288,7 +289,7 @@ describe('what a conversation may turn into', () => {
       transcript: 'Conscience: You should eat something.\nJonah Alder: Yeah. I could raid the fridge.',
     });
 
-    expect(prompts[0]).toContain('grab_snack');
+    expect(prompts[0]).toContain('grab snack');
     expect(result.acted).toBe(true);
     expect(dispatched[0]).toMatchObject({ action: 'grab_snack', target_object_id: '900' });
   });

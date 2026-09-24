@@ -51,3 +51,7 @@ certificate.p12
 
 # Interaction cleanup reports (working data, not code)
 interaction-cleanup-report*.csv
+
+# Personal working notes at the repo root, never committed
+TODO_STREAM_REVIEW_FIXES.md
+make them look at us when we talk t.txt

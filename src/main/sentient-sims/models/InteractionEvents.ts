@@ -80,7 +80,7 @@ export type SSRelationshipBit = {
   name: string;
   directionality?: SSRelationshipDirection;
   group_id?: SSRelationshipBitType;
-  timout?: number;
+  timeout?: number;
   priority?: number;
   persisted?: boolean;
   is_collection?: boolean;

@@ -31,6 +31,12 @@ describe('SentientSimsAIService token refresh', () => {
           res.end(JSON.stringify({}));
           return;
         }
+        if ((req.url ?? '').includes('v1/models')) {
+          res.end(
+            JSON.stringify({ data: [{ id: 'Gryphe/MythoMax-L2-13b' }, { id: 'Llama-3.3-70B-ArliAI-RPMax-v1.4' }] }),
+          );
+          return;
+        }
         if ((req.url ?? '').includes('tokenize')) {
           res.end(JSON.stringify({ count: 5, max_model_len: 4096, tokens: [1, 2] }));
           return;
@@ -106,6 +112,18 @@ describe('SentientSimsAIService token refresh', () => {
     } finally {
       onUnauthorized = undefined;
     }
+  }, 30000);
+
+  it('hides retired models from the hosted service model list', async () => {
+    const models = await ctx.ai.getModels(ApiType.SentientSimsAI);
+
+    expect(models.map((model) => model.name)).toEqual(['Llama-3.3-70B-ArliAI-RPMax-v1.4']);
+  }, 30000);
+
+  it('keeps retired models in a custom ai model list', async () => {
+    const models = await ctx.ai.getModels(ApiType.CustomAI);
+
+    expect(models.map((model) => model.name)).toEqual(['Gryphe/MythoMax-L2-13b', 'Llama-3.3-70B-ArliAI-RPMax-v1.4']);
   }, 30000);
 
   it('surfaces the 401 when no renewed token arrives', async () => {

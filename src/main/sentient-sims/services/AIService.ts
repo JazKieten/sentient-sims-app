@@ -39,6 +39,7 @@ import {
   defaultWantsPrefixes,
   defaultWantsPrompt,
   directedSceneBudgetMs,
+  retiredSentientSimsAIModels,
   thoughtMemoryFloor,
 } from '../constants';
 import { PromptHistoryMode } from '../models/PromptHistoryMode';
@@ -1102,7 +1103,11 @@ ${factsBlock}
       // 2026-08-17: 15s from generated to voiced)
       const directed = await this.tryDirectedGeneration(
         primaryEvent,
-        { playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken } },
+        {
+          // action only feeds memory retrieval here; playerLine drives the scene itself
+          action: chatEvent.action,
+          playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken },
+        },
         { priority: true },
       );
       if (directed?.status === InteractionEventStatus.GENERATED) {
@@ -2669,8 +2674,12 @@ Write me a buff description based on the conversation so that ${buffRequest.name
   }
 
   async getModels(apiType?: ApiType): Promise<AIModel[]> {
-    const service = apiType ? this.ctx.getGenerationService(apiType) : this.ctx.genai;
-    return service.getModels();
+    const resolvedApiType = apiType ?? this.ctx.providerConfigs.getDefaultConfig().apiType;
+    const models = await this.ctx.getGenerationService(resolvedApiType).getModels();
+    if (resolvedApiType !== ApiType.SentientSimsAI) {
+      return models;
+    }
+    return models.filter((model) => !(model.name in retiredSentientSimsAIModels));
   }
 
   async handleInteractionMapping(event: InteractionMappingEvent) {

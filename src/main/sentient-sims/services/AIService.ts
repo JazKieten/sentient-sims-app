@@ -214,6 +214,29 @@ export type SceneScore = {
 // The scores stage answers with one JSON object mapping character names to their scores.
 // Tolerant of prose around the JSON, string numbers, and out-of-range values (clamped 1-10);
 // unknown names are dropped rather than guessed.
+/**
+ * What an actor is told when the director's briefing has no section for them: the scene
+ * prefix (location, date, season, weather, postures) and the actor's own
+ * <CHARACTER_IN_INTERACTION> block. Never the other performers' blocks, the labelled
+ * <PAST_REFLECTIONS>/<KNOWN_FACTS> of other sims or the retrieved memories: the director is
+ * the only stage allowed to decide what of another sim's private context an actor may see,
+ * and a failed briefing must not bypass that. A character block is recognised by its first
+ * line, which formatSentientSim writes as `<name> is a <gender> <age>.`.
+ */
+export function buildFallbackActorPrompt(name: string, scenePrefix: string, participants: string): string {
+  const blockPattern = /<CHARACTER_IN_INTERACTION>\s*([\s\S]*?)\s*<\/CHARACTER_IN_INTERACTION>/g;
+  const own: string[] = [];
+  let match = blockPattern.exec(participants);
+  while (match) {
+    const firstLine = match[1].split('\n')[0].trim();
+    if (firstLine.startsWith(`${name} is `) || firstLine === name) {
+      own.push(`<CHARACTER_IN_INTERACTION>\n${match[1].trim()}\n</CHARACTER_IN_INTERACTION>`);
+    }
+    match = blockPattern.exec(participants);
+  }
+  return [`You are playing ${name}.`, scenePrefix.trim(), own[0] ?? ''].filter((part) => part.length > 0).join('\n\n');
+}
+
 export function parseSceneScores(rawText: string, names: string[]): Map<string, SceneScore> {
   const scores = new Map<string, SceneScore>();
   const jsonMatch = /\{[\s\S]*\}/.exec(rawText);
@@ -1519,15 +1542,19 @@ ${factsBlock}
     };
     const promptRequest = await this.ctx.promptBuilder.buildPromptRequest(event, promptOptions);
 
-    // promptRequest.location is already wrapped in <LOCATION> tags
-    const sceneContext = [
+    // promptRequest.location is already wrapped in <LOCATION> tags. The scene prefix
+    // (where and when) is kept apart from the participants block because an actor whose
+    // briefing failed may only see the prefix and their own character (see the fallback).
+    const scenePrefix = [
       promptRequest.location,
       promptRequest.dateTime,
       promptRequest.season,
       promptRequest.weather,
       promptRequest.postures,
-      promptRequest.participants,
     ]
+      .filter((part) => part && part.trim().length > 0)
+      .join('\n');
+    const sceneContext = [scenePrefix, promptRequest.participants]
       .filter((part) => part && part.trim().length > 0)
       .join('\n');
 
@@ -1681,8 +1708,11 @@ ${factsBlock}
       if (actorPrompt.length > 1) {
         actorPrompts.set(name, sharedScene ? `${sharedScene}\n\n${actorPrompt}` : actorPrompt);
       } else {
-        // If the director's output couldn't be parsed, fall back to the raw scene context
-        actorPrompts.set(name, `You are playing ${name}.\n\n${sceneContext}`);
+        // The director's output had no briefing for this actor (or the briefing call
+        // failed): they get the scene and THEIR OWN character only. Until 2026-09-23 this
+        // handed them the whole scene context: every performer's character block, the
+        // other sims' private diaries and facts, and memories the others own.
+        actorPrompts.set(name, buildFallbackActorPrompt(name, scenePrefix, promptRequest.participants));
       }
     });
 

@@ -1,8 +1,8 @@
 /* eslint-disable promise/always-return */
-import { WebSocketServer, WebSocket, RawData } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import log from 'electron-log';
 import { notifyClockState } from './util/notifyRenderer';
-import { ModLogWebsocketMessage } from './models/ModLogWebsocketMessage';
+import { parseModMessage, rawDataToString } from './util/modWebsocketMessage';
 import { formatLog } from './util/format';
 import { mirrorModLog } from './util/modLogMirror';
 import { RendererWebsocketMessage } from './models/RendererWebsocketMessage';
@@ -21,16 +21,6 @@ function notifyAllWindows(message: string, ...args: unknown[]) {
   });
 }
 
-function rawDataToString(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString('utf-8');
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString('utf-8');
-  }
-  return data.toString('utf-8');
-}
-
 function notifyWebsocketStatus(status: WebsocketStatusChange) {
   log.debug(`Websocket status changed ${status.type} : ${status.status}`);
   notifyAllWindows('websocket-status-change', status);
@@ -43,7 +33,8 @@ let modConnected = false;
 let rendererConnected = false;
 
 export const startWebSocketServer = (ctx: ApiContext) => {
-  const rendererServer = new WebSocketServer({ port: rendererWebsocketPort });
+  // Loopback only: the game and the renderer are on this machine, nothing else should reach it
+  const rendererServer = new WebSocketServer({ host: '127.0.0.1', port: rendererWebsocketPort });
   // A failed bind emits 'error'; unhandled it would crash the main process.
   rendererServer.on('error', (err) => {
     log.error(`Renderer websocket server error on port ${rendererWebsocketPort}`, err);
@@ -57,6 +48,11 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       status: true,
     });
     ws.on('close', () => {
+      // A replaced socket closing late must not mark the live one disconnected
+      if (rendererWs !== ws) {
+        return;
+      }
+      rendererWs = undefined;
       rendererConnected = false;
       notifyWebsocketStatus({
         type: 'renderer',
@@ -89,7 +85,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       });
   });
 
-  const modServer = new WebSocketServer({ port: modWebsocketPort });
+  const modServer = new WebSocketServer({ host: '127.0.0.1', port: modWebsocketPort });
   modServer.on('error', (err) => {
     log.error(`Mod websocket server error on port ${modWebsocketPort}`, err);
   });
@@ -102,6 +98,11 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       status: true,
     });
     ws.on('close', () => {
+      // Cleared so sendModNotification stops writing into a closed socket
+      if (modWs !== ws) {
+        return;
+      }
+      modWs = undefined;
       modConnected = false;
       notifyWebsocketStatus({
         type: 'mod',
@@ -114,7 +115,10 @@ export const startWebSocketServer = (ctx: ApiContext) => {
     });
 
     ws.on('message', function message(data) {
-      const parsedData = JSON.parse(rawDataToString(data)) as ModLogWebsocketMessage;
+      const parsedData = parseModMessage(data);
+      if (!parsedData) {
+        return;
+      }
 
       if (parsedData.clock_state) {
         // V-1: forwarded to the renderer's playback clock; when the feature is off the

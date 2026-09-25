@@ -144,7 +144,8 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/cognition/debug/enqueue', ctx.controller.cognition.debugEnqueue);
   expressApp.post('/cognition/debug/perception', ctx.controller.cognition.debugRequestPerception);
 
-  const server = expressApp.listen(ctx.port, () => {
+  // Loopback only: the mod and the renderer are on this machine, nothing else should reach it
+  const server = expressApp.listen(ctx.port, '127.0.0.1', () => {
     log.info(`Server is running on port ${ctx.port}`);
   });
 

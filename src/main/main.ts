@@ -14,7 +14,6 @@ import { install as installSourceMapSupport } from 'source-map-support';
 import { app, BrowserWindow, shell, session, WebRequestFilter, dialog } from 'electron';
 import log from 'electron-log';
 import MenuBuilder from './menu';
-import registerDebugToggleHotkey from './sentient-sims/registerDebugToggleHotkey';
 import ipcHandlers from './sentient-sims/ipcHandlers';
 import { runApi, runWebSocketServer } from './sentient-sims/api';
 import { SettingsService } from './sentient-sims/services/SettingsService';
@@ -213,7 +212,6 @@ const startServices = () => {
     disableDebugLogging();
   }
 
-  registerDebugToggleHotkey();
   runWebSocketServer(ctx);
   runApi(ctx);
 

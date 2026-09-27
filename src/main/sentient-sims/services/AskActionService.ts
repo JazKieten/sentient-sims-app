@@ -381,7 +381,7 @@ Will you do it?`;
       action: askedLine,
     };
 
-    this.ctx.memoryTrace.recordPending([finalText, formatSceneForChatWindow(finalText)], {
+    this.ctx.ext.trace?.recordPending([finalText, formatSceneForChatWindow(finalText)], {
       pipeline: 'ask_action',
       exchanges,
     });

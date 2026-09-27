@@ -7,6 +7,7 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { OpenAIService } from 'main/sentient-sims/services/OpenAIService';
 import { mockApiContext } from './util';
+import { devOf } from 'main/sentient-sims/tiers/dev';
 
 const MONOLOGUE = 'I could really go for a snack.';
 // memory 6: above the storage floor, so the tick's thought is written down and can
@@ -89,7 +90,7 @@ describe('Cognition tick tracing', () => {
     // ...and the thought it produced carries both tick stages as its trace
     const thought = ctx.memoryRepository.getMemories().find((memory) => memory.content === MONOLOGUE);
     expect(thought?.id).toBeDefined();
-    const trace = ctx.memoryTrace.getTrace(String(thought?.id));
+    const trace = devOf(ctx).memoryTrace.getTrace(String(thought?.id));
     expect(trace?.pipeline).toBe('cognition');
     expect(trace?.exchanges.map((exchange) => exchange.label)).toEqual([
       'Cognition Monologue: Elliot',

@@ -1,13 +1,12 @@
 import { Request, Response } from 'express';
 import log from 'electron-log';
-import { ExportTraitsRequest } from '../services/MappingService';
-import { ApiContext } from '../services/ApiContext';
+import { ExportTraitsRequest, MappingService } from '../services/MappingService';
 
 export class MappingController {
-  private readonly ctx: ApiContext;
+  private readonly mapping: MappingService;
 
-  constructor(ctx: ApiContext) {
-    this.ctx = ctx;
+  constructor(mapping: MappingService) {
+    this.mapping = mapping;
   }
 
   getTraits = (req: Request, res: Response) => {
@@ -16,7 +15,7 @@ export class MappingController {
     const extractedPath: string = req.query.extractedPath as string;
 
     res.json(
-      this.ctx.mapping.getTraits({
+      this.mapping.getTraits({
         searchClass,
         extractedPath,
       }),
@@ -27,7 +26,7 @@ export class MappingController {
     const searchClass: string | undefined = req.query.searchClass as string | undefined;
     const extractedPath: string = req.query.extractedPath as string;
     res.json(
-      this.ctx.mapping.getUnmappedTraits({
+      this.mapping.getUnmappedTraits({
         searchClass,
         extractedPath,
       }),
@@ -35,18 +34,18 @@ export class MappingController {
   };
 
   getMoods = (req: Request, res: Response) => {
-    res.json(this.ctx.mapping.getMoods());
+    res.json(this.mapping.getMoods());
   };
 
   getUnmappedMoods = (req: Request, res: Response) => {
-    res.json(this.ctx.mapping.getUnmappedMoods());
+    res.json(this.mapping.getUnmappedMoods());
   };
 
   exportTraits = (req: Request, res: Response) => {
     const exportTraitsRequest = req.body as ExportTraitsRequest;
     log.debug(`ExtractedPath: ${exportTraitsRequest.extractedPath}`);
     log.debug(`Length of Traits: ${Object.keys(exportTraitsRequest.traits).length}`);
-    this.ctx.mapping.exportTraits(exportTraitsRequest);
+    this.mapping.exportTraits(exportTraitsRequest);
     res.json({ done: 'done' });
   };
 }

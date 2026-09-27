@@ -3,7 +3,6 @@ import { AnimationsController } from '../controllers/AnimationsController';
 import { AssetsController } from '../controllers/AssetsController';
 import { SimStateController } from '../controllers/SimStateController';
 import { DossierController } from '../controllers/DossierController';
-import { BenchController } from '../controllers/BenchController';
 import { SimFactsController } from '../controllers/SimFactsController';
 import { DbController } from '../controllers/DbController';
 import { DebugController } from '../controllers/DebugController';
@@ -11,7 +10,6 @@ import { FileController } from '../controllers/FileController';
 import { InteractionDescriptionController } from '../controllers/InteractionDescriptionController';
 import { LocationsController } from '../controllers/LocationsController';
 import { LoginController } from '../controllers/LoginController';
-import { MappingController } from '../controllers/MappingController';
 import { MemoriesController } from '../controllers/MemoriesController';
 import { NewsController } from '../controllers/NewsController';
 import { OptionsController } from '../controllers/OptionsController';
@@ -22,7 +20,6 @@ import { SettingsController } from '../controllers/SettingsController';
 import { UpdateController } from '../controllers/UpdateController';
 import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
-import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
 import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
 import { InteractionRepository } from '../db/InteractionRepository';
@@ -59,10 +56,8 @@ import { KoboldAIService } from './KoboldAIService';
 import { LastExceptionService } from './LastExceptionService';
 import { LogSendService } from './LogSendService';
 import { LogsService } from './LogsService';
-import { MappingService } from './MappingService';
 import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
-import { MemoryTraceService } from './MemoryTraceService';
 import { AIExchangeLogService } from './AIExchangeLogService';
 import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
@@ -121,12 +116,10 @@ class ControllerContext {
   private readonly _aiController: AIController;
   private readonly _animationsController: AnimationsController;
   private readonly _assetsController: AssetsController;
-  private readonly _mappingController: MappingController;
   private readonly _newsController: NewsController;
   private readonly _optionsController: OptionsController;
   private readonly _simStateController: SimStateController;
   private readonly _dossierController: DossierController;
-  private readonly _benchController: BenchController;
   private readonly _simFactsController: SimFactsController;
   private readonly _paintingsController: PaintingsController;
 
@@ -147,12 +140,10 @@ class ControllerContext {
     this._aiController = new AIController(ctx);
     this._animationsController = new AnimationsController(ctx);
     this._assetsController = new AssetsController(ctx);
-    this._mappingController = new MappingController(ctx);
     this._newsController = new NewsController(ctx);
     this._optionsController = new OptionsController(ctx);
     this._simStateController = new SimStateController(ctx);
     this._dossierController = new DossierController(ctx);
-    this._benchController = new BenchController(ctx);
     this._simFactsController = new SimFactsController(ctx);
     this._paintingsController = new PaintingsController(ctx);
   }
@@ -221,10 +212,6 @@ class ControllerContext {
     return this._assetsController;
   }
 
-  get mapping(): MappingController {
-    return this._mappingController;
-  }
-
   get news(): NewsController {
     return this._newsController;
   }
@@ -239,10 +226,6 @@ class ControllerContext {
 
   get dossier(): DossierController {
     return this._dossierController;
-  }
-
-  get bench(): BenchController {
-    return this._benchController;
   }
 
   get simFacts(): SimFactsController {
@@ -273,7 +256,6 @@ export class ApiContext {
   private readonly _interactionService: InteractionService;
   private readonly _aiService: AIService;
   private readonly _generationQueueService: GenerationQueueService;
-  private readonly _mappingService: MappingService;
   private readonly _sceneService: SceneService;
 
   private readonly _scenePlaybackRegistry: ScenePlaybackRegistry;
@@ -287,7 +269,6 @@ export class ApiContext {
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
   private readonly _memoryRetrievalService: MemoryRetrievalService;
-  private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
   private readonly _semanticMemoryService: SemanticMemoryService;
   private readonly _transcriptionService: TranscriptionService;
@@ -307,7 +288,6 @@ export class ApiContext {
   private readonly _paintingRepository: PaintingRepository;
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
-  private readonly _memoryTraceRepository: MemoryTraceRepository;
   private readonly _simFactRepository: SimFactRepository;
 
   // --- AI Services ---
@@ -380,7 +360,6 @@ export class ApiContext {
     this._paintingRepository = new PaintingRepository(this._db);
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
-    this._memoryTraceRepository = new MemoryTraceRepository(this._db);
     this._simFactRepository = new SimFactRepository(this._db);
 
     this._sceneService = new SceneService();
@@ -432,7 +411,6 @@ export class ApiContext {
 
     this._aiService = new AIService(this);
     this._generationQueueService = new GenerationQueueService(this);
-    this._mappingService = new MappingService();
 
     this._memoryAnnotationService = new MemoryAnnotationService(this);
     this._memoryRetrievalService = new MemoryRetrievalService(this);
@@ -442,7 +420,6 @@ export class ApiContext {
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
-    this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
     // Names come from the participant table rather than being passed around: the fact
     // store holds ids, and every rendering of a fact needs a name for them.
     this._semanticMemoryService = new SemanticMemoryService(this._simFactRepository, (simIds) => {
@@ -462,7 +439,9 @@ export class ApiContext {
     });
     this._memoryRepository.setOnMemoryUpserted((memory) => {
       this._memoryAnnotationService.annotateInBackground(memory);
-      this._memoryTraceService.attach(memory);
+      for (const tier of this._tiers) {
+        tier.onMemoryUpserted?.(this, memory);
+      }
     });
 
     // Every core service exists; each build tier builds its own and fills its slots
@@ -541,10 +520,6 @@ export class ApiContext {
     return this._generationQueueService;
   }
 
-  get mapping(): MappingService {
-    return this._mappingService;
-  }
-
   get sceneService(): SceneService {
     return this._sceneService;
   }
@@ -599,10 +574,6 @@ export class ApiContext {
     return this._memoryRetrievalService;
   }
 
-  get memoryTrace(): MemoryTraceService {
-    return this._memoryTraceService;
-  }
-
   get aiExchangeLog(): AIExchangeLogService {
     return this._aiExchangeLogService;
   }
@@ -649,10 +620,6 @@ export class ApiContext {
 
   get interactionRepository(): InteractionRepository {
     return this._interactionRepository;
-  }
-
-  get memoryTraceRepository(): MemoryTraceRepository {
-    return this._memoryTraceRepository;
   }
 
   get simFactRepository(): SimFactRepository {

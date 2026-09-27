@@ -207,7 +207,7 @@ export class MemoryAnnotationService {
       // its own try/catch: debug bookkeeping must not send a real rating to the heuristic.
       if (memoryId !== undefined) {
         try {
-          this.ctx.memoryTrace.appendExchange(memoryId, result.exchange);
+          this.ctx.ext.trace?.appendExchange(memoryId, result.exchange);
         } catch (error) {
           log.debug(`[Annotation] could not attach importance trace to memory ${memoryId}: ${String(error)}`);
         }

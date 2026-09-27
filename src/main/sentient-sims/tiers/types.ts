@@ -17,6 +17,8 @@ import type { DirectedGenerationOptions } from '../services/AIService';
 import type { ReflectionPromptContext } from '../pipeline/prompts/consolidation';
 import type { TodaysPlanBlock } from '../util/formatSelfStatus';
 import type { ModLogWebsocketMessage } from '../models/ModLogWebsocketMessage';
+import type { MemoryTrace, MemoryTracePipeline } from '../models/MemoryTrace';
+import type { LLMExchange } from '../models/InteractionEventResult';
 
 export type Tier = 'core' | 'stream' | 'dev';
 
@@ -109,7 +111,15 @@ export interface VoiceCommandSlot {
   handleCommand(text: string): Promise<boolean>;
 }
 
+// DEV: the Memories window's pipeline view. Core records what produced each memory only when
+// a tier keeps it.
+export interface TraceSlot {
+  recordPending(contents: (string | undefined)[], trace: MemoryTrace): void;
+  appendExchange(memoryId: string, exchange: LLMExchange | undefined, pipeline?: MemoryTracePipeline): void;
+}
+
 export interface TierExtensions {
+  trace?: TraceSlot;
   askAction?: AskActionSlot;
   conversationActions?: ConversationActionsSlot;
   sleepPlanner?: SleepPlannerSlot;

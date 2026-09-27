@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import log from 'electron-log';
 import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
-import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { sendChatGeneration } from '../util/notifyRenderer';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { InteractionEventStatus } from '../models/InteractionEventResult';
@@ -105,20 +104,6 @@ export class AIController {
   interactionCancel = (req: Request, res: Response) => {
     const request = req.body as InteractionFinalizeRequest;
     res.json({ ok: true, found: this.ctx.generationQueue.cancel(request.correlation_id) });
-  };
-
-  @CatchErrors()
-  directedSceneEvent = async (req: Request, res: Response) => {
-    const request = req.body as DirectedSceneRequest;
-
-    log.debug(`Directed scene event: ${JSON.stringify(req.body)}`);
-
-    const result = await this.ctx.ai.runDirectedScene(request);
-    result.input = request.event;
-    res.json({ ...result, text: result.text ? `\n${result.text}` : result.text });
-    if (result.text) {
-      sendChatGeneration(result);
-    }
   };
 
   @CatchErrors()

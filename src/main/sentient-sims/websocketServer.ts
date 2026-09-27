@@ -2,14 +2,13 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import log from 'electron-log';
 import { notifyClockState } from './util/notifyRenderer';
-import { parseModMessage, rawDataToString } from './util/modWebsocketMessage';
+import { parseModMessage } from './util/modWebsocketMessage';
 import { formatLog } from './util/format';
 import { mirrorModLog } from './util/modLogMirror';
-import { RendererWebsocketMessage } from './models/RendererWebsocketMessage';
 import { LogLevel } from './models/LogLevel';
 import { WebsocketNotification } from './models/ModWebsocketMessage';
-import { ModInfo } from './models/ModLogWebsocketMessage';
-import { modWebsocketPort, rendererWebsocketPort } from './constants';
+import { ModInfo, ModLogWebsocketMessage } from './models/ModLogWebsocketMessage';
+import { modWebsocketPort } from './constants';
 import { WebsocketStatusChange } from './models/WebsocketStatusResponse';
 import { ApiContext } from './services/ApiContext';
 import { getAllBrowserWindows } from './util/browserWindows';
@@ -27,67 +26,30 @@ function notifyWebsocketStatus(status: WebsocketStatusChange) {
   notifyAllWindows('websocket-status-change', status);
 }
 
-let rendererWs: WebSocket | undefined;
 let modWs: WebSocket | undefined;
 
 let modConnected = false;
 let rendererConnected = false;
+// The dev tier's log viewer socket (rendererLogSocket.ts) reports itself here and listens for
+// the mod's log lines; a player build has neither, and the renderer reads as disconnected
+const modLogListeners: ((message: ModLogWebsocketMessage) => void)[] = [];
+
+export function onModLog(listener: (message: ModLogWebsocketMessage) => void) {
+  modLogListeners.push(listener);
+}
+
+export function reportRendererSocket(connected: boolean) {
+  rendererConnected = connected;
+  notifyWebsocketStatus({
+    type: 'renderer',
+    status: connected,
+  });
+}
+
 // The last mod_info the mod sent; kept across a disconnect so a reconnect overwrites it
 let lastModInfo: ModInfo | undefined;
 
 export const startWebSocketServer = (ctx: ApiContext) => {
-  // Loopback only: the game and the renderer are on this machine, nothing else should reach it
-  const rendererServer = new WebSocketServer({ host: '127.0.0.1', port: rendererWebsocketPort });
-  // A failed bind emits 'error'; unhandled it would crash the main process.
-  rendererServer.on('error', (err) => {
-    log.error(`Renderer websocket server error on port ${rendererWebsocketPort}`, err);
-  });
-  rendererServer.on('connection', function handleRenderer(ws: WebSocket) {
-    rendererWs = ws;
-
-    rendererConnected = true;
-    notifyWebsocketStatus({
-      type: 'renderer',
-      status: true,
-    });
-    ws.on('close', () => {
-      // A replaced socket closing late must not mark the live one disconnected
-      if (rendererWs !== ws) {
-        return;
-      }
-      rendererWs = undefined;
-      rendererConnected = false;
-      notifyWebsocketStatus({
-        type: 'renderer',
-        status: false,
-      });
-    });
-
-    ws.on('error', (err) => {
-      log.error(err);
-    });
-
-    ws.on('message', function message(data) {
-      log.debug(`receivedRenderer: ${rawDataToString(data)}`);
-    });
-
-    ctx.logs
-      .readLogs()
-      .then((logs) => {
-        try {
-          const logMessage: RendererWebsocketMessage = {
-            logs,
-          };
-          ws.send(JSON.stringify(logMessage));
-        } catch (e) {
-          log.error('Unable to send logs from logs.txt to renderer', e);
-        }
-      })
-      .catch((err: unknown) => {
-        log.error('Unable to read logs from logs.txt', err);
-      });
-  });
-
   const modServer = new WebSocketServer({ host: '127.0.0.1', port: modWebsocketPort });
   modServer.on('error', (err) => {
     log.error(`Mod websocket server error on port ${modWebsocketPort}`, err);
@@ -161,8 +123,12 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       ctx.logs.appendLog([formattedLog]).catch((e: unknown) => {
         log.error('Unable to append to logs.txt', e);
       });
-      if (rendererWs) {
-        rendererWs.send(JSON.stringify(parsedData));
+      for (const listener of modLogListeners) {
+        try {
+          listener(parsedData);
+        } catch (err) {
+          log.error('Mod log listener failed', err);
+        }
       }
     });
   });

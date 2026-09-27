@@ -7,6 +7,7 @@ import { SentientSim } from 'main/sentient-sims/models/SentientSim';
 import { SimAge } from 'main/sentient-sims/models/SimAge';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { mockApiContext } from './util';
+import { devOf } from 'main/sentient-sims/tiers/dev';
 
 const playerSim: SentientSim = {
   careers: [],
@@ -106,7 +107,7 @@ describe('Memory trace end to end', () => {
     });
 
     expect(saved?.id).toBeDefined();
-    const trace = ctx.memoryTrace.getTrace(String(saved?.id));
+    const trace = devOf(ctx).memoryTrace.getTrace(String(saved?.id));
     expect(trace).toBeDefined();
     expect(trace?.pipeline).toBe('directed_scene');
     expect(trace?.exchanges.map((exchange) => exchange.label)).toEqual([

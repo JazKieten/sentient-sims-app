@@ -6,6 +6,7 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { DirectoryService } from 'main/sentient-sims/services/DirectoryService';
 import { SettingsService } from 'main/sentient-sims/services/SettingsService';
 import { mockApiContext, mockEnvironment } from './util';
+import { devOf } from 'main/sentient-sims/tiers/dev';
 
 function request(content: string): OpenAICompatibleRequest {
   return { messages: [{ role: 'system', content, tokens: 4 }], maxResponseTokens: 10 };
@@ -47,10 +48,10 @@ describe('Memory trace persistence', () => {
 
   it('reads a trace back after a restart, prompts included', async () => {
     const exchange = await generated('Cognition: Alice', 'You are Alice.', 'I could go for a snack.');
-    ctx.memoryTrace.recordPending(['I could go for a snack.'], { pipeline: 'cognition', exchanges: [exchange] });
-    ctx.memoryTrace.attach({ id: '42', content: 'I could go for a snack.', location_id: 1 });
+    devOf(ctx).memoryTrace.recordPending(['I could go for a snack.'], { pipeline: 'cognition', exchanges: [exchange] });
+    devOf(ctx).memoryTrace.attach({ id: '42', content: 'I could go for a snack.', location_id: 1 });
 
-    const trace = restart().memoryTrace.getTrace('42');
+    const trace = devOf(restart()).memoryTrace.getTrace('42');
 
     expect(trace?.pipeline).toBe('cognition');
     expect(trace?.exchanges).toHaveLength(1);
@@ -61,39 +62,39 @@ describe('Memory trace persistence', () => {
 
   it('stores a stage as a reference, not a second copy of the prompt', async () => {
     const exchange = await generated('Cognition: Alice', 'You are Alice.', 'A snack.');
-    ctx.memoryTrace.recordPending(['A snack.'], { pipeline: 'cognition', exchanges: [exchange] });
-    ctx.memoryTrace.attach({ id: '43', content: 'A snack.', location_id: 1 });
+    devOf(ctx).memoryTrace.recordPending(['A snack.'], { pipeline: 'cognition', exchanges: [exchange] });
+    devOf(ctx).memoryTrace.attach({ id: '43', content: 'A snack.', location_id: 1 });
 
-    const stored = ctx.memoryTraceRepository.get('43');
+    const stored = devOf(ctx).memoryTraceRepository.get('43');
     expect(stored?.exchanges[0].exchangeId).toBe(1);
     expect(stored?.exchanges[0].exchange).toBeUndefined();
   });
 
   it('inlines a stage that never reached the provider seam', () => {
     const exchange = { label: 'Stubbed', request: request('unlogged'), responseText: 'out' };
-    ctx.memoryTrace.recordPending(['A line.'], { pipeline: 'other', exchanges: [exchange] });
-    ctx.memoryTrace.attach({ id: '44', content: 'A line.', location_id: 1 });
+    devOf(ctx).memoryTrace.recordPending(['A line.'], { pipeline: 'other', exchanges: [exchange] });
+    devOf(ctx).memoryTrace.attach({ id: '44', content: 'A line.', location_id: 1 });
 
-    expect(ctx.memoryTraceRepository.get('44')?.exchanges[0].exchange?.responseText).toBe('out');
-    expect(restart().memoryTrace.getTrace('44')?.exchanges[0].request.messages[0].content).toBe('unlogged');
+    expect(devOf(ctx).memoryTraceRepository.get('44')?.exchanges[0].exchange?.responseText).toBe('out');
+    expect(devOf(restart()).memoryTrace.getTrace('44')?.exchanges[0].request.messages[0].content).toBe('unlogged');
   });
 
   it('appends a later stage onto a trace stored before the restart', async () => {
     const exchange = await generated('Cognition: Alice', 'You are Alice.', 'A snack.');
-    ctx.memoryTrace.recordPending(['A snack.'], { pipeline: 'cognition', exchanges: [exchange] });
-    ctx.memoryTrace.attach({ id: '45', content: 'A snack.', location_id: 1 });
+    devOf(ctx).memoryTrace.recordPending(['A snack.'], { pipeline: 'cognition', exchanges: [exchange] });
+    devOf(ctx).memoryTrace.attach({ id: '45', content: 'A snack.', location_id: 1 });
 
     // The importance rating runs against the row later — after a restart, only the stored
     // trace exists to append to
     const restarted = restart();
-    restarted.memoryTrace.appendExchange('45', {
+    devOf(restarted).memoryTrace.appendExchange('45', {
       label: 'Memory Importance',
       request: request('rate it'),
       responseText: '4',
     });
 
     expect(
-      restart()
+      devOf(restart())
         .memoryTrace.getTrace('45')
         ?.exchanges.map((entry) => entry.label),
     ).toEqual(['Cognition: Alice', 'Memory Importance']);
@@ -101,9 +102,9 @@ describe('Memory trace persistence', () => {
 
   it('keeps working in memory when no save is loaded', () => {
     const noDb = mockApiContext();
-    noDb.memoryTrace.recordPending(['A line.'], { pipeline: 'other', exchanges: [] });
-    noDb.memoryTrace.attach({ id: '46', content: 'A line.', location_id: 1 });
+    devOf(noDb).memoryTrace.recordPending(['A line.'], { pipeline: 'other', exchanges: [] });
+    devOf(noDb).memoryTrace.attach({ id: '46', content: 'A line.', location_id: 1 });
 
-    expect(noDb.memoryTrace.getTrace('46')?.pipeline).toBe('other');
+    expect(devOf(noDb).memoryTrace.getTrace('46')?.pipeline).toBe('other');
   });
 });

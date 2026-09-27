@@ -1,8 +1,19 @@
 import { useQuery } from '@tanstack/react-query';
-import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
+import { appApiUrl } from 'main/sentient-sims/constants';
+import { axiosClient } from 'main/sentient-sims/clients/AxiosClient';
 import { MemoryTrace } from 'main/sentient-sims/models/MemoryTrace';
 
-const client = new SentientSimsAppClient();
+// GET /memories/:memoryId/trace, a dev tier route (release 4.5): the fetch lives with its only
+// caller so the core client carries no trace code. Undefined when the memory predates this
+// app session or wasn't produced by a traced pipeline.
+async function getMemoryTrace(memoryId: string): Promise<MemoryTrace | undefined> {
+  try {
+    const response = await axiosClient.get<MemoryTrace>(`${appApiUrl}/memories/${memoryId}/trace`);
+    return response.data;
+  } catch {
+    return undefined;
+  }
+}
 
 export type MemoryTraceHook = {
   trace?: MemoryTrace;
@@ -17,7 +28,7 @@ export type MemoryTraceHook = {
 export function useMemoryTrace(memoryId?: string, enabled = true): MemoryTraceHook {
   const { data, isLoading } = useQuery({
     queryKey: ['memoryTrace', memoryId],
-    queryFn: async () => (await client.memories.getMemoryTrace(memoryId as string)) ?? null,
+    queryFn: async () => (await getMemoryTrace(memoryId as string)) ?? null,
     enabled: enabled && memoryId !== undefined,
     staleTime: Infinity,
   });

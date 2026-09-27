@@ -497,7 +497,7 @@ export class AIService {
   // never break generation.
   private recordTrace(contents: (string | undefined)[], trace: MemoryTrace) {
     try {
-      this.ctx.memoryTrace.recordPending(contents, trace);
+      this.ctx.ext.trace?.recordPending(contents, trace);
     } catch (err) {
       log.error('Failed to record memory trace', err);
     }

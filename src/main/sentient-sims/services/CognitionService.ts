@@ -1651,7 +1651,7 @@ export class CognitionService {
     // decided what the sim does next, prompt and all. Isolated from the write below —
     // this is debug bookkeeping and must never cost the sim its thought.
     try {
-      this.ctx.memoryTrace.recordPending([intent.thought], { pipeline: 'cognition', exchanges });
+      this.ctx.ext.trace?.recordPending([intent.thought], { pipeline: 'cognition', exchanges });
     } catch (error) {
       log.debug(`[Cognition] could not record thought trace for sim ${entry.sim_id}: ${String(error)}`);
     }

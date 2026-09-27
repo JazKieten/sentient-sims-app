@@ -22,21 +22,11 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/ai/v2/event/interaction/claim', ctx.controller.ai.interactionClaim);
   expressApp.post('/ai/v2/event/interaction/finalize', ctx.controller.ai.interactionFinalize);
   expressApp.post('/ai/v2/event/interaction/cancel', ctx.controller.ai.interactionCancel);
-  expressApp.post('/ai/v2/event/directed-scene', ctx.controller.ai.directedSceneEvent);
   expressApp.post('/ai/v2/event/classification', ctx.controller.ai.classificationEvent);
   expressApp.post('/ai/v2/event/buff', ctx.controller.ai.buffDescription);
   expressApp.post('/ai/v3/event/buff', ctx.controller.ai.buffEvent);
   expressApp.post('/ai/v2/image/generate', ctx.controller.ai.generateImage);
   expressApp.get('/ai/v2/models', ctx.controller.ai.getModels);
-  expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.bench.getExchange);
-  expressApp.get('/ai/exchanges', ctx.controller.bench.getExchanges);
-  // The tier-0 run-validity gate over the loaded save
-  expressApp.get('/bench/tier0', ctx.controller.bench.getTier0);
-  expressApp.post('/bench/self-knowledge/:simId', ctx.controller.bench.selfKnowledge);
-  // The five player-facing conversations from the 09-19..21 logs, replayed through the
-  // reply path with the thread, the status block and the follow-through action
-  expressApp.get('/bench/player-threads', ctx.controller.bench.getPlayerThreadFixtures);
-  expressApp.post('/bench/player-thread/:index', ctx.controller.bench.playerThread);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);
@@ -64,7 +54,6 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/locations', ctx.controller.locations.updateLocation);
   expressApp.delete('/locations/:locationId', ctx.controller.locations.deleteLocation);
 
-  expressApp.get('/memories/:memoryId/trace', ctx.controller.memories.getMemoryTrace);
   expressApp.get('/paintings', ctx.controller.paintings.getPaintingsManifest);
   expressApp.post('/paintings/mount', ctx.controller.paintings.installMount);
   expressApp.get('/paintings/:instanceId/texture', ctx.controller.paintings.getPaintingTexture);
@@ -103,12 +92,6 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/interactions/all', ctx.controller.interactionDescription.getAllInteractions);
 
   expressApp.get('/interactions/semantic-search', ctx.controller.interactionDescription.semanticSearchInteractions);
-
-  expressApp.get('/traits', ctx.controller.mapping.getTraits);
-  expressApp.get('/traits/unmapped', ctx.controller.mapping.getUnmappedTraits);
-  expressApp.post('/traits/export', ctx.controller.mapping.exportTraits);
-  expressApp.get('/moods', ctx.controller.mapping.getMoods);
-  expressApp.get('/moods/unmapped', ctx.controller.mapping.getUnmappedMoods);
 
   expressApp.post('/interactions/save-locally', ctx.controller.interactionDescription.saveInteractionLocally);
   expressApp.delete('/interactions/local', ctx.controller.interactionDescription.deleteLocalInteraction);

@@ -55,6 +55,21 @@
   ],
   "dev": [
     "src/main/sentient-sims/tiers/dev.ts",
-    "src/renderer/tiers/dev.tsx"
+    "src/renderer/tiers/dev.tsx",
+    "src/main/sentient-sims/bench/",
+    "src/main/sentient-sims/services/MappingService.ts",
+    "src/main/sentient-sims/controllers/MappingController.ts",
+    "src/main/sentient-sims/services/MemoryTraceService.ts",
+    "src/main/sentient-sims/db/MemoryTraceRepository.ts",
+    "src/main/sentient-sims/util/textDiff.ts",
+    "src/main/sentient-sims/controllers/BenchController.ts",
+    "src/main/sentient-sims/registerDebugToggleHotkey.ts",
+    "src/main/sentient-sims/rendererLogSocket.ts",
+    "src/__tests__/Tier0.test.ts",
+    "src/__tests__/SelfKnowledgeBattery.test.ts",
+    "src/__tests__/MemoryTrace.test.ts",
+    "src/__tests__/MemoryTraceEndToEnd.test.ts",
+    "src/__tests__/MemoryTracePersistence.test.ts",
+    "src/__tests__/PlayerThreadMetric.test.ts"
   ]
 }

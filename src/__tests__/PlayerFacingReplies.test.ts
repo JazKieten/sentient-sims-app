@@ -8,7 +8,6 @@ import {
 import { parseActorPerformance, parseSceneScores } from 'main/sentient-sims/services/AIService';
 import { splitLinesForAiring, splitTextForAiring } from 'main/sentient-sims/util/airingChunks';
 import { formatSelfStatus } from 'main/sentient-sims/util/formatSelfStatus';
-import { countEvasive, isQuestionOnly } from 'main/sentient-sims/bench/playerThreadFixtures';
 
 // 2026-09-21: a reply to the player (chat window, voice, conscience, Twitch) is a full,
 // straight answer that may wrap the conversation up; sim-to-sim banter keeps its ten-word
@@ -195,27 +194,5 @@ describe('the status block a reply is answered from', () => {
     expect(block).toContain('Needs, WORST FIRST (-100 to 100): fun -20 (low), hunger 40');
     expect(block).toContain("Today's goals: Call Zoe");
     expect(block).toContain('You are currently: practice in mirror.');
-  });
-});
-
-describe('the evasiveness metric', () => {
-  it('counts the phrases the logs were full of', () => {
-    const counts = countEvasive([
-      "That's not the point right now",
-      "That's easy for you to say",
-      "I don't know",
-      'What do you mean by that?',
-      'Zoe. She listens, and I have not felt heard in months.',
-    ]);
-    expect(counts["that's not the point"]).toBe(1);
-    expect(counts['easy for you to say']).toBe(1);
-    expect(counts["bare i don't know"]).toBe(1);
-    expect(counts['what do you mean']).toBe(1);
-    expect(counts['question only']).toBe(1);
-  });
-
-  it('does not count a question asked after an answer', () => {
-    expect(isQuestionOnly('Zoe, honestly. Would you tell Alex for me?')).toBe(false);
-    expect(isQuestionOnly('Why would I?')).toBe(true);
   });
 });

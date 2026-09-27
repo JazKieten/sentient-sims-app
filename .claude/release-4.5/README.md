@@ -1,5 +1,13 @@
 # Release 4.5 working folder (app side)
 
+**Start here (2026-09-27):** the whole remaining 4.5 list is section 0 of
+`sentient-sims-code/.claude/release-4.5/ACTION-PLAN-2026-09-23.md`. For the app that is: version
+4.5.0; ONE core/stream build flag (stream: the four mod-install paths and electron-updater off,
+distinct appId/productName; core: stream UI hidden in the renderer, the AI exchange log kept in
+memory only, never written to `ai_exchange`); the CLAUDE.md trim; the public-cut hygiene. The
+main-process tier split in section I of the map (`api.ts` register split, `onSceneClosed`,
+`AIService` untangling) is DEFERRED to 4.6: the core app ships the stream code dormant.
+
 Started 2026-09-23, the same evening as the mod map. Goal: prepare `jasmine-phase-3` for release
 as Sentient Sims 4.5 with ONE codebase and build-time tiers (no code fork). Read in this order:
 

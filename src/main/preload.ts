@@ -12,6 +12,13 @@ import type {
   TwitchChatStatus,
   TwitchDeviceLoginStart,
 } from './sentient-sims/models/TwitchChatStatus';
+import type {
+  TierEventChannel,
+  TierEventChannels,
+  TierInvokeArgs,
+  TierInvokeChannel,
+  TierInvokeResult,
+} from './sentient-sims/tiers/ipc';
 
 type IpcCallback = (event: IpcRendererEvent, ...args: any[]) => void;
 
@@ -229,6 +236,22 @@ const electronHandler = {
   },
   twitchLogout: (): Promise<TwitchAuthStatus> => {
     return ipcRenderer.invoke('twitch-logout') as Promise<TwitchAuthStatus>;
+  },
+  // Channels a build tier adds (tiers/ipc.ts). Typed over interfaces the tier's own files
+  // augment, so a stripped build has no channel names and a leftover caller fails tsc.
+  tierInvoke: <C extends TierInvokeChannel>(channel: C, ...args: TierInvokeArgs<C>): Promise<TierInvokeResult<C>> => {
+    return ipcRenderer.invoke(channel, ...args) as Promise<TierInvokeResult<C>>;
+  },
+  tierOn: <C extends TierEventChannel>(
+    channel: C,
+    callback: (event: IpcRendererEvent, payload: TierEventChannels[C]) => void,
+  ) => {
+    const listener = (event: IpcRendererEvent, payload: TierEventChannels[C]) => {
+      callback(event, payload);
+    };
+    ipcRenderer.on(channel, listener);
+
+    return () => ipcRenderer.removeListener(channel, listener);
   },
   setAmplify: async (key: string, value: string): Promise<unknown> => {
     return ipcRenderer.invoke('set-amplify', key, value);

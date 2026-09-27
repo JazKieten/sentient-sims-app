@@ -1,0 +1,15 @@
+{
+  "_comment": "Build tiers (release 4.5). What the CORE build strips: every stream, autonomy and dev path. The STREAM build strips dev. The loose tree is 'dev'. Paths are repo-relative, directories end with '/'. src/ never imports this file; scripts/tiers.ts reads it. The mod's twin is tiers.py.",
+  "stream": [
+    "src/main/sentient-sims/tiers/stream.ts",
+    "src/renderer/tiers/stream.tsx"
+  ],
+  "autonomy": [
+    "src/main/sentient-sims/tiers/autonomy.ts",
+    "src/renderer/tiers/autonomy.tsx"
+  ],
+  "dev": [
+    "src/main/sentient-sims/tiers/dev.ts",
+    "src/renderer/tiers/dev.tsx"
+  ]
+}

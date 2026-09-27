@@ -1,0 +1,47 @@
+name: Strip check
+
+# Builds each player tier from a stripped tree (release 4.5): the core release must
+# compile, pass its unit tests and build with every stream, autonomy and dev file gone,
+# and its bundles must not contain any of them (scripts/verify-build.ts reads the source
+# maps). No secrets: test:unit excludes the .it tests.
+
+on:
+  push:
+
+jobs:
+  strip-check:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: [core, stream]
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js and NPM
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: npm install
+        run: |
+          npm install
+          npm run rebuild
+
+      - name: Strip the tree
+        run: node scripts/strip-tree.ts --tier ${{ matrix.tier }} --yes
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the build
+        run: node scripts/verify-build.ts --tier ${{ matrix.tier }}

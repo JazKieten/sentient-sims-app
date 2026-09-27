@@ -33,6 +33,7 @@ import { ApiContext } from './sentient-sims/services/ApiContext';
 import { VoiceInputService } from './sentient-sims/services/VoiceInputService';
 import { TwitchChatService } from './sentient-sims/services/TwitchChatService';
 import { version as releaseAppVersion } from '../../release/app/package.json';
+import { TIER, TIER_STAMP } from './sentient-sims/tiers';
 
 log.initialize({ preload: true });
 // Get uncaught main-process errors into main.log so they show up in player log bundles.
@@ -165,6 +166,8 @@ const createWindow = async () => {
 // Everything here binds ports or registers global handlers, so it must run exactly
 // once per process, not once per window.
 const startServices = () => {
+  // The stamp string is what scripts/verify-build.ts looks for in the main bundle
+  log.info(`App build tier: ${TIER} (${TIER_STAMP})`);
   const settingsService = new SettingsService();
   settingsService.runMigrations();
 

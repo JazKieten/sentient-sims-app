@@ -3,6 +3,7 @@ import { thoughtMemoryFloor } from '../constants';
 import { StageId } from '../pipeline/stages';
 import { pushdiag } from './ActionDispatcherService';
 import { ApiContext } from './ApiContext';
+import type { AutonomyServices } from '../tiers/autonomy';
 import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, SOCIAL_ACTIONS, validateIntent } from '../models/CognitionIntent';
 import { isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
@@ -374,8 +375,12 @@ export class CognitionService {
     suspectOutcomes: 0,
   };
 
-  constructor(ctx: ApiContext) {
+  // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
+  private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'>;
+
+  constructor(ctx: ApiContext, autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'>) {
     this.ctx = ctx;
+    this.autonomy = autonomy;
     ctx.simStateCache.onReport((report) => {
       this.onStateReport(report);
     });
@@ -422,8 +427,8 @@ export class CognitionService {
       entries
         .filter((entry) => entry.is_household !== false && entry.sim_id)
         .forEach((entry) => {
-          if (this.ctx.dailyPlan.needsLazyPlan(entry.sim_id, absoluteDayForPlans)) {
-            void this.ctx.dailyPlan.generateLazy(entry, absoluteDayForPlans);
+          if (this.autonomy.dailyPlan.needsLazyPlan(entry.sim_id, absoluteDayForPlans)) {
+            void this.autonomy.dailyPlan.generateLazy(entry, absoluteDayForPlans);
           }
         });
     }
@@ -715,7 +720,7 @@ export class CognitionService {
         return;
       }
       try {
-        const requestId = this.ctx.actionDispatcher.dispatch({
+        const requestId = this.autonomy.actionDispatcher.dispatch({
           sim_id: simId,
           action,
           target_object_id: offered.objectActions.get(action),
@@ -771,7 +776,7 @@ export class CognitionService {
       return;
     }
     try {
-      const requestId = this.ctx.actionDispatcher.dispatch({
+      const requestId = this.autonomy.actionDispatcher.dispatch({
         sim_id: simId,
         action: 'go_home',
         motivation: 'Completely worn out; calling it a night and heading home.',
@@ -847,7 +852,7 @@ export class CognitionService {
       return;
     }
     try {
-      const requestId = this.ctx.actionDispatcher.dispatch({
+      const requestId = this.autonomy.actionDispatcher.dispatch({
         sim_id: simId,
         action: 'go_home',
         motivation: `Been ${mood} this whole time out; this place is not working, time to head home.`,
@@ -906,7 +911,7 @@ export class CognitionService {
       return;
     }
     try {
-      const requestId = this.ctx.actionDispatcher.dispatch({
+      const requestId = this.autonomy.actionDispatcher.dispatch({
         sim_id: simId,
         action,
         motivation: isHome
@@ -976,7 +981,7 @@ export class CognitionService {
     const absoluteDay = report.lot?.clock?.absolute_day;
     let plan;
     if (entry.is_household !== false && absoluteDay !== undefined) {
-      plan = this.ctx.dailyPlan.activePlan(simId, absoluteDay);
+      plan = this.autonomy.dailyPlan.activePlan(simId, absoluteDay);
       // (the lazy planner itself now fires from onStateReport — G-7)
     }
     // Off-loadout keys are cut from every offering channel like suppressed ones — but
@@ -1209,7 +1214,7 @@ export class CognitionService {
       const absoluteDay = report.lot?.clock?.absolute_day;
       const plan =
         entry.is_household !== false && absoluteDay !== undefined
-          ? this.ctx.dailyPlan.activePlan(simId, absoluteDay)
+          ? this.autonomy.dailyPlan.activePlan(simId, absoluteDay)
           : undefined;
       const planBlock =
         plan && (plan.goals.length > 0 || plan.persona)
@@ -1400,7 +1405,7 @@ export class CognitionService {
     }
 
     try {
-      const requestId = this.ctx.actionDispatcher.dispatch({
+      const requestId = this.autonomy.actionDispatcher.dispatch({
         sim_id: simId,
         action: intent.action,
         target_sim_id: intent.target_sim_id,
@@ -1753,7 +1758,7 @@ export class CognitionService {
       }
       // Release the dispatcher's in-flight entry too — otherwise a lost dispatch (mod
       // websocket down) blocks every future dispatch for this sim until the 10-min TTL
-      this.ctx.actionDispatcher.release?.(runtime.pendingRequestId);
+      this.autonomy.actionDispatcher.release?.(runtime.pendingRequestId);
       this.clearPending(runtime);
       this.toCooldown(simId);
     }, timeoutMs);
@@ -1808,10 +1813,10 @@ export class CognitionService {
     );
     const timer = setTimeout(() => {
       try {
-        if (runtime.phase !== 'COOLDOWN' || this.ctx.actionDispatcher.getInFlight?.(simId)) {
+        if (runtime.phase !== 'COOLDOWN' || this.autonomy.actionDispatcher.getInFlight?.(simId)) {
           return;
         }
-        const requestId = this.ctx.actionDispatcher.dispatch({
+        const requestId = this.autonomy.actionDispatcher.dispatch({
           sim_id: simId,
           action,
           target_sim_id: pending.intent.target_sim_id,

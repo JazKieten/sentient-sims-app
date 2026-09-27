@@ -9,9 +9,8 @@ import { StageId } from '../stages';
 // function instead of a constant, and the context they need is an explicit parameter
 // rather than whatever happened to be in scope.
 
-export * from './cognition';
-export * from './action';
-export * from './ask';
+// The autonomy stages' prompts (cognition, action, ask, plan) are not re-exported here:
+// they are stripped from the core build (release 4.5) and their callers import them directly.
 export * from './scene';
 export * from './consolidation';
 export * from './utility';

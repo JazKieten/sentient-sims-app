@@ -1,6 +1,7 @@
 import log from 'electron-log';
 import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
+import type { AutonomyServices } from '../tiers/autonomy';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { InteractionEventResult, InteractionEventStatus, LLMExchange } from '../models/InteractionEventResult';
@@ -47,8 +48,11 @@ type AskDecision = { willing: boolean; thought: string };
 export class AskActionService {
   private readonly ctx: ApiContext;
 
-  constructor(ctx: ApiContext) {
+  private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher'>;
+
+  constructor(ctx: ApiContext, autonomy: Pick<AutonomyServices, 'actionDispatcher'>) {
     this.ctx = ctx;
+    this.autonomy = autonomy;
   }
 
   // The fork runDirectedGeneration takes before staging a solo voice/chat reply. Returns
@@ -119,7 +123,7 @@ export class AskActionService {
       log.info(`[AskAction][suggest] ${sim.name} would ${matched.intent.action} for "${playerLine.text}"`);
     } else if (decision.willing) {
       try {
-        this.ctx.actionDispatcher.dispatch({
+        this.autonomy.actionDispatcher.dispatch({
           sim_id: sim.sim_id,
           action: matched.intent.action,
           target_sim_id: matched.intent.target_sim_id,

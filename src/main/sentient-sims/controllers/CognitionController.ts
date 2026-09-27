@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import log from 'electron-log';
 import { ApiContext } from '../services/ApiContext';
+import type { AutonomyServices } from '../tiers/autonomy';
 import { ActionIntent, InteractionOutcomeEvent } from '../models/ActionIntent';
 import { ModRequestPerception, ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PerceptionSnapshot } from '../models/PerceptionSnapshot';
@@ -101,8 +102,11 @@ export class CognitionController {
   // SimStateCache supersedes this once snapshots arrive with every state report.
   private readonly latestPerception = new Map<string, PerceptionSnapshot>();
 
-  constructor(ctx: ApiContext) {
+  private readonly autonomy: AutonomyServices;
+
+  constructor(ctx: ApiContext, autonomy: AutonomyServices) {
     this.ctx = ctx;
+    this.autonomy = autonomy;
   }
 
   getPerception(simId: string): SimStateEntry | undefined {
@@ -123,21 +127,21 @@ export class CognitionController {
 
       // Grade BEFORE resolving: resolve() moves the dispatch into the dispatcher's
       // recently-closed ring, which is exactly what 'late' is read from.
-      const known = this.ctx.actionDispatcher.lookup(event.request_id);
-      const late = this.ctx.actionDispatcher.wasClosed(event.request_id);
+      const known = this.autonomy.actionDispatcher.lookup(event.request_id);
+      const late = this.autonomy.actionDispatcher.wasClosed(event.request_id);
       const dispatchAgeMs = known ? Date.now() - known.dispatchedAt : undefined;
       const source = known?.intent.source;
       // An ask or a debug dispatch is not cognition's to close; the old 'late' flag
       // conflated those with a genuinely late answer.
       const unowned = source !== undefined && source !== 'cognition';
-      const verdict = this.ctx.outcomeVerdict.grade(event as InteractionOutcomeEvent, {
+      const verdict = this.autonomy.outcomeVerdict.grade(event as InteractionOutcomeEvent, {
         dispatchAgeMs,
         late,
         blockedBy: this.ctx.simStateCache.getSim(event.sim_id)?.activity?.blocked_by,
         instantSuccessMs: this.ctx.settings.outcomeInstantSuccessMs,
       });
 
-      const pending = this.ctx.actionDispatcher.resolve(event.request_id);
+      const pending = this.autonomy.actionDispatcher.resolve(event.request_id);
       const action =
         pending?.intent.action ?? known?.intent.action ?? event.action ?? event.interaction_name ?? 'an interaction';
       // The mod can't always resolve names (the sim may already be gone); fall back to the
@@ -177,7 +181,7 @@ export class CognitionController {
       // The provenance behind the memory row: what was claimed, where it was decided,
       // and how it was graded (F5). Best-effort — no save loaded means no row, and the
       // outcome still reaches cognition.
-      this.ctx.outcomeVerdict.record({
+      this.autonomy.outcomeVerdict.record({
         at: new Date().toISOString(),
         requestId: event.request_id,
         simId: event.sim_id,
@@ -203,7 +207,7 @@ export class CognitionController {
 
       // Close the sim's PENDING_OUTCOME state — success is only ever declared here,
       // never at dispatch time, and a suspect success is not declared at all
-      this.ctx.cognitionService.onOutcome({
+      this.autonomy.cognitionService.onOutcome({
         ...event,
         sim_id: event.sim_id,
         outcome: event.outcome,
@@ -257,7 +261,7 @@ export class CognitionController {
     const { sim_id: simId, verdict, limit } = req.query;
     const parsedLimit = typeof limit === 'string' ? Number(limit) : undefined;
     res.json(
-      this.ctx.outcomeVerdict.list({
+      this.autonomy.outcomeVerdict.list({
         simId: typeof simId === 'string' ? simId : undefined,
         verdict: typeof verdict === 'string' ? (verdict as OutcomeVerdict) : undefined,
         limit: parsedLimit && parsedLimit > 0 ? parsedLimit : undefined,
@@ -278,7 +282,7 @@ export class CognitionController {
         request_id: randomUUID(),
         sim_id: simId,
       };
-      this.ctx.actionDispatcher.sendToMod(message);
+      this.autonomy.actionDispatcher.sendToMod(message);
       return res.json({ request_id: message.request_id });
     } catch (err) {
       log.error('Error dispatching perception request', err);
@@ -294,7 +298,7 @@ export class CognitionController {
         return res.status(400).json({ error: 'sim_id and action are required' });
       }
 
-      const requestId = this.ctx.actionDispatcher.dispatch(intent);
+      const requestId = this.autonomy.actionDispatcher.dispatch(intent);
       return res.json({ request_id: requestId });
     } catch (err) {
       log.error('Error dispatching debug enqueue', err);

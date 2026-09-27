@@ -87,7 +87,11 @@ export class VoiceInputService {
         }
       },
     });
-    // V-8: the second chord — same capture, but the transcript is an order
+    // V-8: the second chord — same capture, but the transcript is an order. Only a build
+    // with the autonomy tier can carry one out, so without it the chord is never armed.
+    if (!this.ctx.ext.voiceCommand) {
+      return;
+    }
     this.hotkey.armCommand(this.ctx.settings.voiceCommandHotkey, {
       onDown: () => {
         this.startListening('command');
@@ -166,7 +170,7 @@ export class VoiceInputService {
       if (this.captureMode === 'command') {
         // V-8: an order, not talk — mapped to an offered action and dispatched; the
         // chat event is skipped entirely
-        await this.ctx.voiceCommand.handleCommand(text);
+        await this.ctx.ext.voiceCommand?.handleCommand(text);
         return text;
       }
       sendPlayerVoiceMessageToMod(text);

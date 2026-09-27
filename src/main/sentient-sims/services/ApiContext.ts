@@ -1,7 +1,6 @@
 import { AIController } from '../controllers/AIController';
 import { AnimationsController } from '../controllers/AnimationsController';
 import { AssetsController } from '../controllers/AssetsController';
-import { CognitionController } from '../controllers/CognitionController';
 import { SimStateController } from '../controllers/SimStateController';
 import { DossierController } from '../controllers/DossierController';
 import { BenchController } from '../controllers/BenchController';
@@ -23,10 +22,8 @@ import { SettingsController } from '../controllers/SettingsController';
 import { UpdateController } from '../controllers/UpdateController';
 import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
-import { DailyPlanRepository } from '../db/DailyPlanRepository';
 import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
-import { ActionOutcomeRepository } from '../db/ActionOutcomeRepository';
 import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
 import { InteractionRepository } from '../db/InteractionRepository';
@@ -41,13 +38,8 @@ import { LLaMaTokenCounter } from '../tokens/LLaMaTokenCounter';
 import { NovelAITokenCounter } from '../tokens/NovelAITokenCounter';
 import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
-import { ActionDispatcherService } from './ActionDispatcherService';
-import { AskActionService } from './AskActionService';
-import { VoiceCommandService } from './VoiceCommandService';
 import { DefaultDescriptionService } from './DefaultDescriptionService';
-import { DailyPlanService } from './DailyPlanService';
 import { SimStateCache } from './SimStateCache';
-import { CognitionService } from './CognitionService';
 import { AIService } from './AIService';
 import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
@@ -72,7 +64,6 @@ import { MappingService } from './MappingService';
 import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
 import { MemoryTraceService } from './MemoryTraceService';
-import { OutcomeVerdictService } from './OutcomeVerdictService';
 import { AIExchangeLogService } from './AIExchangeLogService';
 import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
@@ -104,7 +95,7 @@ import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
 import { setSimAliases } from '../util/simAliases';
 import { TIER_REGISTRATIONS } from '../tiers';
-import type { TierRegistration } from '../tiers/types';
+import type { TierExtensions, TierRegistration } from '../tiers/types';
 
 export type ApiContextParams = {
   port: number;
@@ -137,7 +128,6 @@ class ControllerContext {
   private readonly _mappingController: MappingController;
   private readonly _newsController: NewsController;
   private readonly _optionsController: OptionsController;
-  private readonly _cognitionController: CognitionController;
   private readonly _simStateController: SimStateController;
   private readonly _dossierController: DossierController;
   private readonly _benchController: BenchController;
@@ -164,7 +154,6 @@ class ControllerContext {
     this._mappingController = new MappingController(ctx);
     this._newsController = new NewsController(ctx);
     this._optionsController = new OptionsController(ctx);
-    this._cognitionController = new CognitionController(ctx);
     this._simStateController = new SimStateController(ctx);
     this._dossierController = new DossierController(ctx);
     this._benchController = new BenchController(ctx);
@@ -248,10 +237,6 @@ class ControllerContext {
     return this._optionsController;
   }
 
-  get cognition(): CognitionController {
-    return this._cognitionController;
-  }
-
   get simState(): SimStateController {
     return this._simStateController;
   }
@@ -298,14 +283,9 @@ export class ApiContext {
   private readonly _scenePlaybackRegistry: ScenePlaybackRegistry;
   private readonly _sceneMoodletService: SceneMoodletService;
   private readonly _playerConversationService: PlayerConversationService;
-  private readonly _actionDispatcherService: ActionDispatcherService;
 
-  private _voiceCommandService?: VoiceCommandService;
-  private _askActionService?: AskActionService;
   private _defaultDescriptionService?: DefaultDescriptionService;
   private readonly _simStateCache: SimStateCache;
-  private readonly _cognitionService: CognitionService;
-  private readonly _dailyPlanService: DailyPlanService;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
@@ -314,7 +294,6 @@ export class ApiContext {
   private readonly _memoryRetrievalService: MemoryRetrievalService;
   private readonly _memoryTraceService: MemoryTraceService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
-  private readonly _outcomeVerdictService: OutcomeVerdictService;
   private readonly _semanticMemoryService: SemanticMemoryService;
   private readonly _transcriptionService: TranscriptionService;
 
@@ -338,10 +317,8 @@ export class ApiContext {
   private readonly _paintingRepository: PaintingRepository;
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
-  private readonly _dailyPlanRepository: DailyPlanRepository;
   private readonly _aiExchangeRepository: AIExchangeRepository;
   private readonly _memoryTraceRepository: MemoryTraceRepository;
-  private readonly _actionOutcomeRepository: ActionOutcomeRepository;
   private readonly _simFactRepository: SimFactRepository;
 
   // --- AI Services ---
@@ -366,6 +343,10 @@ export class ApiContext {
   private readonly _controller: ControllerContext;
 
   private readonly _tiers: TierRegistration[];
+
+  // Capability slots the build tiers fill in construct() (tiers/types.ts TierExtensions).
+  // Core code calls only these, and carries on without the feature when a slot is empty.
+  readonly ext: TierExtensions = {};
 
   constructor(options: ApiContextParams) {
     this._tiers = options.tiers ?? TIER_REGISTRATIONS;
@@ -410,10 +391,8 @@ export class ApiContext {
     this._paintingRepository = new PaintingRepository(this._db);
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
-    this._dailyPlanRepository = new DailyPlanRepository(this._db);
     this._aiExchangeRepository = new AIExchangeRepository(this._db);
     this._memoryTraceRepository = new MemoryTraceRepository(this._db);
-    this._actionOutcomeRepository = new ActionOutcomeRepository(this._db);
     this._simFactRepository = new SimFactRepository(this._db);
 
     this._sceneService = new SceneService();
@@ -435,7 +414,9 @@ export class ApiContext {
       // a reply to the player that wanted to act may act now that it has been heard
       onSceneClosed: (closed) => {
         void this._sceneMoodletService.appraise(closed);
-        this._cognitionService.releaseConversationActions(closed.sceneId);
+        for (const tier of this._tiers) {
+          tier.onSceneClosed?.(this, closed);
+        }
       },
       notifySceneEnded: (sceneId, reason) => {
         // The game ended the conversation (walk-away, left lot, zone unload): a player
@@ -454,7 +435,6 @@ export class ApiContext {
     // A scene's transcript row is saved before a word of it is spoken; this is how a
     // cut scene finds its row again to shrink it to what was actually said.
     setSceneMemoryObserver((pacedText, memoryId) => this._scenePlaybackRegistry.attachMemory(pacedText, memoryId));
-    this._actionDispatcherService = new ActionDispatcherService();
     this._simStateCache = new SimStateCache();
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
@@ -478,7 +458,6 @@ export class ApiContext {
     this._twitchAuthService = new TwitchAuthService(this);
     this._aiExchangeLogService = new AIExchangeLogService(this._aiExchangeRepository);
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
-    this._outcomeVerdictService = new OutcomeVerdictService(this._actionOutcomeRepository);
     // Names come from the participant table rather than being passed around: the fact
     // store holds ids, and every rendering of a fact needs a name for them.
     this._semanticMemoryService = new SemanticMemoryService(this._simFactRepository, (simIds) => {
@@ -500,11 +479,6 @@ export class ApiContext {
       this._memoryAnnotationService.annotateInBackground(memory);
       this._memoryTraceService.attach(memory);
     });
-
-    this._dailyPlanService = new DailyPlanService(this);
-
-    // Last: subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
-    this._cognitionService = new CognitionService(this);
 
     // Every core service exists; each build tier builds its own and fills its slots
     for (const tier of this._tiers) {
@@ -614,23 +588,7 @@ export class ApiContext {
     return this._playerConversationService;
   }
 
-  // V-8: lazily built (needs ai + simStateCache + actionDispatcher, all on this context)
-  get voiceCommand(): VoiceCommandService {
-    if (!this._voiceCommandService) {
-      this._voiceCommandService = new VoiceCommandService(this);
-    }
-    return this._voiceCommandService;
-  }
-
-  // Lazily built like voiceCommand (needs ai + simStateCache + actionDispatcher)
-  get askAction(): AskActionService {
-    if (!this._askActionService) {
-      this._askActionService = new AskActionService(this);
-    }
-    return this._askActionService;
-  }
-
-  // V-6: lazily built for the same reason as voiceCommand — it needs ai, which is built late
+  // V-6: lazily built — it needs ai, which is built late
   get defaultDescriptions(): DefaultDescriptionService {
     if (!this._defaultDescriptionService) {
       this._defaultDescriptionService = new DefaultDescriptionService(this);
@@ -638,20 +596,8 @@ export class ApiContext {
     return this._defaultDescriptionService;
   }
 
-  get actionDispatcher(): ActionDispatcherService {
-    return this._actionDispatcherService;
-  }
-
-  get cognitionService(): CognitionService {
-    return this._cognitionService;
-  }
-
   get simStateCache(): SimStateCache {
     return this._simStateCache;
-  }
-
-  get dailyPlan(): DailyPlanService {
-    return this._dailyPlanService;
   }
 
   // Evaluated per access so changing the embedding provider (or setting a key/token at
@@ -690,10 +636,6 @@ export class ApiContext {
 
   get aiExchangeLog(): AIExchangeLogService {
     return this._aiExchangeLogService;
-  }
-
-  get outcomeVerdict(): OutcomeVerdictService {
-    return this._outcomeVerdictService;
   }
 
   get interactionSemanticSearch(): InteractionSemanticSearchService {
@@ -740,20 +682,12 @@ export class ApiContext {
     return this._interactionRepository;
   }
 
-  get dailyPlanRepository(): DailyPlanRepository {
-    return this._dailyPlanRepository;
-  }
-
   get aiExchangeRepository(): AIExchangeRepository {
     return this._aiExchangeRepository;
   }
 
   get memoryTraceRepository(): MemoryTraceRepository {
     return this._memoryTraceRepository;
-  }
-
-  get actionOutcomeRepository(): ActionOutcomeRepository {
-    return this._actionOutcomeRepository;
   }
 
   get simFactRepository(): SimFactRepository {

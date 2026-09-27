@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { lifeStageOf } from 'main/sentient-sims/util/simLifeStage';
-import { isBelowChild } from 'main/sentient-sims/models/ActionLoadout';
+import { isBelowChild, lifeStageOf } from 'main/sentient-sims/util/simLifeStage';
 import { SceneState } from 'main/sentient-sims/services/SceneService';
 import { MemoryEntity } from 'main/sentient-sims/db/entities/MemoryEntity';
 import { mockApiContext } from './util';

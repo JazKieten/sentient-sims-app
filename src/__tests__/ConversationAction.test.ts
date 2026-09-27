@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CognitionService } from 'main/sentient-sims/services/CognitionService';
+import { autonomyOf, type AutonomyServices } from 'main/sentient-sims/tiers/autonomy';
 import { SimStateCache } from 'main/sentient-sims/services/SimStateCache';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
@@ -81,7 +82,8 @@ function buildCtx(options: CtxOptions = {}) {
       generateLazy: () => Promise.resolve(),
     },
   } as unknown as ApiContext;
-  const cognition = new CognitionService(ctx);
+  // The stub carries the autonomy siblings (actionDispatcher, dailyPlan) itself
+  const cognition = new CognitionService(ctx, ctx as unknown as AutonomyServices);
   return { ctx, cache, cognition, dispatched, oneShotCalls, prompts };
 }
 
@@ -237,7 +239,7 @@ describe('waiting for the reply to finish airing', () => {
 
   it('is released by the scene registry closing the scene', () => {
     const ctx = mockApiContext();
-    const release = vi.spyOn(ctx.cognitionService, 'releaseConversationActions');
+    const release = vi.spyOn(autonomyOf(ctx).cognitionService, 'releaseConversationActions');
 
     ctx.scenePlayback.roundQueued('scene-9', ['100'], 1, [{ speaker: 'Jonah Alder', text: 'Zoe. She listens.' }]);
     ctx.scenePlayback.playbackEnded('scene-9', true);

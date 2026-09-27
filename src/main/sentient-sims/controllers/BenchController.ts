@@ -7,6 +7,7 @@ import { runTier0 } from '../bench/tier0';
 import { BatteryQuestion, buildQuestions, gradeBattery } from '../bench/selfKnowledge';
 import { PLAYER_THREAD_FIXTURES } from '../bench/playerThreadFixtures';
 import { runPlayerThread } from '../bench/playerThreads';
+import { autonomyOf } from '../tiers/autonomy';
 
 // DEV tier (release 4.5): the measurement routes (/bench/*) and the AI exchange log reader
 // (/ai/exchanges*), split out of AIController so the player builds carry none of them.
@@ -174,7 +175,7 @@ export class BenchController {
       // Reflection rows are stored name-prefixed ("<Name> (diary): ...")
       text: (memory.content ?? '').replace(/^.*?\(diary\):\s*/, ''),
     }));
-    const outcomes = this.ctx.outcomeVerdict.list({ limit: 5000 });
+    const outcomes = autonomyOf(this.ctx).outcomeVerdict.list({ limit: 5000 });
     res.json({ violations: runTier0({ diaries, outcomes }), diaries: diaries.length, outcomes: outcomes.length });
   };
 }

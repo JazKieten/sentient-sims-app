@@ -1,12 +1,13 @@
 import log from 'electron-log';
 import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
+import type { AutonomyServices } from '../tiers/autonomy';
 import { DailyPlan, DailyPlanGoalReview, DailyPlanSource, GoalVerdict } from '../models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from '../models/SimStateReport';
 import { DISCRETIONARY_ACTIONS, DISCRETIONARY_GROUPS, ROMANCE_ACTIONS, isRomanceAge } from '../models/ActionLoadout';
 import { AIActionType } from '../models/AIActionType';
 import { describePlanGoal } from '../util/formatCognitionPrompt';
-import { buildLazyPlanSystemPrompt } from '../pipeline/prompts/consolidation';
+import { buildLazyPlanSystemPrompt } from '../pipeline/prompts/plan';
 
 // Each game day a household sim carries a plan: 1-2 goals picked FROM THE GAME'S OWN
 // objectives (the mod's goal_pool — aspiration steps, promotion requirements, daily
@@ -214,8 +215,11 @@ export class DailyPlanService {
 
   private readonly failureCooldownUntil = new Map<string, number>();
 
-  constructor(ctx: ApiContext) {
+  private readonly autonomy: Pick<AutonomyServices, 'dailyPlanRepository'>;
+
+  constructor(ctx: ApiContext, autonomy: Pick<AutonomyServices, 'dailyPlanRepository'>) {
     this.ctx = ctx;
+    this.autonomy = autonomy;
   }
 
   // The plan that governs simId today, or undefined (feature off, unknown day, no row).
@@ -230,7 +234,7 @@ export class DailyPlanService {
       return cached;
     }
     try {
-      const plan = this.ctx.dailyPlanRepository.getPlan(simId, absoluteDay);
+      const plan = this.autonomy.dailyPlanRepository.getPlan(simId, absoluteDay);
       if (plan) {
         this.cache.set(simId, plan);
       }
@@ -453,7 +457,7 @@ export class DailyPlanService {
       review: existing?.review,
     };
     try {
-      this.ctx.dailyPlanRepository.savePlan(plan);
+      this.autonomy.dailyPlanRepository.savePlan(plan);
       this.cache.set(simId, plan);
       log.info(
         `[DailyPlan] sim ${simId} day ${absoluteDay} (${source}${
@@ -489,7 +493,7 @@ export class DailyPlanService {
       return;
     }
     try {
-      this.ctx.dailyPlanRepository.saveReview(simId, absoluteDay, review);
+      this.autonomy.dailyPlanRepository.saveReview(simId, absoluteDay, review);
       const cached = this.cache.get(simId);
       if (cached && cached.absolute_day === absoluteDay) {
         cached.review = review;
@@ -587,7 +591,7 @@ export class DailyPlanService {
     for (let back = 1; back <= STUCK_GOAL_DAYS + STUCK_GOAL_WITHHOLD_DAYS + 1; back += 1) {
       let plan: DailyPlan | undefined;
       try {
-        plan = this.ctx.dailyPlanRepository.getPlan(simId, todayAbsoluteDay - back);
+        plan = this.autonomy.dailyPlanRepository.getPlan(simId, todayAbsoluteDay - back);
       } catch {
         break;
       }

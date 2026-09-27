@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { DailyPlanService, extractDiaryProse, parsePlannerJson } from 'main/sentient-sims/services/DailyPlanService';
+import type { AutonomyServices } from 'main/sentient-sims/tiers/autonomy';
 import { DailyPlan, sleepPlanDays } from 'main/sentient-sims/models/DailyPlan';
 import { GoalPoolEntry, SimStateEntry } from 'main/sentient-sims/models/SimStateReport';
 import {
@@ -50,7 +51,8 @@ function buildService(options: { plannerText?: string | (() => string); loadoutS
     },
   } as unknown as ApiContext;
 
-  return { service: new DailyPlanService(ctx), rows, plannerPrompts };
+  // The stub carries the autonomy sibling (dailyPlanRepository) itself
+  return { service: new DailyPlanService(ctx, ctx as unknown as AutonomyServices), rows, plannerPrompts };
 }
 
 function simEntry(overrides: Partial<SimStateEntry> = {}): SimStateEntry {

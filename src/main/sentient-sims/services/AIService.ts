@@ -61,7 +61,7 @@ import {
   DIRECTOR_REVIEW_SYSTEM_PROMPT,
   withContentFreeHint,
 } from '../pipeline/prompts/scene';
-import { buildConsolidationSystemPrompt, buildDiaryOnlySystemPrompt } from '../pipeline/prompts/consolidation';
+import { buildDiaryOnlySystemPrompt } from '../pipeline/prompts/consolidation';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { SentientSim } from '../models/SentientSim';
 import {
@@ -76,7 +76,6 @@ import {
   parseDialogueLines,
   splitLinesForPacing,
 } from '../formatter/PromptFormatter';
-import { sleepPlanDays } from '../models/DailyPlan';
 import { splitLinesForAiring } from '../util/airingChunks';
 import { formatSelfStatus, TodaysPlanBlock } from '../util/formatSelfStatus';
 import { PlayerConversation, PlayerConversationService } from './PlayerConversationService';
@@ -92,7 +91,6 @@ import { ModAddBuff, ModWebsocketMessageType } from '../models/ModWebsocketMessa
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { ApiContext } from './ApiContext';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
-import { parsePlannerJson, extractDiaryProse, DailyPlanService } from './DailyPlanService';
 import { assertDiaryIsProse, repairDiary } from '../util/diaryProse';
 import { SceneState } from './SceneService';
 import { isBelowChild, lifeStageOf } from '../util/simLifeStage';
@@ -542,71 +540,7 @@ export class AIService {
   // review — Marisol's own reflection said "Interacting with Marisol Vega felt natural").
   // Stored tagged event_type='reflection', so it surfaces in the Memories UI and feeds future
   // prompts via the <PAST_REFLECTIONS> block. Best-effort: any failure is logged and swallowed.
-  // When the sleeper can plan (feature on, goal_pool cached, day known, tomorrow not
-  // already planned), the diary call doubles as the nightly planner: one JSON call
-  // returns the diary AND tomorrow's goals/persona/loadout plus a review of today's
-  // goals. Any parse failure degrades to the plain diary — the reflection must never
-  // be lost to plan parsing; the lazy planner covers the plan side.
-  private buildSleepPlanContext(
-    pov: { simId: string; simName: string },
-    sleepClock?: { hour?: number; absolute_day?: number },
-  ) {
-    try {
-      if (!this.ctx.settings.dailyGoalsEnabled) {
-        return undefined;
-      }
-      const entry = this.ctx.simStateCache.getSim(pov.simId);
-      const pool = entry?.self?.goal_pool;
-      const endingDay = sleepClock?.absolute_day ?? this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
-      if (!pool || pool.length === 0 || endingDay === undefined) {
-        return undefined;
-      }
-      // The plan belongs to the day the sim WAKES INTO, which is not endingDay + 1 when
-      // they went to bed after midnight
-      const days = sleepPlanDays(endingDay, sleepClock?.hour);
-      if (!days) {
-        return undefined;
-      }
-      const { targetDay, reviewDay } = days;
-      // A second sleep that night re-fires the boundary and must not replan — but the
-      // day that ended may still be ungraded, and bailing here used to lose its review
-      // for good (nothing else ever writes one)
-      const alreadyPlanned = this.ctx.dailyPlan.activePlan(pov.simId, targetDay)?.source === 'sleep';
-      const dayThatEnded = this.ctx.dailyPlan.activePlan(pov.simId, reviewDay);
-      const reviewPending = dayThatEnded !== undefined && dayThatEnded.goals.length > 0 && !dayThatEnded.review;
-      if (alreadyPlanned && !reviewPending) {
-        return undefined;
-      }
-      return {
-        pool,
-        reviewDay,
-        targetDay,
-        todaysPlan: dayThatEnded,
-        description: this.ctx.dailyPlan.participantDescription(pov.simId, pov.simName),
-        traits: entry.self?.traits ?? [],
-        // Gates the romance group out of the planner's ACTION STYLES for non-adults
-        age: entry.self?.age,
-        ageBlocked: entry.self?.age_blocked,
-        // G-5/G-8: what tonight's lot serves (annotation only) and goals carried too long
-        lotServes: DailyPlanService.lotServedKeys(entry, this.ctx.simStateCache.getReport()?.lot?.action_keys),
-        stuck: this.ctx.dailyPlan.stuckGoals(pov.simId, targetDay),
-        // The weekday of the day being planned (the one the sim wakes into): before
-        // midnight that's tomorrow, after midnight it's already today. 0=Sun..6=Sat.
-        plannedWeekday: (() => {
-          const day = this.ctx.simStateCache.getReport()?.lot?.clock?.day;
-          if (day === undefined) {
-            return undefined;
-          }
-          const hour = sleepClock?.hour;
-          return hour !== undefined && hour < 12 ? day : (day + 1) % 7;
-        })(),
-      };
-    } catch (err) {
-      log.warn('[DailyPlan] sleep plan context failed; running plain reflection', err);
-      return undefined;
-    }
-  }
-
+  // With the autonomy tier the sleep diary also plans tomorrow (ext.sleepPlanner).
   async runSceneReflection(
     previousScene: SceneState,
     pov?: { simId: string; simName: string },
@@ -698,68 +632,26 @@ ${factsBlock}
         hasOthers: others.length > 0,
       };
 
-      const planContext = boundary === 'sleep' && pov ? this.buildSleepPlanContext(pov, sleepClock) : undefined;
-      const systemPrompt = planContext
-        ? buildConsolidationSystemPrompt({
-            ...reflectionContext,
-            choicesBlock: this.ctx.dailyPlan.buildChoicesBlock(
-              planContext.pool,
-              planContext.todaysPlan,
-              planContext.age,
-              planContext.ageBlocked,
-              planContext.lotServes,
-              planContext.stuck,
-              // C1 outing nudges (Jaz's go_out rebuild): traits + the weekday being planned
-              { traits: planContext.traits, plannedWeekday: planContext.plannedWeekday },
-            ),
-            aboutLine: `${planContext.description ? `About you: ${planContext.description}\n` : ''}${
-              planContext.traits.length > 0 ? `Your traits: ${planContext.traits.join(', ')}\n` : ''
-            }`,
-            hasTodaysGoals: (planContext.todaysPlan?.goals.length ?? 0) > 0,
-            loadoutSize: this.ctx.settings.dailyLoadoutSize,
-          })
-        : buildDiaryOnlySystemPrompt(reflectionContext);
+      // The nightly planner (autonomy) rides the sleep diary when there is a plan to make
+      const plan = boundary === 'sleep' && pov ? this.ctx.ext.sleepPlanner?.prepare(pov, sleepClock) : undefined;
+      const systemPrompt = plan ? plan.systemPrompt(reflectionContext) : buildDiaryOnlySystemPrompt(reflectionContext);
 
       const reflection = await this.runOneShot(
-        planContext ? 'Scene Reflection + Daily Plan' : 'Scene Reflection',
+        plan ? 'Scene Reflection + Daily Plan' : 'Scene Reflection',
         systemPrompt,
         transcript,
-        planContext ? 900 : 160,
+        plan ? 900 : 160,
         undefined,
-        planContext ? AIActionType.DAILY_PLAN : AIActionType.REFLECTION,
+        plan ? AIActionType.DAILY_PLAN : AIActionType.REFLECTION,
         undefined,
-        { stageId: planContext ? StageId.CONSOLIDATION_PLAN : StageId.CONSOLIDATION_REFLECT },
+        { stageId: plan ? StageId.CONSOLIDATION_PLAN : StageId.CONSOLIDATION_REFLECT },
       );
       this.logExchange(reflection.exchange);
 
       let text = cleanupAIOutput(reflection.text);
-      if (planContext && pov) {
-        const parsed = parsePlannerJson(reflection.text);
-        if (parsed && typeof parsed.diary === 'string' && parsed.diary.trim().length > 1) {
-          text = cleanupAIOutput(parsed.diary);
-          try {
-            this.ctx.dailyPlan.recordReview(pov.simId, planContext.reviewDay, parsed.goal_review);
-            const validated = this.ctx.dailyPlan.validate(
-              parsed,
-              planContext.pool,
-              planContext.age,
-              planContext.ageBlocked,
-              pov.simName,
-            );
-            this.ctx.dailyPlan.acceptPlan(pov.simId, planContext.targetDay, validated, 'sleep');
-          } catch (err) {
-            log.warn(`[DailyPlan] failed to accept sleep plan for ${pov.simName}`, err);
-          }
-        } else {
-          // The diary must never be lost to plan parsing — nor may raw JSON reach
-          // permanent memory (live 2026-08-15). Keep the prose, drop the schema, and let
-          // the lazy planner cover tomorrow.
-          text = cleanupAIOutput(extractDiaryProse(reflection.text));
-          log.warn(
-            `[DailyPlan] sleep planner output unparseable for ${pov.simName}; lazy path will plan. ` +
-              `Received: ${JSON.stringify(reflection.text.slice(0, 120))}`,
-          );
-        }
+      if (plan) {
+        // The diary out of the combined reply; the plan itself is the planner's to keep
+        text = cleanupAIOutput(plan.accept(reflection.text));
       }
       this.recordTrace([text], {
         pipeline: 'scene_reflection',
@@ -1505,7 +1397,8 @@ ${factsBlock}
     // scene id and the lines so far, and hears the verdict once the round airs
     const thread = this.conversationFor(event, options);
     if (!options.continueScene && options.playerLine && event.sentient_sims.length === 1) {
-      const asked = await this.ctx.askAction.tryAskedAction(event, options, playbackOptions);
+      // AUTONOMY (ext.askAction); a build without it always replies
+      const asked = await this.ctx.ext.askAction?.tryAskedAction(event, options, playbackOptions);
       if (asked) {
         // The request and the sim's spoken answer to it are part of the conversation too
         // (live 2026-09-21: "it's time to go on a date" triaged as a request, and the next
@@ -2409,20 +2302,10 @@ ${factsBlock}
         return '';
       }
       const absoluteDay = this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
-      const plan =
-        entry.is_household !== false && absoluteDay !== undefined
-          ? this.ctx.dailyPlan.activePlan(simId, absoluteDay)
-          : undefined;
+      // Today's plan comes from the autonomy tier (ext.selfStatusPlan); none without it
       const planBlock: TodaysPlanBlock | undefined =
-        plan && (plan.goals.length > 0 || plan.persona)
-          ? {
-              goals: plan.goals.map((goal) => ({
-                label: goal.label,
-                action_keys: goal.action_keys,
-                reachable: goal.reachable,
-              })),
-              persona: plan.persona,
-            }
+        entry.is_household !== false && absoluteDay !== undefined
+          ? this.ctx.ext.selfStatusPlan?.(simId, absoluteDay)
           : undefined;
       return formatSelfStatus(entry, planBlock);
     } catch {
@@ -2462,8 +2345,12 @@ ${factsBlock}
       if (!score) {
         return;
       }
+      const conversationActions = this.ctx.ext.conversationActions;
+      if (!conversationActions) {
+        return;
+      }
       try {
-        void this.ctx.cognitionService
+        void conversationActions
           .actOnConversation(sim.sim_id, {
             score: score.action,
             reason: score.action_reason,
@@ -2477,8 +2364,8 @@ ${factsBlock}
             options.onConversationAction?.({
               simId: sim.sim_id,
               acted: result.acted,
-              action: result.intent?.action,
-              target: result.intent?.target_sim_id ?? result.intent?.target_object_id,
+              action: result.action,
+              target: result.target,
             });
             return result;
           })
@@ -2496,6 +2383,11 @@ ${factsBlock}
   // stages their Action Scene from a fresh snapshot. NPCs included: whoever was in the
   // scene can act on it. Best-effort; a missing cognition service must never break a scene.
   private armCognitionDesires(event: SSEvent, scores: Map<string, SceneScore>, monologueBySim: Map<string, string>) {
+    // AUTONOMY (ext.conversationActions): no tier, no desires to arm
+    const conversationActions = this.ctx.ext.conversationActions;
+    if (!conversationActions) {
+      return;
+    }
     scores.forEach((score, name) => {
       // Scores come back from the model keyed by NAME STRING; mapping that back to a
       // sim must be ambiguity-safe or a name collision arms the WRONG sim's next
@@ -2515,7 +2407,7 @@ ${factsBlock}
       }
       const sim = matches[0];
       try {
-        this.ctx.cognitionService.armDesireFromScene(sim.sim_id, {
+        conversationActions.armDesireFromScene(sim.sim_id, {
           score: score.action,
           reason: score.action_reason,
           thought: monologueBySim.get(sim.sim_id),

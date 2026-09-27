@@ -1,6 +1,7 @@
 import log from 'electron-log';
 import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
+import type { AutonomyServices } from '../tiers/autonomy';
 import { AIActionType } from '../models/AIActionType';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { SimStateEntry } from '../models/SimStateReport';
@@ -18,8 +19,11 @@ import { COMMAND_SYSTEM_PROMPT } from '../pipeline/prompts/utility';
 export class VoiceCommandService {
   private readonly ctx: ApiContext;
 
-  constructor(ctx: ApiContext) {
+  private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher'>;
+
+  constructor(ctx: ApiContext, autonomy: Pick<AutonomyServices, 'actionDispatcher'>) {
     this.ctx = ctx;
+    this.autonomy = autonomy;
   }
 
   private commandedSim(): SimStateEntry | undefined {
@@ -89,7 +93,7 @@ export class VoiceCommandService {
       return false;
     }
     try {
-      const requestId = this.ctx.actionDispatcher.dispatch({
+      const requestId = this.autonomy.actionDispatcher.dispatch({
         sim_id: entry.sim_id,
         action: validated.intent.action,
         target_sim_id: validated.intent.target_sim_id,

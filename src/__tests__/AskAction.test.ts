@@ -12,6 +12,7 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { ASK_ACTION_SOURCE } from 'main/sentient-sims/services/AskActionService';
 import { firstJsonBlock, firstJsonBlockLoose } from 'main/sentient-sims/util/jsonBlock';
 import { mockApiContext } from './util';
+import { autonomyOf } from 'main/sentient-sims/tiers/autonomy';
 
 // The ask-action sub-type: a solo Voice/Twitch line triaged as a request to DO something
 // matches the sim's full offered vocabulary, the sim answers yes-or-no in character, and
@@ -135,7 +136,7 @@ describe('Ask actions', () => {
 
   it('dispatches a matched action when the sim says yes, and airs the why as a thought', async () => {
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 
@@ -169,7 +170,7 @@ describe('Ask actions', () => {
   it('airs an in-character refusal without dispatching anything', async () => {
     decisionOutput = '{"willing": false, "thought": "No. I am exhausted and the book can wait."}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 
@@ -181,7 +182,7 @@ describe('Ask actions', () => {
   it('falls through to the ordinary voice reply when triage says talk', async () => {
     triageOutput = '{"intent": "talk"}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('how are you feeling today?'));
 
@@ -193,7 +194,7 @@ describe('Ask actions', () => {
   it('falls through when nothing offered matches the request', async () => {
     matchOutput = '{"action": null, "confidence": 0}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go fly to the moon'));
 
@@ -205,7 +206,7 @@ describe('Ask actions', () => {
     // 'dance' is a real whitelist verb, but this snapshot offers no provider for it
     matchOutput = '{"action": "dance", "confidence": 0.8}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go dance'));
 
@@ -240,7 +241,7 @@ describe('Ask actions', () => {
 
   it('persists the Twitch shape itself, credited to the asking viewer', async () => {
     mockGeneration();
-    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
     vi.spyOn(ctx.participantRepository, 'getParticipants').mockReturnValue([
       { id: askedSim.sim_id, name: askedSim.name },
     ]);
@@ -272,7 +273,7 @@ describe('Ask actions', () => {
   // which pipeline it happened to take.
   it('narrates the Twitch question in the chat voice on the ask-action path too', async () => {
     mockGeneration();
-    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
     const playTtsLines = vi.spyOn(ctx.ai, 'playTtsLines').mockReturnValue(undefined);
 
     await ctx.ai.runDirectedGeneration(
@@ -302,7 +303,7 @@ describe('Ask actions', () => {
 
   it("leaves the Voice's own ask unvoiced — the player already said it", async () => {
     mockGeneration();
-    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
     const playTtsLines = vi.spyOn(ctx.ai, 'playTtsLines').mockReturnValue(undefined);
 
     await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
@@ -318,7 +319,7 @@ describe('Ask actions', () => {
     decisionOutput =
       '{"willing": true, "thought": I need to get ready for the day anyway and brushing my teeth is a good place to start, might as well get it out of the way}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 
@@ -333,7 +334,7 @@ describe('Ask actions', () => {
     decisionOutput =
       '{"willing": false, "thought": I\'m not really in the mood for games, and I don\'t feel like being told what to do right now}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 
@@ -344,7 +345,7 @@ describe('Ask actions', () => {
   it('matches when the label comes back unquoted', async () => {
     matchOutput = '{"action": "read_book", "target_object_id": "777", "label": read a book, "confidence": 0.9}';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 
@@ -354,7 +355,7 @@ describe('Ask actions', () => {
   it('falls through to the ordinary voice reply when the decision is unrepairable', async () => {
     decisionOutput = 'Sure, why not!';
     mockGeneration();
-    const dispatch = vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    const dispatch = vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     const result = await ctx.ai.interactionEvent(buildSoloChatEvent('go read a book'));
 

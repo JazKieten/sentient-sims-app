@@ -11,6 +11,11 @@ import type { IpcMain } from 'electron';
 import type { ApiContext } from '../services/ApiContext';
 import type { SceneClosed } from '../services/ScenePlaybackRegistry';
 import type { MemoryEntity } from '../db/entities/MemoryEntity';
+import type { SSEvent } from '../models/InteractionEvents';
+import type { InteractionEventResult } from '../models/InteractionEventResult';
+import type { DirectedGenerationOptions } from '../services/AIService';
+import type { ReflectionPromptContext } from '../pipeline/prompts/consolidation';
+import type { TodaysPlanBlock } from '../util/formatSelfStatus';
 
 export type Tier = 'core' | 'stream' | 'dev';
 
@@ -39,4 +44,75 @@ export interface TierRegistration {
   onMemoryUpserted?(ctx: ApiContext, memory: MemoryEntity): void;
   // App quit (main.ts will-quit).
   shutdown?(ctx: ApiContext): void;
+}
+
+// --- Capability slots (ApiContext.ext) -------------------------------------------------
+// What core code may ask a tier for. Every slot is optional: a build without the tier
+// leaves it undefined and core carries on without the feature. Typed with core-owned
+// types only, so core never names a tier's classes.
+
+export type AskActionPlayback = {
+  priority?: boolean;
+  deferPlayback?: boolean;
+  onPlaybackReady?: (play: () => void) => void;
+};
+
+// AUTONOMY: a solo player line that asks the sim to DO something. Undefined on any miss,
+// and the ordinary reply runs.
+export interface AskActionSlot {
+  tryAskedAction(
+    event: SSEvent,
+    options: DirectedGenerationOptions,
+    playback: AskActionPlayback,
+  ): Promise<InteractionEventResult | undefined>;
+}
+
+export type ConversationActionRequest = {
+  score: number;
+  reason?: string;
+  thought?: string;
+  speaker: string;
+  transcript: string;
+  sceneId?: string;
+  suggestOnly?: boolean;
+};
+
+export type ConversationActionOutcome = { acted: boolean; action?: string; target?: string };
+
+// AUTONOMY: a scene's action verdicts. A player-facing beat acts once its scene has aired;
+// any other scene arms a desire for the sim's next tick.
+export interface ConversationActionsSlot {
+  actOnConversation(simId: string, request: ConversationActionRequest): Promise<ConversationActionOutcome>;
+  armDesireFromScene(simId: string, desire: { score: number; reason?: string; thought?: string }): void;
+}
+
+// AUTONOMY: the nightly planner riding the sleep diary. prepare() returns undefined when
+// there is nothing to plan tonight, and the reflection is the plain diary.
+export interface SleepPlan {
+  // The combined diary + plan system prompt, built around the diary's own context
+  systemPrompt(reflection: ReflectionPromptContext): string;
+  // Records the review and accepts the plan out of the model's reply; returns the diary
+  // prose (never the JSON), before cleanup
+  accept(raw: string): string;
+}
+
+export interface SleepPlannerSlot {
+  prepare(
+    pov: { simId: string; simName: string },
+    sleepClock?: { hour?: number; absolute_day?: number },
+  ): SleepPlan | undefined;
+}
+
+// AUTONOMY: an order spoken on the voice command chord
+export interface VoiceCommandSlot {
+  handleCommand(text: string): Promise<boolean>;
+}
+
+export interface TierExtensions {
+  askAction?: AskActionSlot;
+  conversationActions?: ConversationActionsSlot;
+  sleepPlanner?: SleepPlannerSlot;
+  voiceCommand?: VoiceCommandSlot;
+  // AUTONOMY: today's plan as the self-status block renders it
+  selfStatusPlan?: (simId: string, absoluteDay: number) => TodaysPlanBlock | undefined;
 }

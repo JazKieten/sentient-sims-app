@@ -31,8 +31,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/ai/v2/models', ctx.controller.ai.getModels);
   expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.bench.getExchange);
   expressApp.get('/ai/exchanges', ctx.controller.bench.getExchanges);
-  // F5: graded outcomes for the loaded save, and the tier-0 run-validity gate over it
-  expressApp.get('/ai/outcomes', ctx.controller.cognition.getOutcomes);
+  // The tier-0 run-validity gate over the loaded save
   expressApp.get('/bench/tier0', ctx.controller.bench.getTier0);
   expressApp.post('/bench/self-knowledge/:simId', ctx.controller.bench.selfKnowledge);
   // The five player-facing conversations from the 09-19..21 logs, replayed through the
@@ -126,8 +125,6 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/options/status', ctx.controller.options.getOptionsStatus);
   expressApp.post('/options/fix', ctx.controller.options.fixOptions);
 
-  expressApp.post('/cognition/outcome', ctx.controller.cognition.postOutcome);
-  expressApp.post('/cognition/perception', ctx.controller.cognition.postPerception);
   expressApp.post('/cognition/state', ctx.controller.simState.postState);
   expressApp.post('/cognition/dossier', ctx.controller.dossier.postDossier);
 
@@ -140,8 +137,6 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/sims/:id/facts', ctx.controller.simFacts.addFact);
   expressApp.delete('/sims/:id/facts/:factId', ctx.controller.simFacts.retireFact);
   expressApp.post('/cognition/sleep-boundary', ctx.controller.simState.postSleepBoundary);
-  expressApp.post('/cognition/debug/enqueue', ctx.controller.cognition.debugEnqueue);
-  expressApp.post('/cognition/debug/perception', ctx.controller.cognition.debugRequestPerception);
 
   // The build tiers' routes, after every core route (release 4.5)
   for (const tier of ctx.tiers) {

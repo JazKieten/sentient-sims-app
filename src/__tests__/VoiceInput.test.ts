@@ -186,6 +186,13 @@ class FakeHotkeyService extends VoiceHotkeyService {
 
   disarmed = 0;
 
+  commandArmed?: string;
+
+  override armCommand(hotkey: string, callbacks: HotkeyCallbacks) {
+    this.commandArmed = hotkey;
+    super.armCommand(hotkey, callbacks);
+  }
+
   override arm(hotkey: string, mode: 'hold' | 'toggle', callbacks: HotkeyCallbacks) {
     this.armed = { hotkey, mode };
     this.capturedCallbacks = callbacks;
@@ -196,11 +203,14 @@ class FakeHotkeyService extends VoiceHotkeyService {
   }
 }
 
-function voiceInputContext(options?: { enabled?: boolean }) {
+// voiceCommand: false is a build without the autonomy tier, which has nobody to carry an
+// order out (ApiContext.ext.voiceCommand stays empty)
+function voiceInputContext(options?: { enabled?: boolean; voiceCommand?: boolean }) {
   const { settingsService } = mockEnvironment();
   settingsService.set(SettingsEnum.VOICE_INPUT_ENABLED, options?.enabled ?? true);
   const transcribe = vi.fn();
-  const ctx = { settings: settingsService, transcription: { transcribe } } as unknown as ApiContext;
+  const ext = options?.voiceCommand === false ? {} : { voiceCommand: { handleCommand: vi.fn() } };
+  const ctx = { settings: settingsService, transcription: { transcribe }, ext } as unknown as ApiContext;
   const hotkey = new FakeHotkeyService();
   const service = new VoiceInputService(ctx, hotkey);
   service.initialize();
@@ -223,6 +233,17 @@ describe('VoiceInputService', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('arms the command chord when a tier can carry out orders', () => {
+    const { hotkey } = voiceInputContext();
+    expect(hotkey.commandArmed).toBeDefined();
+  });
+
+  it('never arms the command chord in a build without the autonomy tier', () => {
+    const { hotkey } = voiceInputContext({ voiceCommand: false });
+    expect(hotkey.armed).toBeDefined();
+    expect(hotkey.commandArmed).toBeUndefined();
   });
 
   it('does not arm the hotkey while disabled', () => {

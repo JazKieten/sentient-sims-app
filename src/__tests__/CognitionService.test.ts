@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CognitionService } from 'main/sentient-sims/services/CognitionService';
+import type { AutonomyServices } from 'main/sentient-sims/tiers/autonomy';
 import { SimStateCache } from 'main/sentient-sims/services/SimStateCache';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
@@ -120,7 +121,8 @@ function buildCtx(options: CtxOptions = {}) {
     },
   } as unknown as ApiContext;
 
-  const cognition = new CognitionService(ctx);
+  // The stub carries the autonomy siblings (actionDispatcher, dailyPlan) itself
+  const cognition = new CognitionService(ctx, ctx as unknown as AutonomyServices);
   return { ctx, cache, cognition, dispatched, released, oneShotCalls, prompts, storedMemories, lazyPlanCalls };
 }
 

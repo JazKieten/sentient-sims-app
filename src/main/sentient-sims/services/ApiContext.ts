@@ -99,6 +99,7 @@ import { TwitchChatService } from './TwitchChatService';
 import { UpdateService } from './UpdateService';
 import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
+import { setSimAliases } from '../util/simAliases';
 
 export type ApiContextParams = {
   port: number;
@@ -343,6 +344,9 @@ export class ApiContext {
     this._getAssetPath = options.getAssetPath;
     this._settings = options.settingsService;
     this._directory = options.directoryService;
+    // Alias sims (the Grim Reaper and friends) are named in voice casting and targeting in
+    // every build; main.ts refreshes the registry when the setting changes
+    setSimAliases(this._settings.twitchSimAliases);
 
     this._sentientSimsAIService = new SentientSimsAIService(this);
     this._koboldAIService = new KoboldAIService(this);

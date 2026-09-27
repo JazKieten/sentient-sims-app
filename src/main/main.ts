@@ -23,6 +23,8 @@ import { appApiPort } from './sentient-sims/constants';
 import { installExtension, REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
 import { disableDebugLogging, enableDebugLogging } from './sentient-sims/util/debugLog';
 import { notifySettingChanged } from './sentient-sims/util/notifyRenderer';
+import { setSimAliases } from './sentient-sims/util/simAliases';
+import { SettingsEnum } from './sentient-sims/models/SettingsEnum';
 import debug from 'electron-debug';
 // electron-updater is CommonJS; import the default (whole module) and destructure
 // locally. A bare dynamic import() would be left external by the bundler and break
@@ -193,6 +195,10 @@ const startServices = () => {
   // connection all react to setting writes
   settingsService.onSettingChanged((key, value) => {
     notifySettingChanged(key, value);
+    if (key === (SettingsEnum.TWITCH_SIM_ALIASES as string)) {
+      // Voice casting and chat targeting read the alias registry (util/simAliases)
+      setSimAliases(settingsService.twitchSimAliases);
+    }
     voiceInputService?.onSettingChanged(key);
     twitchChatService?.onSettingChanged(key);
   });

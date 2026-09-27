@@ -1,3 +1,5 @@
+import { isBelowChild, isRomanceAge } from '../util/simLifeStage';
+
 // The daily action loadout ("spell prep"): each night a sim picks a handful of
 // DISCRETIONARY actions that define who they are tomorrow; everything else in that set
 // simply does not exist for them that day (absent from prompts, rejected at validation).
@@ -106,14 +108,9 @@ export const KNOWN_UNSUPPORTED_ACTIONS = new Set(['play_chess_with', 'write_book
 // the nightly planner handed 'flirt' to Mackenzie Scott — a CHILD — two days running.
 export const ROMANCE_ACTIONS = new Set(['flirt', 'kiss']);
 
-// Ages the mod reports (str(sim_info.age) minus the 'Age.' prefix). Only these may use
-// or receive a romance verb. Unknown/absent age blocks romance — an older mod build that
-// sends no age on perceived sims must fail CLOSED here, not open.
-const ROMANCE_AGES = new Set(['TEEN', 'YOUNGADULT', 'ADULT', 'ELDER']);
-
-export function isRomanceAge(age: string | undefined): boolean {
-  return age !== undefined && ROMANCE_AGES.has(age.trim().toUpperCase());
-}
+// isRomanceAge and isBelowChild are core since release 4.5 (util/simLifeStage): the
+// reply and reflection paths gate on them too. Re-exported for the autonomy callers.
+export { isBelowChild, isRomanceAge };
 
 // Zone travel a sim takes on their own initiative: TEEN+ only, mirrored from the mod's
 // whitelist min_age (live 2026-08-17..27: 29 of 30 logged go_outs were babies/infants/
@@ -124,16 +121,6 @@ export function isRomanceAge(age: string | undefined): boolean {
 export const SOLO_TRAVEL_ACTIONS = new Set(['go_out', 'travel_to_zone']);
 
 export const isTeenPlus = isRomanceAge;
-
-// J8 (Jaz's 09-04 handoff, cause 8): babies, infants and toddlers wrote diaries and ran
-// Action Scenes that could not produce an option (five paid round trips ending in "no
-// valid options"). Below CHILD there is no inner life to narrate and no verb to pick.
-// Unlike romance this fails OPEN: an unknown age is not a reason to silence a Sim.
-const BELOW_CHILD_AGES = new Set(['BABY', 'INFANT', 'TODDLER']);
-
-export function isBelowChild(age: string | undefined): boolean {
-  return age !== undefined && BELOW_CHILD_AGES.has(age.trim().toUpperCase());
-}
 
 // Non-romance socials the game refuses when the TARGET is under teen — the age test
 // rides the social's mixer, so preflight passes and the cancel only lands at execution

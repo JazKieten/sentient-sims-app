@@ -24,11 +24,5 @@ export type TwitchDeviceLoginStart = {
   error?: string;
 };
 
-// What the device-code login persists (electron-store, same plaintext precedent as the
-// app's other tokens). broadcasterId/login identify the connected account.
-export type TwitchStoredAuth = {
-  accessToken?: string;
-  refreshToken?: string;
-  broadcasterId?: string;
-  login?: string;
-};
+// Core since release 4.5 (the settings schema stores it in every build)
+export type { TwitchStoredAuth } from './TwitchStoredAuth';

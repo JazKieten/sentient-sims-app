@@ -7,7 +7,7 @@ import {
 } from 'main/sentient-sims/pipeline/prompts/scene';
 import { parseActorPerformance, parseSceneScores } from 'main/sentient-sims/services/AIService';
 import { splitLinesForAiring, splitTextForAiring } from 'main/sentient-sims/util/airingChunks';
-import { formatSelfStatus } from 'main/sentient-sims/util/formatCognitionPrompt';
+import { formatSelfStatus } from 'main/sentient-sims/util/formatSelfStatus';
 import { countEvasive, isQuestionOnly } from 'main/sentient-sims/bench/playerThreadFixtures';
 
 // 2026-09-21: a reply to the player (chat window, voice, conscience, Twitch) is a full,

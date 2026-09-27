@@ -8,6 +8,14 @@ import { formatPerception } from './formatPerception';
 import { offeredActions, SimTargetInfo, SOCIAL_ACTIONS } from '../models/CognitionIntent';
 import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout';
 import { relationshipWords } from './relationshipWords';
+import { firstJsonBlock } from './jsonBlock';
+import { formatSelfStatusSections, TodaysPlanBlock } from './formatSelfStatus';
+
+// Core since release 4.5 (util/jsonBlock, util/formatSelfStatus); re-exported for the
+// autonomy callers that always imported them from here
+export { firstJsonBlock, firstJsonBlockLoose } from './jsonBlock';
+export { describePlanGoal, formatSelfStatus, formatSelfStatusSections } from './formatSelfStatus';
+export type { TodaysPlanBlock } from './formatSelfStatus';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
@@ -48,53 +56,6 @@ function clampScore(value: unknown): number | undefined {
     return undefined;
   }
   return Math.min(10, Math.max(1, Math.round(num)));
-}
-
-export function firstJsonBlock(raw: string): unknown {
-  const match = /\{[\s\S]*\}/.exec(raw);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(match[0]) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-// A bare value runs from the colon to the next "key": pair or the closing brace — commas
-// and apostrophes inside prose are content, not delimiters, so neither may terminate it
-const BARE_VALUE = /("(?:[^"\\]|\\.)*"\s*:\s*)([^"\s{[][\s\S]*?)(?=\s*,\s*"(?:[^"\\]|\\.)*"\s*:|\s*\}\s*$)/g;
-
-// Asked for a JSON object with a prose field, a model routinely answers
-// {"willing": true, "thought": I need to get ready anyway} — the prose unquoted. Strict
-// JSON.parse throws on that and the caller silently loses an answer the model did give
-// (live 2026-08-27: 21 of 22 matched ask-actions died here). Quote the bare values and
-// try again; real scalars are left alone, and anything still unparseable stays a miss.
-function quoteBareValues(block: string): string {
-  return block.replace(BARE_VALUE, (whole, key: string, value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed || /^(true|false|null|-?\d+(\.\d+)?([eE][+-]?\d+)?)$/.test(trimmed)) {
-      return whole;
-    }
-    return `${key}${JSON.stringify(trimmed)}`;
-  });
-}
-
-export function firstJsonBlockLoose(raw: string): unknown {
-  const strict = firstJsonBlock(raw);
-  if (strict !== undefined) {
-    return strict;
-  }
-  const match = /\{[\s\S]*\}/.exec(raw);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(quoteBareValues(match[0])) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 export type TickScores = { memory: number; action: number; reason?: string };
@@ -168,98 +129,6 @@ export function parseActionChoice(raw: string): { choice: number; motivation?: s
     motivation: typeof body.motivation === 'string' ? body.motivation : undefined,
     retries,
   };
-}
-
-// The day's plan as the prompt sees it: goal labels + the persona stage direction.
-// The loadout is deliberately NOT rendered — the OFFERED lists are already narrowed to
-// it, and naming the mechanism invites meta-reasoning about "allowed actions".
-export type TodaysPlanBlock = {
-  goals: { label: string; action_keys?: string[]; reachable?: boolean }[];
-  persona?: string;
-};
-
-// G-5: a goal reads with the verbs that serve it, so "serve a goal" is a concrete pick
-// and an unreachable goal is named as such instead of silently ignored
-export function describePlanGoal(goal: { label: string; action_keys?: string[]; reachable?: boolean }): string {
-  if (goal.action_keys && goal.action_keys.length > 0) {
-    return `${goal.label} [serve it with: ${goal.action_keys.map(pretty).join(', ')}]`;
-  }
-  if (goal.reachable === false) {
-    return `${goal.label} [no action in your vocabulary serves this yet]`;
-  }
-  return goal.label;
-}
-
-// The Sim's own status as the tick prompt renders it: <STATUS> (mood, needs worst-first,
-// live wants, feelings, next aspiration step, careers), <TODAYS_PLAN>, and what they are
-// doing right now. One section per block so the tick prompt joins them exactly as before.
-// Shared with the player-facing reply prompt (AIService.runDirectedGeneration): a Sim asked
-// "what do you want" answers from the same ground truth the tick deliberates over —
-// measured 09-19..09-21, replies without it were "I don't know" nine times out of ten
-// direct questions, because the chat prompt carried no wants at all.
-export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlanBlock): string[] {
-  const sections: string[] = [];
-  const self = entry.self;
-  if (self) {
-    const selfLines: string[] = ['<STATUS>'];
-    if (self.mood) {
-      selfLines.push(`Mood: ${pretty(self.mood)}`);
-    }
-    if (self.needs && Object.keys(self.needs).length > 0) {
-      // Worst-first with the negatives flagged: fed in arbitrary order the model kept
-      // topping up healthy needs (brush_teeth at hygiene 70) while fun sat at -47 and
-      // social at -100 (observed live)
-      const needs = Object.entries(self.needs)
-        .sort(([, a], [, b]) => a - b)
-        .map(([need, value]) => `${pretty(need)} ${value}${value <= -75 ? ' (DESPERATE)' : value < 0 ? ' (low)' : ''}`)
-        .join(', ');
-      selfLines.push(`Needs, WORST FIRST (-100 to 100): ${needs}`);
-    }
-    if (self.wants?.length) {
-      selfLines.push(`Current wants: ${self.wants.map(pretty).join(', ')}`);
-    }
-    if (self.buffs?.length) {
-      selfLines.push(`Feelings: ${self.buffs.map(pretty).join(', ')}`);
-    }
-    if (self.next_objective) {
-      const objective = self.next_objective;
-      selfLines.push(
-        `Next life goal step: ${pretty(objective.objective ?? '')}${objective.test ? ` (${objective.test}${objective.threshold !== undefined ? ` ${objective.threshold}` : ''})` : ''}`,
-      );
-    }
-    (self.careers ?? []).forEach((career) => {
-      selfLines.push(
-        `Career: ${pretty(career.career ?? '')} level ${career.level ?? '?'}${career.at_work ? ' (at work now)' : ''}`,
-      );
-    });
-    selfLines.push('</STATUS>');
-    sections.push(selfLines.join('\n'));
-  }
-
-  if (plan && (plan.goals.length > 0 || plan.persona)) {
-    const planLines: string[] = ['<TODAYS_PLAN>'];
-    if (plan.persona) {
-      planLines.push(`Who I want to be today: ${plan.persona}`);
-    }
-    if (plan.goals.length > 0) {
-      planLines.push(`Today's goals: ${plan.goals.map(describePlanGoal).join('; ')}.`);
-    }
-    planLines.push('</TODAYS_PLAN>');
-    sections.push(planLines.join('\n'));
-  }
-
-  const activity = entry.activity;
-  if (activity) {
-    const doing = activity.running ? `You are currently: ${pretty(activity.running)}.` : 'You are idle right now.';
-    const queued = activity.queue?.length ? ` Queued next: ${activity.queue.map(pretty).join(', ')}.` : '';
-    sections.push(`${doing}${queued}`);
-  }
-  return sections;
-}
-
-// The same blocks as one string, for a prompt that embeds them (the player-facing reply)
-export function formatSelfStatus(entry: SimStateEntry, plan?: TodaysPlanBlock): string {
-  return formatSelfStatusSections(entry, plan).join('\n');
 }
 
 export function buildCognitionUserPrompt(

@@ -30,3 +30,22 @@ export function lifeStageOf(ctx: LifeStageSources, simId: string): string | unde
     return undefined;
   }
 }
+
+// Ages the mod reports (str(sim_info.age) minus the 'Age.' prefix). Only these may use
+// or receive a romance verb. Unknown/absent age blocks romance — an older mod build that
+// sends no age on perceived sims must fail CLOSED here, not open.
+const ROMANCE_AGES = new Set(['TEEN', 'YOUNGADULT', 'ADULT', 'ELDER']);
+
+export function isRomanceAge(age: string | undefined): boolean {
+  return age !== undefined && ROMANCE_AGES.has(age.trim().toUpperCase());
+}
+
+// J8 (Jaz's 09-04 handoff, cause 8): babies, infants and toddlers wrote diaries and ran
+// Action Scenes that could not produce an option (five paid round trips ending in "no
+// valid options"). Below CHILD there is no inner life to narrate and no verb to pick.
+// Unlike romance this fails OPEN: an unknown age is not a reason to silence a Sim.
+const BELOW_CHILD_AGES = new Set(['BABY', 'INFANT', 'TODDLER']);
+
+export function isBelowChild(age: string | undefined): boolean {
+  return age !== undefined && BELOW_CHILD_AGES.has(age.trim().toUpperCase());
+}

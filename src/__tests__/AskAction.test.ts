@@ -10,7 +10,7 @@ import { SimAge } from 'main/sentient-sims/models/SimAge';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { ASK_ACTION_SOURCE } from 'main/sentient-sims/services/AskActionService';
-import { firstJsonBlock, firstJsonBlockLoose } from 'main/sentient-sims/util/formatCognitionPrompt';
+import { firstJsonBlock, firstJsonBlockLoose } from 'main/sentient-sims/util/jsonBlock';
 import { mockApiContext } from './util';
 
 // The ask-action sub-type: a solo Voice/Twitch line triaged as a request to DO something

@@ -44,7 +44,7 @@ import {
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
 } from '../constants';
-import { TwitchStoredAuth } from '../models/TwitchChatStatus';
+import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
 import { disableDebugLogging, enableDebugLogging } from '../util/debugLog';
 import { defaultSentientSimsAITTSSettings, SentientSimsAITTSSettings } from '../models/SentientSimsAITTSSettings';
 import { defaultKokoroAITTSSettings, KokoroAITTSSettings } from '../models/KokoroAITTSSettings';

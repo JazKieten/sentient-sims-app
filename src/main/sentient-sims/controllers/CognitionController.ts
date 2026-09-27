@@ -10,8 +10,7 @@ import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
 import { DossierReport } from '../models/SimDossier';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
-import { lifeStageOf } from '../util/simLifeStage';
-import { isBelowChild } from '../models/ActionLoadout';
+import { isBelowChild, lifeStageOf } from '../util/simLifeStage';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 
 function errorMessage(err: unknown): string {

@@ -1,4 +1,4 @@
-import { extractDiaryProse } from '../services/DailyPlanService';
+import { assertDiaryIsProse, Tier0Violation } from '../util/diaryProse';
 import { ActionOutcomeRecord } from '../db/ActionOutcomeRepository';
 
 /**
@@ -9,44 +9,10 @@ import { ActionOutcomeRecord } from '../db/ActionOutcomeRepository';
  * These are the executable form of that gate, kept pure so they can run over a save's rows
  * or over a single value on the write path.
  */
-export type Tier0Violation = {
-  assertion: 'diary_is_prose' | 'outcome_is_truthful';
-  detail: string;
-  memoryId?: string;
-  outcomeId?: number;
-};
 
-// Machinery a diary must never contain. The planner returns a five-field JSON object and a
-// parse failure used to store the whole raw completion as the diary — which then rode into
-// 216 later prompt blocks as <PAST_REFLECTIONS> (live 2026-08-15, Summer Holiday).
-const PLANNER_KEY = /"(diary|goals|goal_review|persona|loadout)"\s*:/;
-const CODE_FENCE = /```/;
-const PROMPT_TAG = /<\/?[A-Z_]{3,}>/;
-
-/**
- * A diary entry must be prose. extractDiaryProse is the repair, never the check: running the
- * repair as the test would pass anything, because it always returns something.
- */
-export function assertDiaryIsProse(text: string | undefined, memoryId?: string): Tier0Violation | null {
-  const violation = (detail: string): Tier0Violation => ({ assertion: 'diary_is_prose', detail, memoryId });
-  const trimmed = (text ?? '').trim();
-  if (trimmed.length <= 1) {
-    return violation('diary is empty');
-  }
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    return violation('diary starts with a JSON object or array');
-  }
-  if (PLANNER_KEY.test(trimmed)) {
-    return violation('diary contains planner JSON keys');
-  }
-  if (CODE_FENCE.test(trimmed)) {
-    return violation('diary contains a code fence');
-  }
-  if (PROMPT_TAG.test(trimmed)) {
-    return violation('diary contains prompt scaffolding tags');
-  }
-  return null;
-}
+// The diary check and its repair are core (util/diaryProse): every reflection runs them
+export { assertDiaryIsProse, repairDiary } from '../util/diaryProse';
+export type { Tier0Violation } from '../util/diaryProse';
 
 /**
  * The act -> observe loop is only evidence if its outcomes are true. A success the app graded
@@ -62,11 +28,6 @@ export function assertOutcomeIsTruthful(record: ActionOutcomeRecord): Tier0Viola
     };
   }
   return null;
-}
-
-// The prose a diary should have carried, for the caller that has to store something anyway
-export function repairDiary(text: string): string {
-  return extractDiaryProse(text);
 }
 
 export type Tier0Input = {

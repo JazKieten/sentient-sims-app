@@ -11,7 +11,7 @@ import {
   twitchModRetryMs,
   twitchQuestionMaxLength,
   twitchReconnectMaxMs,
-} from '../constants';
+} from '../util/twitchConstants';
 import { TwitchChatState, TwitchChatStatus } from '../models/TwitchChatStatus';
 import { notifyTwitchStatus } from '../util/notifyRenderer';
 import {
@@ -33,7 +33,6 @@ import {
   buildTwitchAskEvent,
   resolveSimTarget,
 } from '../util/twitchSimTarget';
-import { setSimAliases } from '../util/simAliases';
 import { isWebSocketConnected } from '../websocketServer';
 import { ApiContext } from './ApiContext';
 
@@ -111,7 +110,6 @@ export class TwitchChatService {
     this.ctx.twitchAuth.onChanged = () => {
       this.pushStatus();
     };
-    setSimAliases(this.ctx.settings.twitchSimAliases);
     this.reconfigure();
   }
 
@@ -136,10 +134,6 @@ export class TwitchChatService {
         this.reconfigure();
       }, 500);
     } else if (key.startsWith('twitch')) {
-      if (key === (SettingsEnum.TWITCH_SIM_ALIASES as string)) {
-        // Voice casting reads the alias registry too (see ElevenLabsVoiceCasting)
-        setSimAliases(this.ctx.settings.twitchSimAliases);
-      }
       // Cooldowns/permission/command word are read live per message; just refresh the panel
       this.pushStatus();
     }

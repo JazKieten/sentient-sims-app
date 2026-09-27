@@ -1,6 +1,12 @@
 import log from 'electron-log';
-import { twitchFollowerCacheTtlMs, twitchHelixUrl, twitchOAuthDeviceUrl, twitchOAuthTokenUrl } from '../constants';
-import { TwitchAuthStatus, TwitchDeviceLoginStart, TwitchStoredAuth } from '../models/TwitchChatStatus';
+import {
+  twitchFollowerCacheTtlMs,
+  twitchHelixUrl,
+  twitchOAuthDeviceUrl,
+  twitchOAuthTokenUrl,
+} from '../util/twitchConstants';
+import { TwitchAuthStatus, TwitchDeviceLoginStart } from '../models/TwitchChatStatus';
+import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
 import { ApiContext } from './ApiContext';
 
 // OAuth Device Code Grant against the streamer's own Twitch application (public client, no

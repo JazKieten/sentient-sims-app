@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertDiaryIsProse, assertOutcomeIsTruthful, repairDiary, runTier0 } from 'main/sentient-sims/bench/tier0';
+import { assertOutcomeIsTruthful, runTier0 } from 'main/sentient-sims/bench/tier0';
+import { assertDiaryIsProse, repairDiary } from 'main/sentient-sims/util/diaryProse';
 import { ActionOutcomeRecord } from 'main/sentient-sims/db/ActionOutcomeRepository';
 
 // The planner returns a five-field JSON object. A parse failure used to store the whole raw

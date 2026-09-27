@@ -91,6 +91,7 @@
     "src/__tests__/MemoryTrace.test.ts",
     "src/__tests__/MemoryTraceEndToEnd.test.ts",
     "src/__tests__/MemoryTracePersistence.test.ts",
-    "src/__tests__/PlayerThreadMetric.test.ts"
+    "src/__tests__/PlayerThreadMetric.test.ts",
+    "src/__tests__/BenchRoutes.test.ts"
   ]
 }

@@ -15,6 +15,7 @@ import { SceneState } from 'main/sentient-sims/services/SceneService';
 import { MemoryEntity } from 'main/sentient-sims/db/entities/MemoryEntity';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { mockApiContext, mockEnvironment } from './util';
+import { TIER_REGISTRATIONS } from 'main/sentient-sims/tiers';
 
 // The core build (release 4.5) runs with NO tiers registered: every ApiContext.ext slot is
 // empty and core must carry on without the feature, never throw. `tiers: []` is exactly
@@ -114,19 +115,24 @@ describe('core without tiers', () => {
     expect(coreRun.oneShot.mock.calls[0][0]).toBe('Scene Reflection');
     expect(coreRun.oneShot.mock.calls[0][5]).toBe(AIActionType.REFLECTION);
     expect(coreRun.oneShot.mock.calls[0][1]).not.toContain('goal_review');
-
-    vi.restoreAllMocks();
-    // The same fixture in the loose tree plans, so the core run above is the planner
-    // being absent and not the fixture failing to qualify
-    const dev = mockApiContext();
-    dev.settings.set(SettingsEnum.DAILY_GOALS_ENABLED, true);
-    const devRun = sleepReflectionFixture(dev);
-    await dev.ai.runSceneReflection(devRun.scene, { simId: sim.sim_id, simName: sim.name }, 'sleep', {
-      hour: 22,
-      absolute_day: 12,
-    });
-    expect(devRun.oneShot.mock.calls[0][0]).toBe('Scene Reflection + Daily Plan');
   });
+
+  // The same fixture plans wherever the autonomy tier is built in, so the core run above is
+  // the planner being absent and not the fixture failing to qualify. Skipped in the core
+  // build's own run (scripts/strip-check.sh), which has no planner to show.
+  it.runIf(TIER_REGISTRATIONS.some((tier) => tier.name === 'autonomy'))(
+    'plans on that same fixture when the autonomy tier is present',
+    async () => {
+      const dev = mockApiContext();
+      dev.settings.set(SettingsEnum.DAILY_GOALS_ENABLED, true);
+      const devRun = sleepReflectionFixture(dev);
+      await dev.ai.runSceneReflection(devRun.scene, { simId: sim.sim_id, simName: sim.name }, 'sleep', {
+        hour: 22,
+        absolute_day: 12,
+      });
+      expect(devRun.oneShot.mock.calls[0][0]).toBe('Scene Reflection + Daily Plan');
+    },
+  );
 
   it('answers a solo request with the ordinary reply when nothing can act on it', async () => {
     const ctx = mockApiContext({ tiers: [] });

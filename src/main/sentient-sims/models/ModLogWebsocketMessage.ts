@@ -7,6 +7,15 @@ export type ModLogWebsocketMessage = {
   // The game ending a conversation the app is airing (see scene/ss_scene_watch.py):
   // the sims in it walked apart, or one of them left the lot.
   scene_control?: SceneControl;
+  // Which build just connected, sent once per websocket open (ss_version_service.announce_mod_info)
+  mod_info?: ModInfo;
+};
+
+export type ModInfo = {
+  // 'core' | 'stream' for a packaged build, 'dev' for the loose tree (ss_tier.mod_tier)
+  tier: string;
+  mod_version: string;
+  required_app_version: string;
 };
 
 export type SceneControl = {

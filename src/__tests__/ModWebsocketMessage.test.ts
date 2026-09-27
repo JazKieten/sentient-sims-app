@@ -19,6 +19,11 @@ describe('modWebsocketMessage', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it('parses the mod_info a mod sends when it connects', () => {
+    const modInfo = { tier: 'core', mod_version: 'abc123', required_app_version: '4.5.0' };
+    expect(parseModMessage(Buffer.from(JSON.stringify({ mod_info: modInfo })))?.mod_info).toEqual(modInfo);
+  });
+
   it('joins a fragmented frame', () => {
     expect(rawDataToString([Buffer.from('{"a":'), Buffer.from('1}')])).toBe('{"a":1}');
     expect(parseModMessage([Buffer.from('{"clock_state":'), Buffer.from('{"paused":true}}')])).toEqual({

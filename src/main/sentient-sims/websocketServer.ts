@@ -8,6 +8,7 @@ import { mirrorModLog } from './util/modLogMirror';
 import { RendererWebsocketMessage } from './models/RendererWebsocketMessage';
 import { LogLevel } from './models/LogLevel';
 import { WebsocketNotification } from './models/ModWebsocketMessage';
+import { ModInfo } from './models/ModLogWebsocketMessage';
 import { modWebsocketPort, rendererWebsocketPort } from './constants';
 import { WebsocketStatusChange } from './models/WebsocketStatusResponse';
 import { ApiContext } from './services/ApiContext';
@@ -31,6 +32,8 @@ let modWs: WebSocket | undefined;
 
 let modConnected = false;
 let rendererConnected = false;
+// The last mod_info the mod sent; kept across a disconnect so a reconnect overwrites it
+let lastModInfo: ModInfo | undefined;
 
 export const startWebSocketServer = (ctx: ApiContext) => {
   // Loopback only: the game and the renderer are on this machine, nothing else should reach it
@@ -130,6 +133,16 @@ export const startWebSocketServer = (ctx: ApiContext) => {
         return;
       }
 
+      if (parsedData.mod_info) {
+        // Which build connected: a core mod has no stream features, so the UI can hide them
+        lastModInfo = parsedData.mod_info;
+        log.info(
+          `[Mod] connected: tier=${lastModInfo.tier} mod=${lastModInfo.mod_version} ` +
+            `requires app ${lastModInfo.required_app_version}`,
+        );
+        return;
+      }
+
       if (parsedData.scene_control) {
         // The game ending a conversation the app is airing: the sims in it walked
         // apart, or one of them left the lot. See scene/ss_scene_watch.py.
@@ -183,4 +196,8 @@ export function isWebSocketConnected(type: 'renderer' | 'mod'): boolean {
   }
 
   return modConnected;
+}
+
+export function getModInfo(): ModInfo | undefined {
+  return lastModInfo;
 }

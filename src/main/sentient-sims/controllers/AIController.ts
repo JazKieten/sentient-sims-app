@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import log from 'electron-log';
-import { InteractionEvents, SSEventType, SSEvent } from '../models/InteractionEvents';
+import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { sendChatGeneration } from '../util/notifyRenderer';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';

@@ -30,6 +30,9 @@ jobs:
         run: |
           npm install
           npm run rebuild
+          # The boilerplate's layout (.erb/scripts/link-modules.ts): tests reach the
+          # Electron-ABI better-sqlite3 build in release/app, not the root Node-ABI copy
+          ln -s ../release/app/node_modules src/node_modules
 
       - name: Strip the tree
         run: node scripts/strip-tree.ts --tier ${{ matrix.tier }} --yes

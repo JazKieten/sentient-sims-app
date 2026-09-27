@@ -66,6 +66,18 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.MEMORY_IMPORTANCE,
 ];
 
+// The stages only the autonomy tier runs (release 4.5). The enum and the settings stay whole
+// in every build; the provider-override table lists these only when a tier offers them.
+export const TIER_ACTION_TYPES: AIActionType[] = [
+  AIActionType.COGNITION,
+  AIActionType.ACTION_SCENE,
+  AIActionType.DAILY_PLAN,
+  AIActionType.VOICE_COMMAND,
+  AIActionType.ASK_TRIAGE,
+  AIActionType.ASK_ACTION_MATCH,
+  AIActionType.ASK_DECISION,
+];
+
 // configId per action; missing key means "use the default provider config"
 export type AIActionOverrides = Partial<Record<AIActionType, string>>;
 

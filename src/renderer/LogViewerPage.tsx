@@ -1,3 +1,4 @@
+import '@patternfly/react-core/dist/styles/base.css';
 import { LogViewer, LogViewerSearch } from '@patternfly/react-log-viewer';
 import { Toolbar, ToolbarContent, ToolbarItem } from '@patternfly/react-core';
 import { useEffect, useMemo, useRef, useState } from 'react';

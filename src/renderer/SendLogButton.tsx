@@ -4,6 +4,10 @@ import { useState } from 'react';
 import SpaceBetweenDiv from './components/SpaceBetweenDiv';
 import { useDebugMode } from './providers/DebugModeProvider';
 import { SendLogModal } from './components/SendLogModal';
+import { hasTierRoute } from './tiers/merge';
+
+// DEV: the log viewer page
+const hasLogViewer = hasTierRoute('/logs');
 
 export function SendLogButton() {
   const [open, setOpen] = useState(false);
@@ -27,7 +31,7 @@ export function SendLogButton() {
             </Tooltip>
           </div>
           <div>
-            {debugMode.isEnabled ? (
+            {hasLogViewer && debugMode.isEnabled ? (
               <Button
                 color="secondary"
                 variant="outlined"

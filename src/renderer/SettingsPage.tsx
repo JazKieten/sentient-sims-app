@@ -10,24 +10,34 @@ import ConstructionIcon from '@mui/icons-material/Construction';
 import AppCard from './AppCard';
 import DebugLogsSettingsComponent from './settings/DebugLogsSettingsComponent';
 import DirectedScenesSettingsComponent from './settings/DirectedScenesSettingsComponent';
-import ConversationActionsSettingsComponent from './settings/ConversationActionsSettingsComponent';
 import { AnimationMappingSettingsComponent } from './settings/AnimationMappingSettingsComponent';
 import { ModsDirectoryComponent } from './ModsDirectoryComponent';
 import { GameAppPathComponent } from './GameAppPathComponent';
 import { useAISettings } from './providers/AISettingsProvider';
 import VoiceSettingsComponent from './settings/VoiceSettingsComponent';
-import TwitchSettingsComponent from './settings/TwitchSettingsComponent';
 import { useSetupWizard } from './providers/SetupWizardProvider';
-import { AiMaxResponseLengthSettingsComponent } from './settings/AiMaxResponseLengthSettingsComponent';
 import { ProviderConfigsComponent } from './settings/ProviderConfigsComponent';
 import { ProviderConnectionSettingsComponent } from './settings/ProviderConnectionSettingsComponent';
 import LocalizationSettingsComponent from './settings/LocalizationSettingsComponent';
 import useSetting from './hooks/useSetting';
+import { rendererTiers } from './tiers/merge';
 
 enum SettingsTabSelectionValue {
   Settings = 'settings',
   Voice = 'voice',
-  Twitch = 'twitch',
+}
+
+// The core tabs, then the build tiers' (stream: Twitch)
+const SETTINGS_TABS: { value: string; label: string }[] = [
+  { value: SettingsTabSelectionValue.Settings, label: 'Settings' },
+  { value: SettingsTabSelectionValue.Voice, label: 'Voice' },
+  ...rendererTiers.settingsTabs.map(({ value, label }) => ({ value, label })),
+];
+
+function tierRows(after: 'directed-scenes' | 'end') {
+  return rendererTiers.settingsRows
+    .filter((row) => row.after === after)
+    .map(({ id, Component }) => <Component key={id} />);
 }
 
 export default function SettingsPage() {
@@ -65,8 +75,8 @@ export default function SettingsPage() {
             }}
           >
             <TabList onChange={handleChange} aria-label="lab API tabs example">
-              {Object.entries(SettingsTabSelectionValue).map((selectionvalue) => (
-                <Tab key={selectionvalue[0]} label={selectionvalue[0]} value={selectionvalue[1]} />
+              {SETTINGS_TABS.map((tab) => (
+                <Tab key={tab.value} label={tab.label} value={tab.value} />
               ))}
             </TabList>
 
@@ -85,7 +95,7 @@ export default function SettingsPage() {
             <ModsDirectoryComponent />
             <GameAppPathComponent />
             <DirectedScenesSettingsComponent />
-            <ConversationActionsSettingsComponent />
+            {tierRows('directed-scenes')}
             <DebugLogsSettingsComponent />
             <Divider sx={{ marginTop: 2, marginBottom: 2 }} />
             <Typography variant="h5">AI Providers</Typography>
@@ -108,14 +118,16 @@ export default function SettingsPage() {
             <LocalizationSettingsComponent />
             <Divider sx={{ marginTop: 2, marginBottom: 2 }} />
             <AnimationMappingSettingsComponent apiType={wickedWhimsApiType} />
-            <AiMaxResponseLengthSettingsComponent />
+            {tierRows('end')}
           </TabPanel>
           <TabPanel value={SettingsTabSelectionValue.Voice}>
             <VoiceSettingsComponent />
           </TabPanel>
-          <TabPanel value={SettingsTabSelectionValue.Twitch}>
-            <TwitchSettingsComponent />
-          </TabPanel>
+          {rendererTiers.settingsTabs.map(({ value, Component }) => (
+            <TabPanel key={value} value={value}>
+              <Component />
+            </TabPanel>
+          ))}
         </TabContext>
       </AppCard>
     </div>

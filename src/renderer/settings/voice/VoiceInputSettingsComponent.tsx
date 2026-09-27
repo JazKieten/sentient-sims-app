@@ -23,6 +23,10 @@ import {
   PlayerVoicePersona,
 } from 'main/sentient-sims/models/PlayerVoicePersona';
 import HelpButton from 'renderer/components/HelpButton';
+import { rendererTiers } from '../../tiers/merge';
+
+// AUTONOMY: the command chord, only in a build that can carry an order out
+const VoiceCommandRow = rendererTiers.voiceCommandRow;
 
 // Single keys must be ones The Sims 4 leaves unbound — the hook observes without
 // consuming, so the game still sees every press
@@ -51,7 +55,6 @@ export default function VoiceInputSettingsComponent() {
   const persona = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA, 'voice');
   const personaBio = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_BIO, '');
   const personaName = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_NAME, '');
-  const commandHotkey = useSetting<string>(SettingsEnum.VOICE_COMMAND_HOTKEY, '');
   const followsClock = useSetting<boolean>(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK, true);
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -161,27 +164,7 @@ export default function VoiceInputSettingsComponent() {
               <MenuItem value="toggle">Press to start/stop</MenuItem>
             </Select>
           </Stack>
-          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
-            <Typography sx={{ minWidth: 110 }}>Command key:</Typography>
-            <Select
-              size="small"
-              displayEmpty
-              value={commandHotkey.value}
-              onChange={(change) => void commandHotkey.setSetting(change.target.value)}
-            >
-              <MenuItem value="">Off</MenuItem>
-              {hotkeyPresets
-                .filter((preset) => preset.value !== hotkey.value)
-                .map((preset) => (
-                  <MenuItem key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </MenuItem>
-                ))}
-            </Select>
-            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-              Hold this one and what you say is an ORDER the sim carries out, not talk.
-            </Typography>
-          </Stack>
+          {VoiceCommandRow ? <VoiceCommandRow talkHotkey={hotkey.value} presets={hotkeyPresets} /> : null}
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
             <Typography sx={{ minWidth: 110 }}>You are:</Typography>
             <Select
@@ -213,7 +196,7 @@ export default function VoiceInputSettingsComponent() {
             minRows={2}
             label="About you"
             value={personaBio.value}
-            placeholder="Jaz is the creator of this world — she watches over the household and streams their lives."
+            placeholder="Sam is the creator of this world and watches over the household from above."
             helperText="One to three short sentences about you, written in third person. Your sims are told this every time you speak, so keep it brief."
             onChange={(change) => void personaBio.setSetting(change.target.value)}
           />

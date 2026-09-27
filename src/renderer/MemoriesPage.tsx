@@ -11,10 +11,13 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import AppCard from './AppCard';
 import { EmptyState } from './components/EmptyState';
 import { MemoryEditInput } from './components/MemoryEditInput';
-import { MemoryTraceDialog } from './components/MemoryTraceDialog';
+import { rendererTiers } from './tiers/merge';
 import { useDebugMode } from './providers/DebugModeProvider';
 import { useWebsocket } from './providers/WebsocketProvider';
 import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
+
+// DEV: the pipeline behind a memory ("View Prompt")
+const TraceDialog = rendererTiers.MemoryTraceDialog;
 
 type SelectedMemory = {
   memory: MemoryEntity;
@@ -338,7 +341,7 @@ export default function MemoriesPage() {
                 >
                   Cancel
                 </Button>
-                {debugMode.isEnabled && editedMemory.memory.id !== undefined && (
+                {TraceDialog && debugMode.isEnabled && editedMemory.memory.id !== undefined && (
                   <Button
                     sx={{ marginLeft: 1 }}
                     variant="outlined"
@@ -438,13 +441,15 @@ export default function MemoriesPage() {
           </CardContent>
         </Card>
         {editMemoryBox}
-        <MemoryTraceDialog
-          open={traceOpen}
-          memoryId={editedMemory?.memory.id}
-          onClose={() => {
-            setTraceOpen(false);
-          }}
-        />
+        {TraceDialog ? (
+          <TraceDialog
+            open={traceOpen}
+            memoryId={editedMemory?.memory.id}
+            onClose={() => {
+              setTraceOpen(false);
+            }}
+          />
+        ) : null}
         <Snackbar
           open={copiedSnackbar}
           autoHideDuration={1500}

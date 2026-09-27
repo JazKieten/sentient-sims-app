@@ -1,7 +1,15 @@
 import type { AIActionType } from 'main/sentient-sims/models/AIActionType';
 import type { RouteObject } from 'react-router-dom';
 import type { ComponentType } from 'react';
-import type { RendererTier, TierNavItem, TierProvider, TierSettingsRow, TierSettingsTab } from './types';
+import type {
+  MemoryTraceDialogProps,
+  RendererTier,
+  TierNavItem,
+  TierProvider,
+  TierSettingsRow,
+  TierSettingsTab,
+  VoiceCommandRowProps,
+} from './types';
 import { RENDERER_TIERS } from './index';
 
 export type MergedRendererTiers = {
@@ -12,6 +20,8 @@ export type MergedRendererTiers = {
   providers: TierProvider[];
   overrideActionTypes: AIActionType[];
   debugCards: ComponentType[];
+  voiceCommandRow?: ComponentType<VoiceCommandRowProps>;
+  MemoryTraceDialog?: ComponentType<MemoryTraceDialogProps>;
 };
 
 export function mergeRendererTiers(tiers: RendererTier[]): MergedRendererTiers {
@@ -23,7 +33,13 @@ export function mergeRendererTiers(tiers: RendererTier[]): MergedRendererTiers {
     providers: tiers.flatMap((t) => t.providers ?? []),
     overrideActionTypes: tiers.flatMap((t) => t.overrideActionTypes ?? []),
     debugCards: tiers.flatMap((t) => t.debugCards ?? []),
+    voiceCommandRow: tiers.find((t) => t.voiceCommandRow)?.voiceCommandRow,
+    MemoryTraceDialog: tiers.find((t) => t.MemoryTraceDialog)?.MemoryTraceDialog,
   };
 }
 
 export const rendererTiers: MergedRendererTiers = mergeRendererTiers(RENDERER_TIERS);
+
+export function hasTierRoute(path: string): boolean {
+  return rendererTiers.routes.some((route) => route.path === path);
+}

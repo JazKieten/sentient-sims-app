@@ -16,6 +16,14 @@ export type TierSettingsRow = { id: string; Component: ComponentType; after: 'di
 
 export type TierProvider = ComponentType<{ children: ReactNode }>;
 
+export type HotkeyPreset = { value: string; label: string };
+
+// The voice settings' second chord (an order, not talk). Given the talk key so it is never
+// offered the same chord twice.
+export type VoiceCommandRowProps = { talkHotkey: string; presets: HotkeyPreset[] };
+
+export type MemoryTraceDialogProps = { open: boolean; memoryId?: string; onClose: () => void };
+
 export interface RendererTier {
   name: TierLayer;
   routes?: RouteObject[];
@@ -23,9 +31,12 @@ export interface RendererTier {
   navItems?: TierNavItem[];
   settingsTabs?: TierSettingsTab[];
   settingsRows?: TierSettingsRow[];
-  // Wrapped innermost-last inside the core providers, around the router
+  // Wrapped around the router, inside the core providers, in tier order
   providers?: TierProvider[];
   // AI action types only this tier generates; the provider-override table lists them
   overrideActionTypes?: AIActionType[];
   debugCards?: ComponentType[];
+  voiceCommandRow?: ComponentType<VoiceCommandRowProps>;
+  // The Memories window's "View Prompt" (dev)
+  MemoryTraceDialog?: ComponentType<MemoryTraceDialogProps>;
 }

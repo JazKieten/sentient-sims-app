@@ -29,17 +29,16 @@ export function runApi(ctx: ApiContext) {
   expressApp.post('/ai/v3/event/buff', ctx.controller.ai.buffEvent);
   expressApp.post('/ai/v2/image/generate', ctx.controller.ai.generateImage);
   expressApp.get('/ai/v2/models', ctx.controller.ai.getModels);
-  expressApp.get('/ai/v2/tts', ctx.controller.ai.tts);
-  expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.ai.getExchange);
-  expressApp.get('/ai/exchanges', ctx.controller.ai.getExchanges);
+  expressApp.get('/ai/exchanges/:exchangeId', ctx.controller.bench.getExchange);
+  expressApp.get('/ai/exchanges', ctx.controller.bench.getExchanges);
   // F5: graded outcomes for the loaded save, and the tier-0 run-validity gate over it
-  expressApp.get('/ai/outcomes', ctx.controller.ai.getOutcomes);
-  expressApp.get('/bench/tier0', ctx.controller.ai.getTier0);
-  expressApp.post('/bench/self-knowledge/:simId', ctx.controller.ai.selfKnowledge);
+  expressApp.get('/ai/outcomes', ctx.controller.cognition.getOutcomes);
+  expressApp.get('/bench/tier0', ctx.controller.bench.getTier0);
+  expressApp.post('/bench/self-knowledge/:simId', ctx.controller.bench.selfKnowledge);
   // The five player-facing conversations from the 09-19..21 logs, replayed through the
   // reply path with the thread, the status block and the follow-through action
-  expressApp.get('/bench/player-threads', ctx.controller.ai.getPlayerThreadFixtures);
-  expressApp.post('/bench/player-thread/:index', ctx.controller.ai.playerThread);
+  expressApp.get('/bench/player-threads', ctx.controller.bench.getPlayerThreadFixtures);
+  expressApp.post('/bench/player-thread/:index', ctx.controller.bench.playerThread);
 
   expressApp.get('/files/last-exception', ctx.controller.file.getLastExceptionFiles);
   expressApp.delete('/files/last-exception', ctx.controller.file.deleteLastExceptionFiles);
@@ -129,8 +128,8 @@ export function runApi(ctx: ApiContext) {
 
   expressApp.post('/cognition/outcome', ctx.controller.cognition.postOutcome);
   expressApp.post('/cognition/perception', ctx.controller.cognition.postPerception);
-  expressApp.post('/cognition/state', ctx.controller.cognition.postState);
-  expressApp.post('/cognition/dossier', ctx.controller.cognition.postDossier);
+  expressApp.post('/cognition/state', ctx.controller.simState.postState);
+  expressApp.post('/cognition/dossier', ctx.controller.dossier.postDossier);
 
   // Phase 3.1 H4: the semantic facts, readable and correctable. The explain and path
   // routes are the provenance surface the watches and the MCP tools ask through.
@@ -140,9 +139,14 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/sims/:id/facts/path/:otherId', ctx.controller.simFacts.getFactPath);
   expressApp.post('/sims/:id/facts', ctx.controller.simFacts.addFact);
   expressApp.delete('/sims/:id/facts/:factId', ctx.controller.simFacts.retireFact);
-  expressApp.post('/cognition/sleep-boundary', ctx.controller.cognition.postSleepBoundary);
+  expressApp.post('/cognition/sleep-boundary', ctx.controller.simState.postSleepBoundary);
   expressApp.post('/cognition/debug/enqueue', ctx.controller.cognition.debugEnqueue);
   expressApp.post('/cognition/debug/perception', ctx.controller.cognition.debugRequestPerception);
+
+  // The build tiers' routes, after every core route (release 4.5)
+  for (const tier of ctx.tiers) {
+    tier.routes?.(expressApp, ctx);
+  }
 
   // Loopback only: the mod and the renderer are on this machine, nothing else should reach it
   const server = expressApp.listen(ctx.port, '127.0.0.1', () => {

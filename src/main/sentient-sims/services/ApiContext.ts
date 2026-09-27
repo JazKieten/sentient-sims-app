@@ -2,6 +2,9 @@ import { AIController } from '../controllers/AIController';
 import { AnimationsController } from '../controllers/AnimationsController';
 import { AssetsController } from '../controllers/AssetsController';
 import { CognitionController } from '../controllers/CognitionController';
+import { SimStateController } from '../controllers/SimStateController';
+import { DossierController } from '../controllers/DossierController';
+import { BenchController } from '../controllers/BenchController';
 import { SimFactsController } from '../controllers/SimFactsController';
 import { DbController } from '../controllers/DbController';
 import { DebugController } from '../controllers/DebugController';
@@ -100,6 +103,8 @@ import { UpdateService } from './UpdateService';
 import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
 import { setSimAliases } from '../util/simAliases';
+import { TIER_REGISTRATIONS } from '../tiers';
+import type { TierRegistration } from '../tiers/types';
 
 export type ApiContextParams = {
   port: number;
@@ -107,6 +112,9 @@ export type ApiContextParams = {
   settingsService: SettingsService;
   directoryService: DirectoryService;
   appVersion: string;
+  // The build tiers this context runs (release 4.5). Defaults to the generated list for
+  // the build; tests that pin core behaviour pass [].
+  tiers?: TierRegistration[];
 };
 
 class ControllerContext {
@@ -130,6 +138,9 @@ class ControllerContext {
   private readonly _newsController: NewsController;
   private readonly _optionsController: OptionsController;
   private readonly _cognitionController: CognitionController;
+  private readonly _simStateController: SimStateController;
+  private readonly _dossierController: DossierController;
+  private readonly _benchController: BenchController;
   private readonly _simFactsController: SimFactsController;
   private readonly _paintingsController: PaintingsController;
 
@@ -154,6 +165,9 @@ class ControllerContext {
     this._newsController = new NewsController(ctx);
     this._optionsController = new OptionsController(ctx);
     this._cognitionController = new CognitionController(ctx);
+    this._simStateController = new SimStateController(ctx);
+    this._dossierController = new DossierController(ctx);
+    this._benchController = new BenchController(ctx);
     this._simFactsController = new SimFactsController(ctx);
     this._paintingsController = new PaintingsController(ctx);
   }
@@ -236,6 +250,18 @@ class ControllerContext {
 
   get cognition(): CognitionController {
     return this._cognitionController;
+  }
+
+  get simState(): SimStateController {
+    return this._simStateController;
+  }
+
+  get dossier(): DossierController {
+    return this._dossierController;
+  }
+
+  get bench(): BenchController {
+    return this._benchController;
   }
 
   get simFacts(): SimFactsController {
@@ -339,7 +365,10 @@ export class ApiContext {
 
   private readonly _controller: ControllerContext;
 
+  private readonly _tiers: TierRegistration[];
+
   constructor(options: ApiContextParams) {
+    this._tiers = options.tiers ?? TIER_REGISTRATIONS;
     this._port = options.port;
     this._getAssetPath = options.getAssetPath;
     this._settings = options.settingsService;
@@ -477,6 +506,11 @@ export class ApiContext {
     // Last: subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
     this._cognitionService = new CognitionService(this);
 
+    // Every core service exists; each build tier builds its own and fills its slots
+    for (const tier of this._tiers) {
+      tier.construct?.(this);
+    }
+
     this._controller = new ControllerContext(this);
   }
 
@@ -490,6 +524,10 @@ export class ApiContext {
 
   setTwitchChat(service: TwitchChatService) {
     this._twitchChatService = service;
+  }
+
+  get tiers(): readonly TierRegistration[] {
+    return this._tiers;
   }
 
   get port(): number {

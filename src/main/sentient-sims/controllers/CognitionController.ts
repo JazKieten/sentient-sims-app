@@ -5,12 +5,11 @@ import { ApiContext } from '../services/ApiContext';
 import { ActionIntent, InteractionOutcomeEvent } from '../models/ActionIntent';
 import { ModRequestPerception, ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PerceptionSnapshot } from '../models/PerceptionSnapshot';
-import { SceneState } from '../services/SceneService';
-import { SimStateEntry, SimStateReport } from '../models/SimStateReport';
-import { DossierReport } from '../models/SimDossier';
+import { SimStateEntry } from '../models/SimStateReport';
+import { lookupParticipantName } from './SimStateController';
+import { CatchErrors } from './decorators/CatchError';
 import { ParticipantDTO } from '../db/dto/ParticipantDTO';
 import { formatPerception } from '../util/formatPerception';
-import { isBelowChild, lifeStageOf } from '../util/simLifeStage';
 import { OutcomeVerdict } from '../services/OutcomeVerdictService';
 
 function errorMessage(err: unknown): string {
@@ -112,89 +111,6 @@ export class CognitionController {
     return this.ctx.simStateCache.getSim(simId) ?? this.latestPerception.get(simId);
   }
 
-  // Block 8: the mod's periodic state report — the event stream CognitionService ticks
-  // against. Ingestion must stay cheap; deliberation happens in the cache's listeners.
-  postState = (req: Request, res: Response) => {
-    try {
-      const report = req.body as Partial<SimStateReport>;
-      if (report.type !== 'state_report' || typeof report.seq !== 'number') {
-        return res.status(400).json({ error: 'not a state_report' });
-      }
-      this.ctx.simStateCache.ingest(report as SimStateReport);
-      return res.json({ ok: true, seq: report.seq });
-    } catch (err) {
-      log.error('Error handling state report', err);
-      return res.status(500).json({ error: errorMessage(err) });
-    }
-  };
-
-  // Phase 3.1 H1/H2: ground truth about who each sim IS. The mod hash-gates these, so a
-  // report arriving at all usually means something structural changed; ingestion diffs it
-  // against the sim's current `game` facts and retires what is no longer true.
-  postDossier = (req: Request, res: Response) => {
-    try {
-      const report = req.body as Partial<DossierReport>;
-      const dossiers = Array.isArray(report.dossiers) ? report.dossiers : undefined;
-      if (!dossiers) {
-        return res.status(400).json({ error: 'dossiers[] is required' });
-      }
-      // The mod sends the clock with the report; fall back to the state cache for an
-      // older mod build that does not.
-      const day = report.clock?.absolute_day ?? this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
-      let inserted = 0;
-      let retired = 0;
-      let ingested = 0;
-      for (const dossier of dossiers) {
-        if (!dossier.sim_id) {
-          continue;
-        }
-        const result = this.ctx.semanticMemory.ingestDossier(dossier, { day });
-        inserted += result.inserted;
-        retired += result.retired;
-        if (!result.skipped) {
-          ingested += 1;
-        }
-        // The sim is not who they were when their description was written: aged up, died,
-        // changed form. A generated description is dropped so the next scene writes one
-        // from what is true now; anything the player wrote is left alone (Phase 3.1 fix
-        // B). Isolated - a description is cosmetic and must never fail a dossier POST.
-        if (result.identityChanged.length > 0) {
-          try {
-            if (this.ctx.participantRepository.clearGeneratedDescription(dossier.sim_id)) {
-              this.ctx.defaultDescriptions.forget(dossier.sim_id);
-              log.info(
-                `[Dossier] ${dossier.name ?? dossier.sim_id} changed ${result.identityChanged.join(', ')}; ` +
-                  'cleared the generated description so it is rewritten',
-              );
-            }
-          } catch (error) {
-            log.warn(`[Dossier] could not refresh the description for ${dossier.sim_id}`, error);
-          }
-        }
-      }
-      log.info(
-        `Dossier report seq=${report.seq ?? '?'} reason=${report.reason ?? '?'}: ` +
-          `${ingested}/${dossiers.length} ingested, ${inserted} facts added, ${retired} retired`,
-      );
-      return res.json({ ok: true, seq: report.seq, ingested, inserted, retired });
-    } catch (err) {
-      log.error('Error handling dossier report', err);
-      return res.status(500).json({ error: errorMessage(err) });
-    }
-  };
-
-  private lookupParticipantName(simId?: string): string | undefined {
-    if (!simId) {
-      return undefined;
-    }
-    try {
-      return this.ctx.participantRepository.getParticipantNames([simId])[0];
-    } catch {
-      // No DB loaded (or unknown id) — caller falls back to the raw id
-      return undefined;
-    }
-  }
-
   // The mod reports what actually happened to a dispatched interaction. The result becomes an
   // 'outcome' memory row so retrieval and future cognition ticks can see the consequences of
   // acting — this closes the act -> observe loop.
@@ -226,10 +142,10 @@ export class CognitionController {
         pending?.intent.action ?? known?.intent.action ?? event.action ?? event.interaction_name ?? 'an interaction';
       // The mod can't always resolve names (the sim may already be gone); fall back to the
       // participant DB before writing a raw id into a permanent memory row
-      const actor = event.sim_name || this.lookupParticipantName(event.sim_id) || `Sim ${event.sim_id}`;
+      const actor = event.sim_name || lookupParticipantName(this.ctx, event.sim_id) || `Sim ${event.sim_id}`;
       const target =
         event.target_sim_name ||
-        this.lookupParticipantName(event.target_sim_id) ||
+        lookupParticipantName(this.ctx, event.target_sim_id) ||
         (event.target_sim_id ? `Sim ${event.target_sim_id}` : undefined);
       const attempt = target ? `${actor} tried '${action}' with ${target}` : `${actor} tried '${action}'`;
       const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action, verdict);
@@ -306,85 +222,6 @@ export class CognitionController {
     }
   };
 
-  // Did this sim actually take part in the scene? Judged by memory ownership, which is
-  // what the reflection's transcript is built from. An empty scene (no memories yet)
-  // counts as theirs — there is nothing to misattribute.
-  private simIsInScene(simId: string, scene: SceneState): boolean {
-    try {
-      const participantIds = this.ctx.memoryRepository.getSceneParticipantIds(scene.locationId, scene.startedAt);
-      return participantIds.length === 0 || participantIds.includes(simId);
-    } catch {
-      // No DB loaded / query failed: fall back to the old behaviour rather than
-      // silently dropping every sleep boundary
-      return true;
-    }
-  }
-
-  // The mod reports a household sim falling asleep. Sleep closes out the sim's stretch of
-  // activity the way travel does: reflect on the current scene, then start a fresh scene at
-  // the same location so the next boundary only covers what happens after the nap.
-  postSleepBoundary = async (req: Request, res: Response) => {
-    try {
-      const {
-        sim_id: simId,
-        sim_name: simName,
-        clock,
-        passed_out: passedOut,
-      } = req.body as {
-        sim_id?: string;
-        sim_name?: string;
-        // Game clock at the moment of falling asleep (newer mods) — keys the overnight
-        // daily plan to the day the sim wakes into
-        clock?: { hour?: number; absolute_day?: number };
-        // The mod also fires the boundary when a sim passes out from exhaustion
-        passed_out?: boolean;
-      };
-      if (!simId) {
-        return res.status(400).json({ error: 'sim_id is required' });
-      }
-      const who = simName || this.lookupParticipantName(simId) || `Sim ${simId}`;
-      // J8: an infant naps several times a day and has no diary to write; ending the
-      // household's scene at every nap chopped everyone else's evening into fragments and
-      // wrote first-person entries for a Sim who cannot talk (Jaz's 09-04 handoff, cause 8).
-      // Below CHILD the boundary is a no-op and the scene keeps running.
-      const stage = lifeStageOf(this.ctx, simId);
-      if (isBelowChild(stage)) {
-        log.info(`[Cognition] sleep boundary for ${who}: ${stage} writes no diary; leaving the scene running`);
-        return res.json({
-          ok: true,
-          reflected: false,
-          reason: `sleeper is ${stage?.toLowerCase()}: no diary below child`,
-        });
-      }
-      // A sleeper who took no part in the active scene must not end it: the scene belongs
-      // to the sims who are in it, and closing it here both loses THEIR reflection and
-      // hands the sleeper a first-person diary of an evening they never attended (live
-      // 2026-08-16 — Ariel slept at home while the app's active scene was still the bar
-      // Mackenzie had travelled to). The sleeper's own next boundary writes their diary.
-      const activeScene = this.ctx.sceneService.getCurrentScene();
-      if (activeScene && !this.simIsInScene(simId, activeScene)) {
-        log.info(
-          `[Cognition] sleep boundary for ${who}: not a participant of scene ${activeScene.sceneId} ` +
-            `(location ${activeScene.locationId}); leaving the scene running`,
-        );
-        return res.json({ ok: true, reflected: false, reason: 'sleeper was not in the active scene' });
-      }
-      const previousScene = this.ctx.sceneService.endCurrentScene(
-        passedOut ? `${who} passed out from exhaustion` : `${who} fell asleep`,
-      );
-      if (!previousScene) {
-        return res.json({ ok: true, reflected: false, reason: 'no active scene' });
-      }
-      log.info(`[Cognition] sleep boundary for ${who}: reflecting on scene ${previousScene.sceneId}`);
-      // The sleeper is the reflecting mind — their day closes as a diary entry in their voice
-      await this.ctx.ai.runSceneReflection(previousScene, { simId, simName: who }, 'sleep', clock);
-      return res.json({ ok: true, reflected: true, scene_id: previousScene.sceneId });
-    } catch (err) {
-      log.error('Error handling sleep boundary', err);
-      return res.status(500).json({ error: errorMessage(err) });
-    }
-  };
-
   // The mod's reply to a REQUEST_PERCEPTION message: one sim's scene snapshot. Ephemeral
   // by design — cached for the next cognition tick, never written as a memory.
   postPerception = (req: Request, res: Response) => {
@@ -410,6 +247,22 @@ export class CognitionController {
       log.error('Error handling perception snapshot', err);
       return res.status(500).json({ error: errorMessage(err) });
     }
+  };
+
+  // F5: the graded outcome log for the loaded save, newest first. `verdict=suspect` is
+  // the query the night watch and the bench ask — "did the action loop lie during this
+  // window?" — which used to need someone reading the log as it scrolled past.
+  @CatchErrors()
+  getOutcomes = (req: Request, res: Response) => {
+    const { sim_id: simId, verdict, limit } = req.query;
+    const parsedLimit = typeof limit === 'string' ? Number(limit) : undefined;
+    res.json(
+      this.ctx.outcomeVerdict.list({
+        simId: typeof simId === 'string' ? simId : undefined,
+        verdict: typeof verdict === 'string' ? (verdict as OutcomeVerdict) : undefined,
+        limit: parsedLimit && parsedLimit > 0 ? parsedLimit : undefined,
+      }),
+    );
   };
 
   // Dev seam: ask the mod for a sim's perception snapshot; the mod replies by POSTing

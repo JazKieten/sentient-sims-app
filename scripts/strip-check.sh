@@ -6,7 +6,7 @@
 #
 # Works on a throwaway git worktree of HEAD, so uncommitted edits are not part of the
 # check and your working tree is never touched. node_modules and release/app/node_modules
-# are linked in (a junction on Windows). The links are removed BEFORE the worktree is:
+# are linked in (a junction on Windows; MSYS_NO_PATHCONV stops Git Bash rewriting /J). The links are removed BEFORE the worktree is:
 # `git worktree remove` on a tree with a live junction deletes through it.
 set -euo pipefail
 
@@ -26,7 +26,7 @@ is_windows() {
 
 make_link() {
   if is_windows; then
-    cmd //c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null
+    MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null
   else
     ln -s "$1" "$2"
   fi
@@ -35,7 +35,7 @@ make_link() {
 drop_link() {
   if [[ -e "$1" || -L "$1" ]]; then
     if is_windows; then
-      cmd //c rmdir "$(cygpath -w "$1")"
+      MSYS_NO_PATHCONV=1 cmd /c rmdir "$(cygpath -w "$1")"
     else
       rm "$1"
     fi

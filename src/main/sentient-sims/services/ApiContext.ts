@@ -22,7 +22,6 @@ import { SettingsController } from '../controllers/SettingsController';
 import { UpdateController } from '../controllers/UpdateController';
 import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
-import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import { MemoryTraceRepository } from '../db/MemoryTraceRepository';
 import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
@@ -81,15 +80,12 @@ import {
   setSceneMemoryObserver,
 } from '../util/notifyRenderer';
 import { ScenePlaybackRegistry } from './ScenePlaybackRegistry';
-import { SceneMoodletService } from './SceneMoodletService';
 import { PlayerConversationService } from './PlayerConversationService';
 import { ProviderConfigService } from './ProviderConfigService';
 import { SentientSimsAIService } from './SentientSimsAIService';
 import { SentientSimsEmbeddingService } from './SentientSimsEmbeddingService';
 import { SettingsService } from './SettingsService';
 import { TranscriptionService } from './TranscriptionService';
-import { TwitchAuthService } from './TwitchAuthService';
-import { TwitchChatService } from './TwitchChatService';
 import { UpdateService } from './UpdateService';
 import { VersionService } from './VersionService';
 import { VLLMAIService } from './VLLMAIService';
@@ -281,7 +277,6 @@ export class ApiContext {
   private readonly _sceneService: SceneService;
 
   private readonly _scenePlaybackRegistry: ScenePlaybackRegistry;
-  private readonly _sceneMoodletService: SceneMoodletService;
   private readonly _playerConversationService: PlayerConversationService;
 
   private _defaultDescriptionService?: DefaultDescriptionService;
@@ -297,11 +292,6 @@ export class ApiContext {
   private readonly _semanticMemoryService: SemanticMemoryService;
   private readonly _transcriptionService: TranscriptionService;
 
-  private readonly _twitchAuthService: TwitchAuthService;
-
-  // Constructed in main.ts beside VoiceInputService and registered here so HTTP
-  // controllers (the /debug/twitch-message route) can reach it
-  private _twitchChatService?: TwitchChatService;
   // One logging wrapper per provider service, so repeated getGenerationService calls
   // hand back the same object instead of allocating a new proxy each time
   private readonly _loggedGenerationServices = new Map<GenerationService, GenerationService>();
@@ -317,7 +307,6 @@ export class ApiContext {
   private readonly _paintingRepository: PaintingRepository;
   private readonly _participantRepository: ParticipantRepository;
   private readonly _interactionRepository: InteractionRepository;
-  private readonly _aiExchangeRepository: AIExchangeRepository;
   private readonly _memoryTraceRepository: MemoryTraceRepository;
   private readonly _simFactRepository: SimFactRepository;
 
@@ -391,7 +380,6 @@ export class ApiContext {
     this._paintingRepository = new PaintingRepository(this._db);
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
-    this._aiExchangeRepository = new AIExchangeRepository(this._db);
     this._memoryTraceRepository = new MemoryTraceRepository(this._db);
     this._simFactRepository = new SimFactRepository(this._db);
 
@@ -407,13 +395,11 @@ export class ApiContext {
         });
       },
     });
-    this._sceneMoodletService = new SceneMoodletService(this);
     this._scenePlaybackRegistry = new ScenePlaybackRegistry({
       notifyStop: notifySceneStop,
       // A conversation that closed is weighed for the moodlet it leaves on each sim, and
       // a reply to the player that wanted to act may act now that it has been heard
       onSceneClosed: (closed) => {
-        void this._sceneMoodletService.appraise(closed);
         for (const tier of this._tiers) {
           tier.onSceneClosed?.(this, closed);
         }
@@ -455,8 +441,7 @@ export class ApiContext {
     this._paintingMountService = new PaintingMountService(this);
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
-    this._twitchAuthService = new TwitchAuthService(this);
-    this._aiExchangeLogService = new AIExchangeLogService(this._aiExchangeRepository);
+    this._aiExchangeLogService = new AIExchangeLogService();
     this._memoryTraceService = new MemoryTraceService(this._aiExchangeLogService, this._memoryTraceRepository);
     // Names come from the participant table rather than being passed around: the fact
     // store holds ids, and every rendering of a fact needs a name for them.
@@ -486,18 +471,6 @@ export class ApiContext {
     }
 
     this._controller = new ControllerContext(this);
-  }
-
-  get twitchAuth(): TwitchAuthService {
-    return this._twitchAuthService;
-  }
-
-  get twitchChat(): TwitchChatService | undefined {
-    return this._twitchChatService;
-  }
-
-  setTwitchChat(service: TwitchChatService) {
-    this._twitchChatService = service;
   }
 
   get tiers(): readonly TierRegistration[] {
@@ -578,10 +551,6 @@ export class ApiContext {
 
   get scenePlayback(): ScenePlaybackRegistry {
     return this._scenePlaybackRegistry;
-  }
-
-  get sceneMoodlets(): SceneMoodletService {
-    return this._sceneMoodletService;
   }
 
   get playerConversations(): PlayerConversationService {
@@ -680,10 +649,6 @@ export class ApiContext {
 
   get interactionRepository(): InteractionRepository {
     return this._interactionRepository;
-  }
-
-  get aiExchangeRepository(): AIExchangeRepository {
-    return this._aiExchangeRepository;
   }
 
   get memoryTraceRepository(): MemoryTraceRepository {

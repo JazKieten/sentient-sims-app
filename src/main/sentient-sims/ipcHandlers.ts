@@ -8,7 +8,6 @@ import { getAllBrowserWindows } from './util/browserWindows';
 import { resolveHtmlPath } from '../util';
 import { ApiContext } from './services/ApiContext';
 import { VoiceInputService } from './services/VoiceInputService';
-import { TwitchChatService } from './services/TwitchChatService';
 import { InteractionDTO } from './db/dto/InteractionDTO';
 import { Animation } from './models/Animation';
 
@@ -36,7 +35,7 @@ async function handleSelectGameApp() {
   return null;
 }
 
-export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputService, twitchChat: TwitchChatService) {
+export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputService) {
   ipcMain.handle('dialog:selectDirectory', handleSelectDirectory);
   ipcMain.handle('dialog:selectGameApp', handleSelectGameApp);
   ipcMain.on('set-setting', (_event: IpcMainEvent, setting: SettingsEnum, value: unknown) => {
@@ -130,11 +129,8 @@ export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputServi
     }
   });
 
-  // Twitch !ask: settings panel status seed + account login (device code flow)
-  ipcMain.handle('twitch-status-get', () => twitchChat.getStatus());
-  ipcMain.handle('twitch-login-start', () => ctx.twitchAuth.startDeviceLogin());
-  ipcMain.handle('twitch-logout', () => {
-    ctx.twitchAuth.logout();
-    return ctx.twitchAuth.getStatus();
-  });
+  // The build tiers' own channels (stream: the Twitch panel)
+  for (const tier of ctx.tiers) {
+    tier.ipc?.(ipcMain, ctx);
+  }
 }

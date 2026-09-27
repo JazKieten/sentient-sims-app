@@ -8,11 +8,6 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { SettingsEnum } from './sentient-sims/models/SettingsEnum';
 import { CaughtError } from './sentient-sims/models/CaughtError';
 import type {
-  TwitchAuthStatus,
-  TwitchChatStatus,
-  TwitchDeviceLoginStart,
-} from './sentient-sims/models/TwitchChatStatus';
-import type {
   TierEventChannel,
   TierEventChannels,
   TierInvokeArgs,
@@ -222,20 +217,6 @@ const electronHandler = {
   },
   notifyVoiceRecordError: (message: string) => {
     ipcRenderer.send('voice-record-error', message);
-  },
-  onTwitchStatus: (callback: IpcCallback) => {
-    ipcRenderer.on('twitch-status', callback);
-
-    return () => ipcRenderer.removeListener('twitch-status', callback);
-  },
-  getTwitchStatus: (): Promise<TwitchChatStatus> => {
-    return ipcRenderer.invoke('twitch-status-get') as Promise<TwitchChatStatus>;
-  },
-  twitchLoginStart: (): Promise<TwitchDeviceLoginStart> => {
-    return ipcRenderer.invoke('twitch-login-start') as Promise<TwitchDeviceLoginStart>;
-  },
-  twitchLogout: (): Promise<TwitchAuthStatus> => {
-    return ipcRenderer.invoke('twitch-logout') as Promise<TwitchAuthStatus>;
   },
   // Channels a build tier adds (tiers/ipc.ts). Typed over interfaces the tier's own files
   // augment, so a stripped build has no channel names and a leftover caller fails tsc.

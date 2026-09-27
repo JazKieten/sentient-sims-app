@@ -9,6 +9,7 @@ import { OpenAIService } from 'main/sentient-sims/services/OpenAIService';
 import { DirectoryService } from 'main/sentient-sims/services/DirectoryService';
 import { SettingsService } from 'main/sentient-sims/services/SettingsService';
 import { mockApiContext, mockEnvironment } from './util';
+import { streamOf } from 'main/sentient-sims/tiers/stream';
 
 // F4: the exchange log and memory traces live in the loaded save, so the bench and the
 // watches can read a prompt back after the app has been restarted.
@@ -99,7 +100,7 @@ describe('AI exchange persistence', () => {
   });
 
   it('records the call even when the row cannot be written', async () => {
-    vi.spyOn(ctx.aiExchangeRepository, 'insert').mockImplementation(() => {
+    vi.spyOn(streamOf(ctx).aiExchangeRepository, 'insert').mockImplementation(() => {
       throw new Error('disk is on fire');
     });
     vi.spyOn(OpenAIService.prototype, 'sentientSimsGenerate').mockImplementation((request: OpenAICompatibleRequest) =>

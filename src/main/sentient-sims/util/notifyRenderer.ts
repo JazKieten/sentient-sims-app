@@ -13,7 +13,6 @@ import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
 import { castVoicesForLines } from '../formatter/VoiceCasting';
 import { SentientSim } from '../models/SentientSim';
-import { TwitchChatStatus } from '../models/TwitchChatStatus';
 import { VoiceType } from '../models/VoiceType';
 import { consumePacedScene } from './pacedScenes';
 
@@ -50,11 +49,6 @@ export function notifyClockState(state: ClockState) {
 
 export function notifySettingChanged(setting: string, value: unknown) {
   notifyAllWindows('setting-changed', setting, value);
-}
-
-// Twitch !ask connection/queue status for the settings panel's chip + last-event line
-export function notifyTwitchStatus(status: TwitchChatStatus) {
-  notifyAllWindows('twitch-status', status);
 }
 
 // A scene's transcript row is written before any of it is spoken, and nothing on it

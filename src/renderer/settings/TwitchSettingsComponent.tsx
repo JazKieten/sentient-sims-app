@@ -66,8 +66,8 @@ export default function TwitchSettingsComponent() {
   const [loginStart, setLoginStart] = useState<TwitchDeviceLoginStart>();
   const [loginBusy, setLoginBusy] = useState(false);
   // A dev hot-reload can pair this component with an app whose preload predates the
-  // Twitch bridge; computed at render so the settings route degrades instead of crashing
-  const staleBridge = typeof (window.electron as Partial<typeof window.electron>).onTwitchStatus !== 'function';
+  // tier bridge; computed at render so the settings route degrades instead of crashing
+  const staleBridge = typeof (window.electron as Partial<typeof window.electron>).tierInvoke !== 'function';
 
   useEffect(() => {
     if (staleBridge) {
@@ -75,14 +75,14 @@ export default function TwitchSettingsComponent() {
     }
     void (async () => {
       try {
-        const initial = await window.electron.getTwitchStatus();
+        const initial = await window.electron.tierInvoke('twitch-status-get');
         // A live push may have landed first; the seed must not clobber it
         setStatus((prev) => prev ?? initial);
       } catch {
         // main process not ready yet; pushes will follow
       }
     })();
-    const unsubscribe = window.electron.onTwitchStatus((_event, next: TwitchChatStatus) => {
+    const unsubscribe = window.electron.tierOn('twitch-status', (_event, next) => {
       setStatus(next);
     });
     return () => {
@@ -94,7 +94,7 @@ export default function TwitchSettingsComponent() {
     setLoginBusy(true);
     setLoginStart(undefined);
     try {
-      setLoginStart(await window.electron.twitchLoginStart());
+      setLoginStart(await window.electron.tierInvoke('twitch-login-start'));
     } finally {
       setLoginBusy(false);
     }
@@ -269,7 +269,11 @@ export default function TwitchSettingsComponent() {
               {loggedIn ? (
                 <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
                   <Chip size="small" color="success" label={`Twitch account: ${status?.auth.login ?? 'connected'}`} />
-                  <Button size="small" variant="outlined" onClick={() => void window.electron.twitchLogout()}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => void window.electron.tierInvoke('twitch-logout')}
+                  >
                     Disconnect
                   </Button>
                 </Stack>

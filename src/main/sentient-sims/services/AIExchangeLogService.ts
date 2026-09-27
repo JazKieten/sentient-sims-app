@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import log from 'electron-log';
-import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import { AIActionType } from '../models/AIActionType';
 import { AIExchangeDetail, AIExchangeSummary } from '../models/AIExchangeLog';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
@@ -20,6 +19,19 @@ const PREVIEW_CHARS = 160;
 // toast; cleared on the next success.
 const DEAD_PIPELINE_FAILURES = 3;
 
+// Where the log persists, when a build keeps it (release 4.5, decision 16): the ai_exchange
+// table in the loaded save. The stream tier attaches AIExchangeRepository; the core build
+// attaches nothing and the log is the in-memory ring alone.
+export interface ExchangePersistence {
+  isLoaded(): boolean;
+  insert(exchange: AIExchangeDetail): void;
+  list(limit: number): AIExchangeSummary[];
+  get(id: number): AIExchangeDetail | undefined;
+  setMemoryId(ids: number[], memoryId: string): void;
+  maxId(): number;
+  prune(keep: number): void;
+}
+
 type LabelContext = { label: string; actionType?: AIActionType; stageId?: StageId };
 
 type Entry = AIExchangeDetail;
@@ -35,7 +47,8 @@ type Entry = AIExchangeDetail;
  * cognition tick overlap routinely) each keep their own label without threading a parameter
  * through the GenerationService interface.
  *
- * Every row is also written to the loaded save's ai_exchange table (F4), so the bench and the
+ * In builds that keep it (stream and dev; release 4.5, decision 16) every row is also written
+ * to the loaded save's ai_exchange table (F4), so the bench and the
  * watches can read prompts back after a restart. The in-memory ring stays the live view of
  * this session and covers the windows where no save is loaded (the main menu, the scenario
  * tester, tests); the table is authoritative whenever one is.
@@ -51,13 +64,14 @@ export class AIExchangeLogService {
 
   private pipelineDown = false;
 
-  private readonly repository?: AIExchangeRepository;
+  private repository?: ExchangePersistence;
 
-  constructor(repository?: AIExchangeRepository) {
-    this.repository = repository;
+  // Called once by the tier that keeps the table (stream); never in the core build
+  attachPersistence(store: ExchangePersistence) {
+    this.repository = store;
   }
 
-  private get persistence(): AIExchangeRepository | undefined {
+  private get persistence(): ExchangePersistence | undefined {
     return this.repository?.isLoaded() ? this.repository : undefined;
   }
 

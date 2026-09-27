@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
 import { Server } from 'http';
 import { runApi } from 'main/sentient-sims/api';
 import { ApiType } from 'main/sentient-sims/models/ApiType';
@@ -13,7 +14,7 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { SceneState } from 'main/sentient-sims/services/SceneService';
 import { MemoryEntity } from 'main/sentient-sims/db/entities/MemoryEntity';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { mockApiContext } from './util';
+import { mockApiContext, mockEnvironment } from './util';
 
 // The core build (release 4.5) runs with NO tiers registered: every ApiContext.ext slot is
 // empty and core must carry on without the feature, never throw. `tiers: []` is exactly
@@ -192,5 +193,29 @@ describe('core without tiers', () => {
         });
       });
     }
+  });
+
+  // Decision 16: the ai_exchange table persists in stream and dev only. With no tier to
+  // attach it, the log is the in-memory ring and the loaded save's table stays empty.
+  it('keeps the AI exchange log in memory only', async () => {
+    const { directoryService, settingsService } = mockEnvironment();
+    const ctx = mockApiContext({ tiers: [], directoryService, settingsService });
+    fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+    ctx.db.loadDatabase({ sessionId: `core-exchange-${Math.random().toString(36).slice(2)}`, saveId: '1' });
+    for (let i = 0; i < 600; i += 1) {
+      await ctx.aiExchangeLog.runLabeled(`call ${i}`, AIActionType.COGNITION, () => {
+        ctx.aiExchangeLog.record({
+          request: { messages: [{ role: 'user', content: `line ${i}`, tokens: 1 }], maxResponseTokens: 1 },
+          responseText: 'ok',
+          durationMs: 1,
+        });
+        return Promise.resolve();
+      });
+    }
+    const rows = ctx.db.getDb().prepare('SELECT COUNT(*) AS n FROM ai_exchange').get() as { n: number };
+    expect(rows.n).toBe(0);
+    const ring = ctx.aiExchangeLog.list(1000);
+    expect(ring).toHaveLength(200);
+    expect(ring[0].label).toBe('call 599');
   });
 });

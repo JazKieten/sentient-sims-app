@@ -15,7 +15,6 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/debug/test-ai', ctx.controller.debug.healthCheckGenerationService);
   expressApp.post('/debug/send-logs', ctx.controller.debug.sendDebugLogs);
   expressApp.post('/debug/interaction', ctx.controller.debug.sendBugReport);
-  expressApp.post('/debug/twitch-message', ctx.controller.debug.injectTwitchMessage);
 
   expressApp.post('/ai/v2/generate', ctx.controller.ai.sentientSimsGenerate);
   expressApp.post('/ai/v2/event/interaction', ctx.controller.ai.interactionEvent);

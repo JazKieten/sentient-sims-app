@@ -16,6 +16,7 @@ import type { InteractionEventResult } from '../models/InteractionEventResult';
 import type { DirectedGenerationOptions } from '../services/AIService';
 import type { ReflectionPromptContext } from '../pipeline/prompts/consolidation';
 import type { TodaysPlanBlock } from '../util/formatSelfStatus';
+import type { ModLogWebsocketMessage } from '../models/ModLogWebsocketMessage';
 
 export type Tier = 'core' | 'stream' | 'dev';
 
@@ -40,7 +41,7 @@ export interface TierRegistration {
   // order: stream's moodlet appraisal before autonomy's held conversation actions.
   onSceneClosed?(ctx: ApiContext, closed: SceneClosed): void;
   // A websocket message from the mod that core did not handle. True means handled.
-  onModMessage?(ctx: ApiContext, message: Record<string, unknown>): boolean;
+  onModMessage?(ctx: ApiContext, message: ModLogWebsocketMessage): boolean;
   onMemoryUpserted?(ctx: ApiContext, memory: MemoryEntity): void;
   // App quit (main.ts will-quit).
   shutdown?(ctx: ApiContext): void;

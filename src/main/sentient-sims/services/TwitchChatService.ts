@@ -13,7 +13,8 @@ import {
   twitchReconnectMaxMs,
 } from '../util/twitchConstants';
 import { TwitchChatState, TwitchChatStatus } from '../models/TwitchChatStatus';
-import { notifyTwitchStatus } from '../util/notifyRenderer';
+import { notifyTierEvent } from '../tiers/ipc';
+import type { TwitchAuthService } from './TwitchAuthService';
 import {
   extractCommand,
   parseBadges,
@@ -101,13 +102,16 @@ export class TwitchChatService {
 
   private reconfigureTimer?: NodeJS.Timeout;
 
-  constructor(ctx: ApiContext, socketFactory?: TwitchSocketFactory) {
+  private readonly twitchAuth: TwitchAuthService;
+
+  constructor(ctx: ApiContext, twitchAuth: TwitchAuthService, socketFactory?: TwitchSocketFactory) {
+    this.twitchAuth = twitchAuth;
     this.ctx = ctx;
     this.socketFactory = socketFactory ?? defaultSocketFactory;
   }
 
   initialize() {
-    this.ctx.twitchAuth.onChanged = () => {
+    this.twitchAuth.onChanged = () => {
       this.pushStatus();
     };
     this.reconfigure();
@@ -145,7 +149,7 @@ export class TwitchChatService {
       channel: this.ctx.settings.twitchChannel,
       queueDepth: this.queue.length,
       lastEvent: this.lastEvent,
-      auth: this.ctx.twitchAuth.getStatus(),
+      auth: this.twitchAuth.getStatus(),
     };
   }
 
@@ -316,7 +320,7 @@ export class TwitchChatService {
     }
 
     if (this.ctx.settings.twitchFollowersOnly && !privileged) {
-      if (!this.ctx.twitchAuth.getStatus().loggedIn) {
+      if (!this.twitchAuth.getStatus().loggedIn) {
         this.drop('Follower gate is on but no Twitch account is connected (Settings, Twitch tab)');
         return;
       }
@@ -325,7 +329,7 @@ export class TwitchChatService {
         this.drop(`Dropped !ask from ${viewer}: no user id on the message`);
         return;
       }
-      const follows = await this.ctx.twitchAuth.isFollower(viewerUserId);
+      const follows = await this.twitchAuth.isFollower(viewerUserId);
       if (follows === undefined) {
         this.drop(`Dropped !ask from ${viewer}: follower check unavailable`);
         return;
@@ -627,7 +631,7 @@ export class TwitchChatService {
   }
 
   private pushStatus() {
-    notifyTwitchStatus(this.getStatus());
+    notifyTierEvent('twitch-status', this.getStatus());
   }
 
   private clearTimer(

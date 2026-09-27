@@ -24,5 +24,19 @@ export type TwitchDeviceLoginStart = {
   error?: string;
 };
 
+// The renderer bridge for the Twitch panel (tiers/ipc.ts): the stream tier's channels, gone
+// with this file from the core build
+declare module '../tiers/ipc' {
+  interface TierInvokeChannels {
+    'twitch-status-get': { args: []; result: TwitchChatStatus };
+    'twitch-login-start': { args: []; result: TwitchDeviceLoginStart };
+    'twitch-logout': { args: []; result: TwitchAuthStatus };
+  }
+  interface TierEventChannels {
+    // Pushed whenever anything changes; the panel renders the chip + last-event line
+    'twitch-status': TwitchChatStatus;
+  }
+}
+
 // Core since release 4.5 (the settings schema stores it in every build)
 export type { TwitchStoredAuth } from './TwitchStoredAuth';

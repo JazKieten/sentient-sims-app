@@ -143,20 +143,8 @@ export const startWebSocketServer = (ctx: ApiContext) => {
         return;
       }
 
-      if (parsedData.scene_control) {
-        // The game ending a conversation the app is airing: the sims in it walked
-        // apart, or one of them left the lot. See scene/ss_scene_watch.py.
-        const control = parsedData.scene_control;
-        const where = control.distance_m != null ? ` at ${control.distance_m}m` : '';
-        log.info(
-          `[Scene] the game ended ${control.scene_id ?? 'every scene'} (${control.mode}): ` +
-            `${control.reason}${where}`,
-        );
-        if (control.action === 'stop_all') {
-          ctx.scenePlayback.stopAll(control.reason);
-        } else if (control.scene_id) {
-          ctx.scenePlayback.stop(control.scene_id, control.reason, control.mode);
-        }
+      // Messages a build tier owns (stream: scene_control, the game ending a conversation)
+      if (ctx.tiers.some((tier) => tier.onModMessage?.(ctx, parsedData) === true)) {
         return;
       }
 

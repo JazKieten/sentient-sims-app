@@ -6,7 +6,6 @@ import { mockEnvironment } from './util';
 
 const notifyMocks = vi.hoisted(() => ({
   sendPlayerVoiceMessageToMod: vi.fn(),
-  notifyTwitchStatus: vi.fn(),
   // Read by ApiContext when it builds the scene playback registry
   notifySceneStop: vi.fn(),
   sendSceneEndedToMod: vi.fn(),
@@ -254,7 +253,7 @@ function twitchContext(options?: { followersOnly?: boolean; loggedIn?: boolean; 
     participantRepository: { getParticipant: () => ({ id: '111', description: 'a sweet fairy artist' }) },
   } as unknown as ApiContext;
   const sockets: FakeSocket[] = [];
-  const service = new TwitchChatService(ctx, () => {
+  const service = new TwitchChatService(ctx, twitchAuth, () => {
     const socket = new FakeSocket();
     sockets.push(socket);
     return socket;
@@ -282,7 +281,6 @@ describe('TwitchChatService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     notifyMocks.sendPlayerVoiceMessageToMod.mockReset();
-    notifyMocks.notifyTwitchStatus.mockReset();
     websocketMocks.isWebSocketConnected.mockReset().mockReturnValue(true);
   });
 

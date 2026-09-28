@@ -193,6 +193,54 @@ describe('semantic memory', () => {
     expect(block).toContain('you live with Mackenzie Scott and Liberty Lee (the BFF household)');
   });
 
+  it('a person named in the text the sim is about to read gets their fact line', () => {
+    // Live 2026-09-23: Mara's briefing named Adrian, her life list had no room for him
+    // (seven friends at 100, a stronger old romance), and "the facts are right" made her
+    // conclude "there's no Adrian in my life" and swap in the romance that WAS listed.
+    ctx.semanticMemory.ingestDossier(
+      dossier({
+        relationships: [
+          { sim_id: '200', name: 'Mackenzie Scott', has_met: true, friendship: 100, romance: 0 },
+          { sim_id: '300', name: 'Liberty Lee', has_met: true, friendship: 100, romance: 0 },
+          { sim_id: '400', name: 'Mika Oshino', has_met: true, friendship: 90, romance: 82 },
+          {
+            sim_id: '500',
+            name: 'Adrian House',
+            has_met: true,
+            friendship: 72,
+            romance: 17,
+            bits: ['RomanticCombo_RomanticInterest'],
+          },
+          { sim_id: '600', name: 'Al Pacino', has_met: true, friendship: 20, romance: 0 },
+        ],
+      }),
+      { hash: 'h1', day: 10 },
+    );
+
+    const block = ctx.semanticMemory.recall('100', {
+      mentionedText: 'You want to untangle your feelings about Nadia and adrian house.\nAlice Landgraab waved.',
+    });
+    const mentionedSection = block.split('About people here or mentioned:')[1]?.split('People in your life:')[0] ?? '';
+    expect(mentionedSection).toContain('Adrian House');
+    // whole names only: "Al" inside "Alice" is not Al Pacino (he is a friend, so he still
+    // appears further down in the life list, but not as mentioned)
+    expect(mentionedSection).not.toContain('Al Pacino');
+  });
+
+  it('lists up to ten friends in a sim life', () => {
+    const relationships = Array.from({ length: 12 }, (_, i) => ({
+      sim_id: `${200 + i}`,
+      name: `Friend Number${i}`,
+      has_met: true,
+      friendship: 100 - i,
+      romance: 0,
+    }));
+    ctx.semanticMemory.ingestDossier(dossier({ relationships }), { hash: 'h1', day: 10 });
+    const block = ctx.semanticMemory.recall('100');
+    expect(block).toContain('Friend Number9');
+    expect(block).not.toContain('Friend Number10');
+  });
+
   it('reports an identity change, but not a first ingest', () => {
     // Fix B: an age-up means the stored character description was written about somebody
     // this sim no longer is. A first ingest inserts the age without changing anything -

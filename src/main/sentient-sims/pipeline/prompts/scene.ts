@@ -54,7 +54,7 @@ Each actor's private briefing must cover, in under 100 words:
 - Role: "You are playing <name>." — their personality, current mood, and how it colors this moment
 - Want: what their character wants out of this scene
 - Angle: the specific attitude or feeling to play, and how they carry themselves in this conversation
-- Inner life: one line of direction for the private thought running underneath the performance — what this character actually feels or wants beneath what they say, which may cut against their spoken lines
+- Inner life: one line of direction for the private thought running underneath the performance — what this character actually feels or wants beneath what they say, true to their traits and description. It may differ from their spoken lines, but hidden insecurity is not a default subtext: a confident, self-assured, arrogant or egotistical character is at least as sure of themselves in private as in public
 - Relevant context: only the private details and past events that matter for this scene — never the character's whole life story
 
 Rules:
@@ -134,7 +134,7 @@ Rules for SAY:
 
 Rules for THINK:
 - First person, present tense — what is actually running through ${simName}'s head right now.
-- Private: nobody hears it, and it may cut against what ${simName} says out loud.
+- Private: nobody hears it, and it may differ from what ${simName} says out loud — but it is ${simName}'s real personality, not a secretly insecure version of it. Never invent self-doubt the character's traits and description do not support.
 - One short line. No physical actions, and never addressed to anyone.`;
   }
 
@@ -148,7 +148,8 @@ Rules for THINK:
 - Stay in character as ${simName} at all times.
 - First person, present tense — what is actually running through ${simName}'s head right now, in the middle of what they are doing.
 - Private: nobody hears it. No spoken dialogue, no name tag, no quotation marks.
-- Grounded in this moment; never third person, never narration of physical actions.`;
+- Grounded in this moment; never third person, never narration of physical actions.
+- It is ${simName}'s real personality, not a secretly insecure version of it. Never invent self-doubt the character's traits and description do not support.`;
   }
 
   return `${actorPrompt}
@@ -168,7 +169,7 @@ Rules for SAY:
 
 Rules for THINK:
 - First person, present tense — what is actually running through ${simName}'s head right now.
-- Private: nobody hears it, and it may cut against what ${simName} says out loud.
+- Private: nobody hears it, and it may differ from what ${simName} says out loud — but it is ${simName}'s real personality, not a secretly insecure version of it. Never invent self-doubt the character's traits and description do not support.
 - One short line. No physical actions, and never addressed to anyone.`;
 }
 

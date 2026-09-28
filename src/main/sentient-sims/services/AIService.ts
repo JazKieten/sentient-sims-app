@@ -96,6 +96,13 @@ import { parsePlannerJson, extractDiaryProse, DailyPlanService } from './DailyPl
 import { assertDiaryIsProse, repairDiary } from '../bench/tier0';
 import { SceneState } from './SceneService';
 import { lifeStageOf } from '../util/simLifeStage';
+import {
+  intimateOutputProblem,
+  isAdultAge,
+  isRefusal,
+  keepIntimateRowForDiary,
+  namesOutsideAct,
+} from '../util/intimateScene';
 import { isBelowChild } from '../models/ActionLoadout';
 import { MemoryTrace } from '../models/MemoryTrace';
 import { pngToPaintingDds } from '../image/paintingDds';
@@ -646,7 +653,7 @@ export class AIService {
       const namesList = others.length > 0 ? others.join(', ') : 'the people present';
 
       const transcript = this.ctx.promptBuilder
-        .groupMemories(sceneMemories)
+        .groupMemories(this.diaryTranscriptRows(sceneMemories, pov?.simId, stage))
         .map((message) => message.content)
         .join('\n');
 
@@ -1297,6 +1304,14 @@ ${factsBlock}
       }
     }
 
+    // Nothing that fails the guard is stored or voiced (util/intimateScene): a refusal, or a
+    // sexual act that names anyone outside it or involves anyone under young adult
+    const rawProblem = output.length > 1 ? this.generatedOutputProblem(event, output) : undefined;
+    if (rawProblem) {
+      log.warn(`[Generation] Discarded ${event.event_type} output (${rawProblem}): ${output.slice(0, 160)}`);
+      output = '';
+    }
+
     if (output.length > 1) {
       if (!directedScenes) {
         newMemory.content = output;
@@ -1328,6 +1343,16 @@ ${factsBlock}
         } catch (err) {
           log.error('Director review failed, using the scene as generated', err);
         }
+      }
+      const reviewedProblem = this.generatedOutputProblem(event, output);
+      if (reviewedProblem) {
+        log.warn(
+          `[Generation] Discarded reviewed ${event.event_type} output (${reviewedProblem}): ${output.slice(0, 160)}`,
+        );
+        return {
+          status: InteractionEventStatus.NOOP,
+          request: response.request,
+        };
       }
       newMemory.content = output;
 
@@ -1382,6 +1407,47 @@ ${factsBlock}
     };
   }
 
+  // Why a generated scene must be thrown away rather than stored and voiced, or undefined.
+  // A sexual act gets the full check (anyone outside the act, anyone under young adult,
+  // a refusal); every other event only the refusal check.
+  private generatedOutputProblem(event: InteractionEvents, text: string): string | undefined {
+    if (event.event_type === SSEventType.WICKED_WHIMS) {
+      let report;
+      try {
+        report = this.ctx.simStateCache.getReport();
+      } catch {
+        report = undefined;
+      }
+      return intimateOutputProblem(text, event.sentient_sims, namesOutsideAct(report, event.sentient_sims));
+    }
+    return isRefusal(text) ? 'model refusal' : undefined;
+  }
+
+  // A diary remembers a sexual act only its own adult author took part in
+  // (util/intimateScene). Diaries below child were already off (J8, which ended Elliot
+  // Jr's infant diaries narrating Lillie's nights); this covers a child or teen in the
+  // house, an adult in the next room, and a povless reflection, which keeps none.
+  private diaryTranscriptRows(rows: MemoryEntity[], povId: string | undefined, povStage: string | undefined) {
+    const intimate = rows.filter((row) => row.event_type === SSEventType.WICKED_WHIMS);
+    if (intimate.length === 0) {
+      return rows;
+    }
+    let participants = new Map<string, string[]>();
+    try {
+      participants = this.ctx.memoryRepository.getParticipantIdsForMemories(
+        intimate.map((row) => row.id).filter((id): id is string => id !== undefined),
+      );
+    } catch {
+      participants = new Map();
+    }
+    const povAdult = isAdultAge(povStage);
+    return rows.filter(
+      (row) =>
+        row.event_type !== SSEventType.WICKED_WHIMS ||
+        keepIntimateRowForDiary(participants.get(row.id ?? '') ?? [], povId, povAdult),
+    );
+  }
+
   async runDirectorReview(
     text: string,
     interactionActionType?: AIActionType,
@@ -1400,7 +1466,14 @@ ${factsBlock}
     );
     this.logExchange(oneShot.exchange);
     const reviewed = cleanupAIOutput(oneShot.text);
-    const usedReview = reviewed.length > 1;
+    // A reviewer that declines ("You can't create explicit content. What's the scene you'd
+    // like me to review?", stored as a WickedWhims memory on 09-19) has not reviewed
+    // anything; the scene as generated stands
+    const refused = isRefusal(reviewed);
+    if (refused) {
+      log.warn(`[Pipeline] Director review refused; keeping the scene as generated: ${reviewed.slice(0, 120)}`);
+    }
+    const usedReview = reviewed.length > 1 && !refused;
     return { text: usedReview ? reviewed : text, request: oneShot.exchange.request, usedReview };
   }
 
@@ -1715,6 +1788,14 @@ ${factsBlock}
       try {
         actorFacts = this.ctx.semanticMemory.recall(sim.sim_id, {
           mentionedSimIds: performers.filter((other) => other !== sim).map((other) => other.sim_id),
+          // Anyone the briefing or the scene so far names gets their real fact line, so a
+          // solo introspection about Adrian cannot read Adrian's absence as nonexistence
+          mentionedText: [
+            actorPrompts.get(sim.name) ?? '',
+            previouslyBlock,
+            sceneAction,
+            toTranscript(sceneLines),
+          ].join('\n'),
         });
       } catch {
         // Speaking without facts is the pre-3.1 behaviour; a silent Sim is not
@@ -2072,6 +2153,8 @@ ${factsBlock}
       // memories window live (it only shows up on re-hydrate). Send it as the opening scene
       // line: the Flash side appends it to the window, and suppresses the subtitle while the
       // chat window is open. It is not TTS-voiced — the player already said it.
+      // DELIBERATELY skips the playback queue: it is receipt feedback for the player's own
+      // words, and waiting behind queued scenes would make chat feel unacknowledged.
       if (playerLine && playerLine.text) {
         sendSceneLineToMod({
           speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
@@ -2125,20 +2208,29 @@ ${factsBlock}
         // Fire-and-forget: the continuation is its own generation with its own memory row.
         // Registered as in-flight so the scene is not declared finished while a round is
         // still being written — and so a stop from the game reaches it.
+        // Queued (priority FIFO lane) rather than run bare so a later-requested generation
+        // can never finish and air before this round; not awaited, so the enclosing queue
+        // job completes and drain() picks the continuation up next — no deadlock at
+        // concurrency 1.
         this.ctx.scenePlayback.generationStarted(sceneId);
-        void this.runDirectedGeneration(
-          event,
-          {
-            ...options,
-            continueScene: true,
-            playerLine: undefined,
-            speakPlayerLine: undefined,
-            round: round + 1,
-            carriedLines: nextRoundLines,
-            sceneId,
-          },
-          { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
-        )
+        void this.ctx.generationQueue
+          .runExclusive(
+            () =>
+              this.runDirectedGeneration(
+                event,
+                {
+                  ...options,
+                  continueScene: true,
+                  playerLine: undefined,
+                  speakPlayerLine: undefined,
+                  round: round + 1,
+                  carriedLines: nextRoundLines,
+                  sceneId,
+                },
+                { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
+              ),
+            { priority: true },
+          )
           .catch((error: unknown) => {
             log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);
           })

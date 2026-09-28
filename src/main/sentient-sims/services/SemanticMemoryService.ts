@@ -18,9 +18,38 @@ export type AddFactInput = {
 
 export type RecallOptions = {
   mentionedSimIds?: string[];
+  // Free text the sim is about to read (its briefing, the lines so far): anyone the
+  // dossier knows by name who appears in it is treated as mentioned. A briefing named
+  // Adrian, the life list had no room for him, and the block's "the facts are right"
+  // rule made the sim conclude there was no Adrian in her life (live 2026-09-23).
+  mentionedText?: string;
   today?: number;
   maxChars?: number;
 };
+
+// The ids of every dossier relationship whose full name appears in the text, whole words
+// only so "Al" does not match "Alice". Nothing fancy: the text is a prompt this sim is
+// about to read, and a person named in it deserves their fact line more than a friend
+// picked by score.
+export function namesInText(dossier: SimDossier | undefined, text?: string): string[] {
+  if (!text || !dossier) {
+    return [];
+  }
+  const found: string[] = [];
+  for (const edge of dossier.relationships ?? []) {
+    if (!edge.name || edge.name.trim().length < 2) {
+      continue;
+    }
+    const escaped = edge.name
+      .trim()
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s+/g, '\\s+');
+    if (new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, 'iu').test(text)) {
+      found.push(edge.sim_id);
+    }
+  }
+  return found;
+}
 
 // Everyone the game ties this sim to by blood or partnership. These never need a score to
 // earn their place in the facts block.
@@ -48,7 +77,7 @@ const IDENTITY_PREDICATES: ReadonlySet<string> = new Set([
 // The bands relationshipWords already uses: 15 is "a friend", 10 is a romantic spark.
 const LIFE_FRIENDSHIP_FLOOR = 15;
 const LIFE_ROMANCE_FLOOR = 10;
-const LIFE_FRIEND_COUNT = 3;
+const LIFE_FRIEND_COUNT = 10;
 
 const DEFAULT_CONFIDENCE: Record<FactSource, number> = {
   game: 1,
@@ -281,7 +310,9 @@ export class SemanticMemoryService {
         ),
       );
 
-      const mentioned = [...new Set(options.mentionedSimIds ?? [])].filter((id) => id && id !== simId);
+      const mentioned = [
+        ...new Set([...(options.mentionedSimIds ?? []), ...namesInText(dossier, options.mentionedText)]),
+      ].filter((id) => id && id !== simId);
       // The people who matter to this sim wherever they happen to be standing. A sim alone
       // in a scene had nobody in its prompt at all, so "who are you closest to" was
       // answered from nothing (live 2026-09-03).

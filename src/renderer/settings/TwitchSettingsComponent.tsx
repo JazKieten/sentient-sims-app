@@ -106,7 +106,7 @@ export default function TwitchSettingsComponent() {
     <Box sx={{ width: '100%' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', marginBottom: 1 }}>
         <FormControlLabel
-          label="Enable Twitch chat questions (!ask)"
+          label="Enable Twitch chat questions (!say)"
           control={
             <Checkbox checked={enabled.value} onChange={(change) => void enabled.setSetting(change.target.checked)} />
           }
@@ -192,7 +192,7 @@ export default function TwitchSettingsComponent() {
               value={aliases.value}
               placeholder="Grim Reaper=153992008478429871"
               onChange={(change) => void aliases.setSetting(change.target.value)}
-              helperText="Name=simId per line. Lets chat !ask sims the game reports without a name (service NPCs like the Grim Reaper) — even when they aren't on the lot."
+              helperText="Name=simId per line. Lets chat !say to sims the game reports without a name (service NPCs like the Grim Reaper) — even when they aren't on the lot."
             />
           </Stack>
           {status?.lastEvent ? (

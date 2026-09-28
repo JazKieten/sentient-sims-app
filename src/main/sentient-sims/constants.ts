@@ -214,7 +214,7 @@ export const twitchIrcUrl = 'wss://irc-ws.chat.twitch.tv:443';
 export const twitchOAuthDeviceUrl = 'https://id.twitch.tv/oauth2/device';
 export const twitchOAuthTokenUrl = 'https://id.twitch.tv/oauth2/token';
 export const twitchHelixUrl = 'https://api.twitch.tv/helix';
-export const defaultTwitchCommandWord = '!ask';
+export const defaultTwitchCommandWord = '!say';
 export const twitchQuestionMaxLength = 200;
 // Deep on purpose: no ask is ever dropped for a busy queue short of a genuine chat flood
 export const twitchAskQueueCap = 25;

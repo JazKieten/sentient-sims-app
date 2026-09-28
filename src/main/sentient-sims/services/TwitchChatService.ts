@@ -293,31 +293,31 @@ export class TwitchChatService {
 
     const permission = this.ctx.settings.twitchAskPermission;
     if (permission === 'mods' && !privileged) {
-      this.drop(`Dropped !ask from ${viewer}: mods only`);
+      this.drop(`Dropped !say from ${viewer}: mods only`);
       return;
     }
     if (permission === 'subs' && !privileged && !badges.subscriber) {
-      this.drop(`Dropped !ask from ${viewer}: subscribers only`);
+      this.drop(`Dropped !say from ${viewer}: subscribers only`);
       return;
     }
 
     const now = Date.now();
     const globalCooldownMs = this.ctx.settings.twitchGlobalCooldownSeconds * 1000;
     if (now - this.lastGlobalAcceptAt < globalCooldownMs) {
-      this.drop(`Dropped !ask from ${viewer}: global cooldown`);
+      this.drop(`Dropped !say from ${viewer}: global cooldown`);
       return;
     }
     const viewerKey = viewer.toLowerCase();
     const viewerCooldownMs = this.ctx.settings.twitchViewerCooldownSeconds * 1000;
     const viewerLast = this.viewerLastAcceptAt.get(viewerKey) ?? 0;
     if (now - viewerLast < viewerCooldownMs) {
-      this.drop(`Dropped !ask from ${viewer}: viewer cooldown`);
+      this.drop(`Dropped !say from ${viewer}: viewer cooldown`);
       return;
     }
 
     const question = sanitizeQuestion(rawQuestion, twitchQuestionMaxLength);
     if (!question) {
-      this.drop(`Dropped !ask from ${viewer}: empty question`);
+      this.drop(`Dropped !say from ${viewer}: empty question`);
       return;
     }
 
@@ -328,22 +328,22 @@ export class TwitchChatService {
       }
       const viewerUserId = tags['user-id'];
       if (!viewerUserId) {
-        this.drop(`Dropped !ask from ${viewer}: no user id on the message`);
+        this.drop(`Dropped !say from ${viewer}: no user id on the message`);
         return;
       }
       const follows = await this.ctx.twitchAuth.isFollower(viewerUserId);
       if (follows === undefined) {
-        this.drop(`Dropped !ask from ${viewer}: follower check unavailable`);
+        this.drop(`Dropped !say from ${viewer}: follower check unavailable`);
         return;
       }
       if (!follows) {
-        this.drop(`Dropped !ask from ${viewer}: not a follower`);
+        this.drop(`Dropped !say from ${viewer}: not a follower`);
         return;
       }
     }
 
     if (this.queue.length >= twitchAskQueueCap) {
-      this.drop(`Dropped !ask from ${viewer}: question queue full`);
+      this.drop(`Dropped !say from ${viewer}: question queue full`);
       return;
     }
 
@@ -353,8 +353,8 @@ export class TwitchChatService {
     this.pruneViewerCooldowns();
 
     this.queue.push({ question, viewer });
-    this.setEvent(`Accepted !ask from ${viewer}`);
-    log.info(`Twitch: accepted !ask from ${viewer}: ${question}`);
+    this.setEvent(`Accepted !say from ${viewer}`);
+    log.info(`Twitch: accepted !say from ${viewer}: ${question}`);
     this.maybeDispatch();
   }
 
@@ -527,7 +527,7 @@ export class TwitchChatService {
           ? {
               speakPlayerLine: {
                 voiceId: settings.twitchChatVoiceId,
-                spokenText: `${viewerTag} asks: ${target.question}`,
+                spokenText: `${viewerTag} says: ${target.question}`,
               },
             }
           : {}),

@@ -12,13 +12,12 @@ import type { ApiContext } from '../services/ApiContext';
 import type { SceneClosed } from '../services/ScenePlaybackRegistry';
 import type { MemoryEntity } from '../db/entities/MemoryEntity';
 import type { SSEvent } from '../models/InteractionEvents';
-import type { InteractionEventResult } from '../models/InteractionEventResult';
+import type { InteractionEventResult, LLMExchange } from '../models/InteractionEventResult';
 import type { DirectedGenerationOptions } from '../services/AIService';
 import type { ReflectionPromptContext } from '../pipeline/prompts/consolidation';
 import type { TodaysPlanBlock } from '../util/formatSelfStatus';
 import type { ModLogWebsocketMessage } from '../models/ModLogWebsocketMessage';
 import type { MemoryTrace, MemoryTracePipeline } from '../models/MemoryTrace';
-import type { LLMExchange } from '../models/InteractionEventResult';
 
 export type Tier = 'core' | 'stream' | 'dev';
 

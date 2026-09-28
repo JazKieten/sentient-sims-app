@@ -1,4 +1,3 @@
-/* eslint-disable promise/always-return */
 import { WebSocketServer, WebSocket } from 'ws';
 import log from 'electron-log';
 import { notifyClockState } from './util/notifyRenderer';

@@ -23,6 +23,7 @@ import {
 } from '../util/formatCognitionPrompt';
 import { memoryRecallText } from '../util/memoryRecallText';
 import { deniedConversationActions } from '../util/conversationActions';
+import { speciesWord } from '../util/alsoPresent';
 
 // A sleeping sim has no tick. The gate used to compare `activity.running` to the bare
 // word 'sleep', but the mod reports the running interaction's tuning name — measured
@@ -403,7 +404,12 @@ export class CognitionService {
     if (this.ctx.db?.isLoaded && !this.ctx.db.isLoaded()) {
       return;
     }
-    const entries = report.sims ?? [];
+    // Pets are on the report for the roster (ALSO_PRESENT, "which cats are here") and never
+    // for cognition. The Calloways' dog Winston was deliberated like a person from 09-16:
+    // pay_bills, play_guitar, shower and cook_meal all refused "not of a valid species", and
+    // at least 8 go_out dispatches each put the travel-consent prompt up for a dog. Every
+    // lane below (daily plans, need rules, go-home, rejoin, deliberation) reads `entries`.
+    const entries = (report.sims ?? []).filter((entry) => speciesWord(entry.self?.species) === undefined);
     if (entries.length === 0) {
       return;
     }

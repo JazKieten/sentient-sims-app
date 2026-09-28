@@ -38,6 +38,11 @@ export type GenerationOptions = {
   sexLocationType?: number;
   continue?: boolean;
   promptHistoryMode?: PromptHistoryMode;
+  // Overrides the player's maxResponseTokens for this one generation (WickedWhims writes a
+  // whole scene in one call)
+  maxResponseTokens?: number;
+  // Air the scene as generated, without runDirectorReview
+  skipReview?: boolean;
 };
 
 const maxGroupSizeLength = 1700;
@@ -643,10 +648,12 @@ export class PromptRequestBuilderService {
       postures,
     );
 
-    const maxResponseTokens = Math.min(
-      options.modelSettings.maxResponseTokens ?? this.ctx.settings.maxResponseTokens,
-      this.ctx.settings.maxResponseTokens,
-    );
+    const maxResponseTokens =
+      options.maxResponseTokens ??
+      Math.min(
+        options.modelSettings.maxResponseTokens ?? this.ctx.settings.maxResponseTokens,
+        this.ctx.settings.maxResponseTokens,
+      );
 
     log.info(
       `MaxResponseTokens: ${maxResponseTokens} modelSettings: ${options.modelSettings.maxResponseTokens} settings ${this.ctx.settings.maxResponseTokens}`,

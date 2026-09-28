@@ -303,14 +303,15 @@ export function formatAction(
       formattedAction = formattedAction.replaceAll(`{actor.${i}.father/mother}`, 'mother');
     }
 
-    if (sexCategoryType) {
+    // Category 0 is TEASING ("foreplay"), so a falsy check left {sex_category} in the prompt
+    if (sexCategoryType !== undefined && sexCategoryType !== null) {
       const sexCategory = getSexCategory(sexCategoryType);
       if (sexCategory) {
         formattedAction = formattedAction.replaceAll(`{sex_category}`, sexCategory);
       }
     }
 
-    if (sexLocationType) {
+    if (sexLocationType !== undefined && sexLocationType !== null) {
       const sexLocation = getSexLocation(sexLocationType);
       if (sexLocation) {
         formattedAction = formattedAction.replaceAll(`{sex_location}`, sexLocation);

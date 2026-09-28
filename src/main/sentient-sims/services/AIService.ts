@@ -40,6 +40,7 @@ import {
   defaultWantsPrompt,
   directedSceneBudgetMs,
   thoughtMemoryFloor,
+  wickedWhimsMaxResponseTokens,
 } from '../constants';
 import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import {
@@ -1067,6 +1068,10 @@ ${factsBlock}
       prePreAction: 'At {location} ({location_type}), {postures},',
       sexCategoryType: event.sex_category,
       sexLocationType: event.sex_location,
+      maxResponseTokens: wickedWhimsMaxResponseTokens,
+      // The review is told to cut physical beats and was stripping speaker names off WW
+      // scenes; the bench scored WW the same or worse with it
+      skipReview: true,
     });
   }
 
@@ -1189,6 +1194,7 @@ ${factsBlock}
       modelSettings: await this.ctx.modelSettings.getModelSettings(providerConfig.model, providerConfig.apiType),
       continue: options.continue,
       promptHistoryMode: options.promptHistoryMode,
+      maxResponseTokens: options.maxResponseTokens,
     };
 
     let promptRequest = await this.ctx.promptBuilder.buildPromptRequest(event, promptOptions);
@@ -1309,17 +1315,19 @@ ${factsBlock}
         { label: 'Scene Generation', request: openAIRequest, responseText: rawSceneText },
       ];
       let usedReviewerCut = false;
-      try {
-        const directorReview = await this.runDirectorReview(rawSceneText, actionTypeForEvent(event.event_type));
-        output = directorReview.text;
-        usedReviewerCut = directorReview.usedReview;
-        exchanges.push({
-          label: 'Director Review',
-          request: directorReview.request,
-          responseText: directorReview.text,
-        });
-      } catch (err) {
-        log.error('Director review failed, using the scene as generated', err);
+      if (!options.skipReview) {
+        try {
+          const directorReview = await this.runDirectorReview(rawSceneText, actionTypeForEvent(event.event_type));
+          output = directorReview.text;
+          usedReviewerCut = directorReview.usedReview;
+          exchanges.push({
+            label: 'Director Review',
+            request: directorReview.request,
+            responseText: directorReview.text,
+          });
+        } catch (err) {
+          log.error('Director review failed, using the scene as generated', err);
+        }
       }
       newMemory.content = output;
 

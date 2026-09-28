@@ -7,6 +7,7 @@ import { useElevenLabsTTS } from 'renderer/voice/useElevenLabsTTS';
 import { useSentientSimsTTS } from 'renderer/voice/useSentientSimsTTS';
 import { useAISettings } from './AISettingsProvider';
 import { pacedDelay, setClockState, waitWhileUserPaused } from 'renderer/voice/playbackClock';
+import { insertScene } from 'renderer/voice/sceneQueue';
 
 interface TTSAudioContextType {
   // voiceId pins a specific cast voice (an ElevenLabs voice id or a Kokoro blend like
@@ -106,6 +107,10 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
   type QueuedScene = {
     lines: DialogueLine[];
     paced: boolean;
+    // Main-process dispatch order and priority flag: insertScene keeps the queue in
+    // rank-then-seq order so scenes air in the order they were requested
+    seq: number;
+    priority: boolean;
     preamble?: string;
     pacedText?: string;
     // Which conversation this round belongs to (see ScenePlaybackRegistry). A scene the
@@ -254,6 +259,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
         _event: any,
         lines: DialogueLine[],
         options?: {
+          seq?: number;
           paced?: boolean;
           preamble?: string;
           pacedText?: string;
@@ -265,6 +271,9 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
         const scene: QueuedScene = {
           lines,
           paced: options?.paced ?? false,
+          // A dispatch without a seq (shouldn't happen) behaves like a plain push
+          seq: options?.seq ?? Number.MAX_SAFE_INTEGER,
+          priority: options?.priority ?? false,
           preamble: options?.preamble,
           pacedText: options?.pacedText,
           sceneId: options?.sceneId,
@@ -276,22 +285,14 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
           reportDroppedScene(scene);
           return;
         }
-        if (options?.priority) {
-          // V-2: the reply to the player's own words plays next, never fourth
-          sceneQueueRef.current.unshift(scene);
-          void drainSceneQueue();
-          return;
-        }
-        // Drop the oldest waiting scene, not the incoming one — the newest scene matches
-        // what is happening on screen right now, the oldest is furthest behind gameplay
-        while (sceneQueueRef.current.length >= maxQueuedScenes) {
-          const dropped = sceneQueueRef.current.shift();
-          if (dropped) {
-            log.debug(`TTS scene queue full — dropping oldest queued scene`);
-            reportDroppedScene(dropped);
-          }
-        }
-        sceneQueueRef.current.push(scene);
+        // Priority scenes rank ahead of autonomous ones but FIFO among themselves, and a
+        // round never jumps an earlier round of its own conversation; at the cap the
+        // oldest non-priority scene is dropped — the newest matches what is happening on
+        // screen right now, the oldest is furthest behind gameplay
+        insertScene(sceneQueueRef.current, scene, maxQueuedScenes, (dropped) => {
+          log.debug(`TTS scene queue full — dropping oldest queued scene`);
+          reportDroppedScene(dropped);
+        });
         void drainSceneQueue();
       },
     );

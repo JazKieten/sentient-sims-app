@@ -67,6 +67,11 @@ export class GenerationQueueService {
 
   private readonly jobs: Array<() => Promise<void>> = [];
 
+  // Priority lane: player-facing generations (chat replies, scene continuations) go ahead
+  // of speculative prefetches but FIFO among themselves — an unshift onto `jobs` made the
+  // lane LIFO, so a later-requested reply could air before an earlier one.
+  private readonly priorityJobs: Array<() => Promise<void>> = [];
+
   // V-2: the player's own voice. Drained BEFORE jobs — the reply to something the
   // player just said out loud must not queue behind autonomous scenes and prefetches.
   private readonly speechJobs: Array<() => Promise<void>> = [];
@@ -383,7 +388,7 @@ export class GenerationQueueService {
         }
       };
       if (priority) {
-        this.jobs.unshift(job);
+        this.priorityJobs.push(job);
       } else {
         this.jobs.push(job);
       }
@@ -405,8 +410,8 @@ export class GenerationQueueService {
         this.drain();
       });
     }
-    while (this.activeCount < concurrency && this.jobs.length > 0) {
-      const job = this.jobs.shift();
+    while (this.activeCount < concurrency && (this.priorityJobs.length > 0 || this.jobs.length > 0)) {
+      const job = this.priorityJobs.shift() ?? this.jobs.shift();
       if (!job) {
         return;
       }
@@ -419,7 +424,7 @@ export class GenerationQueueService {
     // Foreground queue is empty: spend leftover capacity on at most one cognition
     // deliberation. New foreground work re-enters drain() and naturally goes first.
     if (
-      this.jobs.length === 0 &&
+      this.jobs.length + this.priorityJobs.length === 0 &&
       this.cognitionActive === 0 &&
       this.cognitionJobs.length > 0 &&
       this.activeCount < concurrency
@@ -442,7 +447,7 @@ export class GenerationQueueService {
   // pending background work another full quiet period out. A timer that fires while the
   // queue turned busy again is a no-op; the drain after that work reschedules it.
   private scheduleBackground() {
-    if (this.backgroundJobs.length === 0 || this.activeCount > 0 || this.jobs.length > 0) {
+    if (this.backgroundJobs.length === 0 || this.activeCount > 0 || this.jobs.length + this.priorityJobs.length > 0) {
       return;
     }
     if (this.idleTimer) {
@@ -456,7 +461,7 @@ export class GenerationQueueService {
   }
 
   private startBackground() {
-    if (this.activeCount > 0 || this.jobs.length > 0) {
+    if (this.activeCount > 0 || this.jobs.length + this.priorityJobs.length > 0) {
       return;
     }
     const job = this.backgroundJobs.shift();
@@ -466,7 +471,7 @@ export class GenerationQueueService {
     this.activeCount += 1;
     void job().finally(() => {
       this.activeCount -= 1;
-      if (this.jobs.length > 0) {
+      if (this.jobs.length + this.priorityJobs.length > 0) {
         // Foreground work arrived while this task ran — it goes first; its drain
         // restarts the idle countdown for whatever background work remains
         this.drain();

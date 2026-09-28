@@ -15,7 +15,20 @@ Single test: edit the filename filter in test:single or run directly (Vitest tak
 Tests run through Electron's Node runtime (ELECTRON_RUN_AS_NODE=true) with Vitest (config in vitest.config.ts,
 setup in vitest.setup.ts). This is required because the native better-sqlite3 addon is built for Electron's ABI,
 not system Node's. Vitest runs files serially (fileParallelism: false) to avoid Express port collisions.
-Integration tests (.it.test.ts) require OPENAI_KEY env var; the AWS-backed tests in Api.test.ts need AWS_PROFILE=sentientsims.
+Integration tests (.it.test.ts) require OPENAI_KEY env var; the AWS-backed tests in Api.it.test.ts need AWS_PROFILE=sentientsims.
+
+Build tiers (release 4.5): one tree, three builds. tiers.json lists what each player build leaves out
+(STREAM, AUTONOMY, DEV paths); core = the public release, minus all three; stream = minus DEV; the loose
+tree is dev. Core code reaches tier code ONLY through src/main/sentient-sims/tiers/: the ApiContext.ext
+capability slots and the TierRegistration hooks (construct, routes, ipc, start, onSettingChanged,
+onDatabaseLoaded, onSceneClosed, onModMessage, onMemoryUpserted, shutdown). Each tier keeps its services
+per context (autonomyOf/streamOf/devOf(ctx)). The renderer asks src/renderer/tiers/merge.ts for tier routes,
+nav, settings tabs/rows, providers. tiers/index.ts and renderer tiers/index.tsx are GENERATED
+(scripts/gen-tier-index.ts; committed in dev form, Tiers.test.ts pins it); src/ never imports tiers.json.
+IPC a tier adds goes through tierInvoke/tierOn over interfaces the tier's own file augments (tiers/ipc.ts).
+Check a build: `bash scripts/strip-check.sh core|stream` (worktree of HEAD: strip, tsc, unit tests,
+electron-vite build, scripts/verify-build.ts reads the source maps for stripped files and the tier stamp).
+A new file that belongs to a tier goes in tiers.json; a core test that needs a tier is a tier test.
 
 Architecture:
 

@@ -10,6 +10,14 @@ that stripped tree); a stream-only build flag (the four mod-install paths and el
 off, distinct appId/productName); the AI exchange log kept in memory only in core, never written
 to `ai_exchange`; the CLAUDE.md trim; the public-cut hygiene.
 
+**Status 2026-09-27 (night):** version 4.5.0, the tier split and the ring-only core exchange log
+are DONE (`release/4.5` 6ab46f5..4e2da54; how it works is in CLAUDE.md "Build tiers").
+`scripts/strip-check.sh core` and `stream` pass locally. Deviations from map section I: the
+trace model (`models/MemoryTrace`) and `WebGpuDebug` stay core; `InfantsQuiet.test` is core;
+`CognitionTrace.test` is dev; `ActionIntent` is autonomy. Open for this repo: the stream build
+flag (plan step 3), the CLAUDE.md trim (step 5), CI for `strip-check.yml` (Actions off on the
+fork), in-game checks, and the core app's missing way into debug mode.
+
 Started 2026-09-23, the same evening as the mod map. Goal: prepare `jasmine-phase-3` for release
 as Sentient Sims 4.5 with ONE codebase and build-time tiers (no code fork). Read in this order:
 

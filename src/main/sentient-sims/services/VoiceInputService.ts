@@ -1,5 +1,5 @@
 import log from 'electron-log';
-import { correctNames } from '../util/nameCorrection';
+import { correctNames, correctPlaces } from '../util/nameCorrection';
 import { isPlaceholderName } from '../util/simAliases';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
@@ -155,9 +155,10 @@ export class VoiceInputService {
         sendPlayerVoiceStatusToMod('error', 'Heard nothing');
         return '';
       }
-      // V-7 post-pass: snap near-miss names to the sims in play. The settings Test
-      // button goes through transcribe() directly and stays raw on purpose.
-      const text = correctNames(raw, this.knownNames(), this.onLotNames());
+      // V-7 post-pass: snap misheard worlds ("Dale Sol Valley") and near-miss names to
+      // the game's spelling. The settings Test button goes through transcribe()
+      // directly and stays raw on purpose.
+      const text = correctNames(correctPlaces(raw), this.knownNames(), this.onLotNames());
       if (text !== raw) {
         log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }

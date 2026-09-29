@@ -6,7 +6,7 @@ import {
   formatSeason,
   formatWeather,
 } from '../formatter/PromptFormatter';
-import { InteractionEvent, SSEvent, SSRelationships } from '../models/InteractionEvents';
+import { InteractionEvent, SSEvent, SSEventType, SSRelationships } from '../models/InteractionEvents';
 import { getSystemPrompt } from '../systemPrompts';
 import { ApiType } from '../models/ApiType';
 import { FormattedMemoryMessage, PreFormattedMemoryMessage, PromptRequest } from '../models/OpenAIRequestBuilder';
@@ -20,6 +20,7 @@ import { PromptHistoryMode } from '../models/PromptHistoryMode';
 import { ApiContext } from './ApiContext';
 import { postureDescriptions, PostureType } from '../descriptions/postureDescriptions';
 import { buildAlsoPresentBlock } from '../util/alsoPresent';
+import { isAdultAge, keepIntimateRowForScene } from '../util/intimateScene';
 import { ObjectDescription, objectDescriptions } from '../descriptions/objectDescriptions';
 import { memoryRecallText } from '../util/memoryRecallText';
 
@@ -38,6 +39,11 @@ export type GenerationOptions = {
   sexLocationType?: number;
   continue?: boolean;
   promptHistoryMode?: PromptHistoryMode;
+  // Overrides the player's maxResponseTokens for this one generation (WickedWhims writes a
+  // whole scene in one call)
+  maxResponseTokens?: number;
+  // Air the scene as generated, without runDirectorReview
+  skipReview?: boolean;
 };
 
 const maxGroupSizeLength = 1700;
@@ -80,7 +86,14 @@ export class PromptRequestBuilderService {
     this.ctx = ctx;
   }
 
-  formatSims(sentientSims: SentientSim[], location: LocationEntity, relationships?: SSRelationships): string[] {
+  formatSims(
+    sentientSims: SentientSim[],
+    location: LocationEntity,
+    relationships?: SSRelationships,
+    // A sexual act renders no descriptions: a parent's names their children ("has become a
+    // second parent to Elliot's son"), and nothing about a child may reach that prompt
+    options: { omitDescriptions?: boolean } = {},
+  ): string[] {
     const participants = this.ctx.participantRepository.getParticipants(
       sentientSims.map((sentientSim) => {
         try {
@@ -114,11 +127,16 @@ export class PromptRequestBuilderService {
       // forget: this prompt still goes out with no description, the NEXT one has one.
       this.ctx.defaultDescriptions.considerSim(sentientSim, storedDescription);
 
+      const keptDescription = sentientSim.description;
+      if (options.omitDescriptions) {
+        sentientSim.description = undefined;
+      }
       formattedParticipants.push(
         `<CHARACTER_IN_INTERACTION>\n${formatSentientSim(sentientSim, {
           traitConsistencyNote: this.ctx.settings.directedScenesEnabled,
         })}\n</CHARACTER_IN_INTERACTION>`,
       );
+      sentientSim.description = keptDescription;
     });
 
     const relationshipDescriptions: string[] = [];
@@ -199,7 +217,8 @@ export class PromptRequestBuilderService {
 
   // Only the current scene's raw memories are replayed verbatim. Everything from earlier scenes
   // is represented by the distilled reflections in the <PAST_REFLECTIONS> block instead.
-  getMemories() {
+  // With an event, rows are also cut to what its performers may see (intimateScene).
+  getMemories(event?: SSEvent) {
     const scene = this.ctx.sceneService.getCurrentScene();
     if (!scene) {
       return [];
@@ -207,7 +226,7 @@ export class PromptRequestBuilderService {
 
     const rows = this.ctx.memoryRepository.getSceneMemories(scene.locationId, scene.startedAt);
     const cutoff = Date.now() - canceledOutcomeSceneWindowMs;
-    return rows.filter((memory) => {
+    const recent = rows.filter((memory) => {
       if (memory.event_type !== 'outcome') {
         return true;
       }
@@ -222,6 +241,34 @@ export class PromptRequestBuilderService {
       const storedAt = Date.parse(`${memory.timestamp.replace(' ', 'T')}Z`);
       return !Number.isNaN(storedAt) && storedAt >= cutoff;
     });
+    return event ? this.scopeSceneRowsToPerformers(recent, event) : recent;
+  }
+
+  // The scene is the whole lot's history, so a sexual act replays to whoever acts next
+  // there - a toddler's bedtime included (live 2026-09-23, see util/intimateScene). A
+  // WickedWhims event is told only from rows its own performers are alone in; any other
+  // event keeps everything except sexual-act rows it has no business seeing. Without a
+  // participant lookup (a stub context) every sexual-act row is dropped and a WickedWhims
+  // event gets no history at all: the safe way to fail.
+  private scopeSceneRowsToPerformers(rows: MemoryEntity[], event: SSEvent): MemoryEntity[] {
+    const isAct = event.event_type === SSEventType.WICKED_WHIMS;
+    const intimateRows = rows.filter((row) => row.event_type === SSEventType.WICKED_WHIMS);
+    if (!isAct && intimateRows.length === 0) {
+      return rows;
+    }
+    const performerIds = new Set(event.sentient_sims.map((sim) => sim.sim_id));
+    const performersAdult = event.sentient_sims.every((sim) => isAdultAge(sim.age));
+    let participants = new Map<string, string[]>();
+    try {
+      participants = this.ctx.memoryRepository.getParticipantIdsForMemories(
+        (isAct ? rows : intimateRows).map((row) => row.id).filter((id): id is string => id !== undefined),
+      );
+    } catch {
+      participants = new Map();
+    }
+    const allowed = (row: MemoryEntity) =>
+      keepIntimateRowForScene(participants.get(row.id ?? '') ?? [], performerIds, performersAdult);
+    return rows.filter((row) => (isAct || row.event_type === SSEventType.WICKED_WHIMS ? allowed(row) : true));
   }
 
   // J1 (2026-09-04): each performer's OWN most recent reflections, newest first. A
@@ -576,31 +623,43 @@ export class PromptRequestBuilderService {
       postures,
     );
 
-    const sims = this.formatSims(event.sentient_sims, location, event.relationships);
+    // A sexual act is told from its performers alone: no lot roster (it put a toddler in
+    // the 09-23 prompt), and none of the everyday director notes, which asked for "two to
+    // four lines, natural and conversational" and pulled the model into the house's last
+    // conversation instead of the act.
+    const isIntimateAct = event.event_type === SSEventType.WICKED_WHIMS;
+    const sims = this.formatSims(event.sentient_sims, location, event.relationships, {
+      omitDescriptions: isIntimateAct,
+    });
     // J3: who else is on this lot (people and pets, species where the mod says), right
     // after the character blocks, so "which cats are here" has a roster to answer from.
     // Only for the lot the report is about; another lot's event renders nothing here.
-    const alsoPresent = buildAlsoPresentBlock(
-      this.ctx.simStateCache.getReport(),
-      event.environment.location_id,
-      event.sentient_sims.map((sim) => sim.sim_id),
-    );
+    const alsoPresent = isIntimateAct
+      ? undefined
+      : buildAlsoPresentBlock(
+          this.ctx.simStateCache.getReport(),
+          event.environment.location_id,
+          event.sentient_sims.map((sim) => sim.sim_id),
+        );
     if (alsoPresent) {
       sims.push(alsoPresent);
     }
-    if (directedScenes) {
+    if (directedScenes && !isIntimateAct) {
       sims.push(this.buildDirectorBlock(event));
       sims.push(this.buildSceneGuidance());
     }
 
-    const reflectionsBySim = this.getReflections(event);
+    // Diaries, retrieved recollections and the facts list stay out of a sexual act too. On
+    // 09-23 all three were about the household's toddler (bedtime stories, "you live with
+    // Elliot Jr"), and they are the context the model reached for.
+    const reflectionsBySim = isIntimateAct ? [] : this.getReflections(event);
     const reflections = reflectionsBySim.flatMap((entry) => entry.reflections);
     const reflectionsBlock = this.buildReflectionsBlock(reflectionsBySim);
     if (reflectionsBlock) {
       sims.push(reflectionsBlock);
     }
 
-    const memories = this.getMemories();
+    const memories = this.getMemories(event);
     const groupedMemories = this.groupMemories(memories);
 
     // Retrieval query: what is about to happen plus who is involved. Scene rows and shown
@@ -611,7 +670,7 @@ export class PromptRequestBuilderService {
     const excludeMemoryIds = [...memories, ...reflections]
       .map((memory) => memory.id)
       .filter((id): id is string => id !== undefined);
-    const relevantMemories = await this.getRelevantMemories(event, queryText, excludeMemoryIds);
+    const relevantMemories = isIntimateAct ? [] : await this.getRelevantMemories(event, queryText, excludeMemoryIds);
     const relevantMemoriesBlock = this.buildRelevantMemoriesBlock(relevantMemories);
     if (relevantMemoriesBlock) {
       sims.push(relevantMemoriesBlock);
@@ -622,7 +681,7 @@ export class PromptRequestBuilderService {
     // lived with, Travis named two people who do not exist (self-knowledge battery,
     // 2026-09-03, 1/9). Facts go BEFORE the memories block for the same reason as in the
     // tick - what is true should survive a truncation that costs a recollection.
-    const factsBlock = this.knownFactsForScene(event);
+    const factsBlock = isIntimateAct ? undefined : this.knownFactsForScene(event);
     if (factsBlock) {
       sims.splice(relevantMemoriesBlock ? sims.length - 1 : sims.length, 0, factsBlock);
     }
@@ -643,10 +702,12 @@ export class PromptRequestBuilderService {
       postures,
     );
 
-    const maxResponseTokens = Math.min(
-      options.modelSettings.maxResponseTokens ?? this.ctx.settings.maxResponseTokens,
-      this.ctx.settings.maxResponseTokens,
-    );
+    const maxResponseTokens =
+      options.maxResponseTokens ??
+      Math.min(
+        options.modelSettings.maxResponseTokens ?? this.ctx.settings.maxResponseTokens,
+        this.ctx.settings.maxResponseTokens,
+      );
 
     log.info(
       `MaxResponseTokens: ${maxResponseTokens} modelSettings: ${options.modelSettings.maxResponseTokens} settings ${this.ctx.settings.maxResponseTokens}`,

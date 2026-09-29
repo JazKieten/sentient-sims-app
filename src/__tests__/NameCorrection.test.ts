@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildTranscriptionPrompt, correctNames, levenshtein } from '../main/sentient-sims/util/nameCorrection';
+import {
+  buildTranscriptionPrompt,
+  correctNames,
+  correctPlaces,
+  levenshtein,
+} from '../main/sentient-sims/util/nameCorrection';
 
 describe('STT dictionary (V-7)', () => {
   it('snaps the near-misses observed live to the real names', () => {
@@ -21,6 +26,7 @@ describe('STT dictionary (V-7)', () => {
     // by the wrong name — "Well" -> Wells, "Kay" -> Kai (a phonetic tie), "Hey" -> Huy
     const known = ['Marcus Wells', 'Kai Nguyen', 'Huy Tran'];
     expect(correctNames('Well, how are you today?', known)).toBe('Well, how are you today?');
+    expect(correctNames("Welp, too bad, it's coming.", ['Viviana Wells'])).toBe("Welp, too bad, it's coming.");
     expect(correctNames("Kay let's go to the park", known)).toBe("Kay let's go to the park");
     expect(correctNames('Hey there, what are you up to?', known)).toBe('Hey there, what are you up to?');
     // The real names still resolve when they are actually spoken
@@ -43,6 +49,30 @@ describe('STT dictionary (V-7)', () => {
     expect(correctNames('Hi, Ren, how are you?', ['Wren Calloway'])).toBe('Hi, Wren, how are you?');
     expect(correctNames("Hi, Rin, what's up?", ['Wren Calloway'])).toBe("Hi, Wren, what's up?");
     expect(correctNames('Hey Margot, how are you?', ['Margo Calloway'])).toBe('Hey Margo, how are you?');
+  });
+
+  it('hears Adrian behind a silent final e', () => {
+    // Whisper spelled Adrian "Adrienne" (live 09-23): "adrien" is one vowel from "adrian"
+    expect(correctNames('Adrienne, come here', ['Adrian Vane'])).toBe('Adrian, come here');
+    expect(correctNames("Is that Adrienne's car?", ['Adrian Vane'])).toBe("Is that Adrian's car?");
+  });
+
+  it('spells the game worlds the way the game does', () => {
+    // Live 09-27: Whisper wrote "Dale Sol Valley" and Augustus remembered living there
+    expect(correctPlaces('You are now a homeowner in Dale Sol Valley, where you can shine.')).toBe(
+      'You are now a homeowner in Del Sol Valley, where you can shine.',
+    );
+    expect(correctPlaces('We moved to Stranger Ville last week')).toBe('We moved to StrangerVille last week');
+    expect(correctPlaces('The dogs love Brendleton Bay')).toBe('The dogs love Brindleton Bay');
+    expect(correctPlaces('Welcome to Del Sol Valley')).toBe('Welcome to Del Sol Valley');
+    // Everyday words and a comma-broken run stay put
+    expect(correctPlaces('Dale, so valid.')).toBe('Dale, so valid.');
+    expect(correctPlaces('Sure, I will. Maybe later.')).toBe('Sure, I will. Maybe later.');
+    expect(correctPlaces('Tell Dale to come home')).toBe('Tell Dale to come home');
+  });
+
+  it('never snaps the words of a world to a sim', () => {
+    expect(correctNames('Del Sol Valley is lovely', ['Sal Moreno', 'Dell Ortiz'])).toBe('Del Sol Valley is lovely');
   });
 
   it('builds a name-dense prompt, tightest scope first, capped', () => {

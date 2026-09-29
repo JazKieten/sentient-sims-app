@@ -404,6 +404,7 @@ Will you do it?`;
       // The ask itself opens the beat in the in-game memories window. The Voice's own
       // asks are not TTS-voiced — the player already said it out loud — but a Twitch
       // question has no one to say it, so speakPlayerLine gives it the chat voice.
+      // DELIBERATELY skips the playback queue: receipt feedback for the player's own words.
       sendSceneLineToMod({
         speaker: options.playerLineDisplaySpeaker ?? playerLine.speaker,
         text: playerLine.text,

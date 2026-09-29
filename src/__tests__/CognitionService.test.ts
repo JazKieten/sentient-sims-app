@@ -466,6 +466,50 @@ describe('CognitionService', () => {
     expect(cognition.getStats().continues).toBe(1);
   });
 
+  // The Calloways' dog Winston was deliberated like a person from 09-16: pay_bills,
+  // play_guitar and shower refused on species, and 8+ go_out prompts for a dog
+  it('never deliberates, plans or dispatches for a pet', async () => {
+    const { cache, dispatched, oneShotCalls, lazyPlanCalls } = buildCtx({ needsLazyPlan: true });
+    const base = idleSimReport(1);
+    const report = idleSimReport(1, {
+      lot: { zone_id: 1, clock: { hour: 10, paused: false, absolute_day: 700 } },
+      sims: (base.sims ?? []).map((entry) => ({
+        ...entry,
+        sim_id: '747341433417958075',
+        sim_name: 'Winston',
+        self: { ...entry.self, species: 'SMALLDOG', needs: { hunger: -90 } },
+      })),
+    });
+    cache.ingest(report);
+    await settle();
+
+    expect(oneShotCalls).toHaveLength(0);
+    expect(dispatched).toHaveLength(0);
+    expect(lazyPlanCalls).toHaveLength(0);
+  });
+
+  it('still deliberates for the people on a report that also carries a pet', async () => {
+    const { cache, dispatched } = buildCtx();
+    const [person] = idleSimReport(1).sims ?? [];
+    cache.ingest(
+      idleSimReport(1, {
+        sims: [
+          {
+            ...person,
+            sim_id: '747341433417958075',
+            sim_name: 'Winston',
+            self: { ...person.self, species: 'SMALLDOG' },
+          },
+          person,
+        ],
+      }),
+    );
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].sim_id).toBe('100');
+  });
+
   it('does nothing while the game is paused', async () => {
     const { cache, cognition } = buildCtx();
     cache.ingest(idleSimReport(1, { paused: true }));
@@ -1433,7 +1477,12 @@ describe('a sleeping sim does not tick', () => {
           {
             ...asleepInBed,
             self: { mood: 'Fine', needs: { energy: -60 }, age: 'ADULT' },
-            activity: { queue: ['sleep_Passive'], running: 'sleep_Passive', in_social: false, running_action_key: 'sleep' },
+            activity: {
+              queue: ['sleep_Passive'],
+              running: 'sleep_Passive',
+              in_social: false,
+              running_action_key: 'sleep',
+            },
           },
         ],
       }),

@@ -152,6 +152,10 @@ export type PlayTTSVoiceOptions = {
   voiceOverrides?: Map<string, string>;
 };
 
+// Monotonic dispatch counter: the renderer orders queued scenes by it, so a scene
+// dispatched earlier can never be leapfrogged by a later one of the same rank
+let voiceDispatchSeq = 0;
+
 export function playTTSLines(
   lines: DialogueLine[],
   sims?: SentientSim[],
@@ -172,6 +176,7 @@ export function playTTSLines(
     castLines = castVoicesForLines(lines, sims, options.voiceType, options.voiceOverrides);
   }
   notifyAllWindows('on-voice', castLines, {
+    seq: ++voiceDispatchSeq,
     paced: options?.paced ?? false,
     preamble: options?.preamble,
     pacedText: options?.pacedText,

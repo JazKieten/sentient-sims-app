@@ -47,7 +47,7 @@ function construct(ctx: ApiContext) {
 
 // E2E test for the Twitch !ask pipeline without a live stream: injects a fake chat
 // message through the exact same path as a real PRIVMSG.
-// curl -X POST /debug/twitch-message -d '{"user":"viewer1","message":"!ask ..."}'
+// curl -X POST /debug/twitch-message -d '{"user":"viewer1","message":"!say ..."}'
 function injectTwitchMessage(ctx: ApiContext) {
   return (req: Request, res: Response) => {
     const { user, message, mod, subscriber, userId } = req.body as {

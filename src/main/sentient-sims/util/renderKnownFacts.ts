@@ -68,11 +68,12 @@ export type RenderKnownFactsInput = {
 
 // Raised from 1000 when the block gained the absence lines and the people-in-your-life
 // section: at 1000 a sim with a large family lost the section that was added to help it.
-export const DEFAULT_FACTS_MAX_CHARS = 1400;
+export const DEFAULT_FACTS_MAX_CHARS = 2200;
 
-// The people section is a prompt, not a census: past about six the block stops being read
-// and starts being skimmed. The caller does the picking; this is the ceiling.
-export const MAX_LIFE_PEOPLE = 6;
+// The people section is a prompt, not a census. The caller does the picking (family, up
+// to ten friends, the strongest romance); this is the ceiling. Raised from six on
+// 2026-09-23: a sim with seven friends at 100 lost her romantic interest off the list.
+export const MAX_LIFE_PEOPLE = 16;
 
 function pretty(value: string): string {
   return value

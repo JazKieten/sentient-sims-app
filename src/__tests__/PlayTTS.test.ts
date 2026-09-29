@@ -207,6 +207,19 @@ describe('playTTSLines', () => {
     expect(lines[0].voiceId).not.toEqual(lines[1].voiceId);
   });
 
+  it('stamps consecutive dispatches with strictly increasing seq', () => {
+    playTTSLines([{ speaker: 'Narrator', text: 'First.' }]);
+    playTTSLines([{ speaker: 'Narrator', text: 'Second.' }]);
+    playTTSLines([{ speaker: 'Narrator', text: 'Third.' }]);
+
+    const seqs = send.mock.calls
+      .filter(([channel]) => channel === 'on-voice')
+      .map((call) => (call[2] as Record<string, unknown>).seq as number);
+    expect(seqs).toHaveLength(3);
+    expect(seqs[1]).toBeGreaterThan(seqs[0]);
+    expect(seqs[2]).toBeGreaterThan(seqs[1]);
+  });
+
   it('prefers a pinned kokoro blend over the automatic cast', () => {
     playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' }], [ricky], {
       voiceType: VoiceType.Kokoro,

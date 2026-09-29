@@ -198,6 +198,32 @@ export class MemoryRepository extends Repository {
     return rows.map(toMemoryEntity);
   }
 
+  // Who each of these memories involves, keyed by memory id. Scene rows carry no participants
+  // of their own, and a sexual act may only be replayed to the sims who were in it
+  // (util/intimateScene). Chunked well under sqlite's bound-variable limit.
+  getParticipantIdsForMemories(memoryIds: string[]): Map<string, string[]> {
+    const byMemory = new Map<string, string[]>();
+    const ids = memoryIds.filter((id) => /^\d+$/.test(id));
+    for (let start = 0; start < ids.length; start += 500) {
+      const chunk = ids.slice(start, start + 500);
+      const rows = this.dbService
+        .getDb()
+        .prepare(
+          `SELECT memory_id, participant_id FROM memory_participants
+           WHERE memory_id IN (${chunk.map(() => '?').join(', ')})`,
+        )
+        .safeIntegers()
+        .all(chunk.map((id) => BigInt(id))) as { memory_id: bigint; participant_id: bigint }[];
+      rows.forEach((row) => {
+        const key = row.memory_id.toString();
+        const list = byMemory.get(key) ?? [];
+        list.push(row.participant_id.toString());
+        byMemory.set(key, list);
+      });
+    }
+    return byMemory;
+  }
+
   // Distinct participant ids that took part in a scene, used to link a scene reflection back to
   // everyone who was present.
   getSceneParticipantIds(locationId: number, since: string): string[] {

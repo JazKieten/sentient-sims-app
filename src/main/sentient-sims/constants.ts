@@ -53,6 +53,24 @@ export const defaultMythoMaxNsfwSystemPrompt = [
   'please narrate the given sexual action by describing their actions and dialogue:',
 ].join(' ');
 
+// WickedWhims with Directed Scenes on. The old prompt asked for third-person prose, which
+// parseDialogueLines cannot read, so 45% of Jasmine's WW scenes (Sep 17-21) aired as a
+// Narrator blob. The animation already shows the act; these are the lines that get voiced.
+// Bench: .claude/sentience-phase-3/ww-model-bench (mod repo), 2026-09-27.
+export const defaultWickedWhimsSceneSystemPrompt = `You are voicing an intimate adult scene in The Sims between {participants} at {location}. The user describes the sexual act the game is showing right now; write what the characters say to each other during it. Be explicit and uninhibited when the moment calls for it, and keep each character true to their personality and mood.
+
+Write only dialogue, one line per character turn, in this exact format:
+CHARACTER: "[what they say]"
+
+or with a short delivery note (how they sound or feel):
+CHARACTER: (breathless) "[what they say]"
+
+Use each character's full name. No narration, no prose, no action descriptions outside the delivery notes.`;
+
+// A WW scene is written whole in one call; the 90-token default cut most of them off
+// mid-line (bench: 74% truncated at 90, 22% at 160 on Llama 3.3 70B)
+export const wickedWhimsMaxResponseTokens = 160;
+
 export const defaultSystemPrompt = `You are narrating a scene in The Sims involving {participants}. Follow the <DIRECTOR> block for tone and scene objective.
 
 Write dialogue with optional delivery notes — how a character feels or how they say the line, not what they are physically doing:
@@ -197,9 +215,9 @@ export const voiceInputMaxRecordMs = 60000;
 // Recordings shorter than this are accidental hotkey taps, not speech
 export const voiceInputMinAudioBytes = 1000;
 
-// Twitch !ask defaults the settings schema needs in every build (the rest of the Twitch
+// Twitch !say defaults the settings schema needs in every build (the rest of the Twitch
 // constants are stream-only: util/twitchConstants.ts)
-export const defaultTwitchCommandWord = '!ask';
+export const defaultTwitchCommandWord = '!say';
 // Voice the app speaks viewer !ask questions with when none is configured (ElevenLabs
 // premade "Charlie": energetic, casual — distinct from the drama-cast sim voices)
 export const defaultTwitchChatVoiceId = 'IKne3meq5aSn9XLyUdCD';

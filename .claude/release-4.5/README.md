@@ -18,6 +18,9 @@ trace model (`models/MemoryTrace`) and `WebGpuDebug` stay core; `InfantsQuiet.te
 flag (plan step 3), the CLAUDE.md trim (step 5), CI for `strip-check.yml` (Actions off on the
 fork), in-game checks, and the core app's missing way into debug mode.
 
+**2026-09-28:** Jasmine's 09-27/28 work merged (4fe664b); strip checks core 745 / stream 998
+green, one name-correction test skipped until the voice-input rework.
+
 Started 2026-09-23, the same evening as the mod map. Goal: prepare `jasmine-phase-3` for release
 as Sentient Sims 4.5 with ONE codebase and build-time tiers (no code fork). Read in this order:
 

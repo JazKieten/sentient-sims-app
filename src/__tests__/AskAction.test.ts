@@ -271,7 +271,7 @@ describe('Ask actions', () => {
   // you can hear") made a named chatter read as an anonymous voice in the sim's head
   it('introduces a Twitch viewer by name in the decision prompt', async () => {
     const generate = mockGeneration();
-    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+    vi.spyOn(autonomyOf(ctx).actionDispatcher, 'dispatch').mockReturnValue('rid-1');
 
     await ctx.ai.runDirectedGeneration(
       buildSoloChatEvent('go read a book'),

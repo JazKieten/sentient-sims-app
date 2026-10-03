@@ -57,6 +57,7 @@ export default function TwitchSettingsComponent() {
   const followersOnly = useSetting<boolean>(SettingsEnum.TWITCH_FOLLOWERS_ONLY, true);
   const clientId = useSetting<string>(SettingsEnum.TWITCH_CLIENT_ID, '');
   const aliases = useSetting<string>(SettingsEnum.TWITCH_SIM_ALIASES, '');
+  const viewerNames = useSetting<string>(SettingsEnum.TWITCH_VIEWER_NAMES, '');
   const speakQuestions = useSetting<boolean>(SettingsEnum.TWITCH_SPEAK_QUESTIONS, true);
   const chatVoiceId = useSetting<string>(SettingsEnum.TWITCH_CHAT_VOICE_ID, '');
   const { ttsApiType, ttsEnabled } = useAISettings();
@@ -193,6 +194,19 @@ export default function TwitchSettingsComponent() {
               placeholder="Grim Reaper=153992008478429871"
               onChange={(change) => void aliases.setSetting(change.target.value)}
               helperText="Name=simId per line. Lets chat !say to sims the game reports without a name (service NPCs like the Grim Reaper) — even when they aren't on the lot."
+            />
+          </Stack>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 130 }}>Viewer names:</Typography>
+            <TextField
+              size="small"
+              fullWidth
+              multiline
+              minRows={1}
+              value={viewerNames.value}
+              placeholder="trappedbutterfly=Kean"
+              onChange={(change) => void viewerNames.setSetting(change.target.value)}
+              helperText="twitchname=Name per line. The sims call that viewer by the new name instead of their Twitch name."
             />
           </Stack>
           {status?.lastEvent ? (

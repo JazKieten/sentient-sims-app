@@ -119,5 +119,15 @@ export function buildTwitchAskEvent(sim: SentientSim, question: string, location
 // the row's speaker prefix ("The Voice: ..." renders a section called "The"), so "Chat"
 // gives viewers' questions their own correctly-named section with no mod change.
 export const TWITCH_CHAT_SPEAKER = 'Chat';
-// What the sim is told is speaking to them (rides DirectedGenerationOptions.playerLineFlavor)
-export const TWITCH_CHAT_FLAVOR = 'a friendly, curious crowd watching their life that only they can hear';
+// What the sim is told is speaking to them (rides DirectedGenerationOptions.playerLineFlavor).
+// It names the viewer: live 2026-09-30 a viewer asked Adrian "can you see my name? who am
+// i?" and he answered "No, I don't see your name, you're just a mysterious voice in my
+// head" — the transcript labelled every line "Chat (SentientSims)", but the old flavor
+// ("one of a friendly, curious crowd ... that only they can hear") never said the label
+// was a name, so the director rewrote the speaker as "a mysterious voice".
+export function twitchChatFlavor(viewer: string): string {
+  return `a viewer called ${viewer}, one of the friendly, curious crowd watching their life through a screen. They cannot be seen, but their name is known and they can be spoken to by it; other viewers, each with a name of their own, may chime in too`;
+}
+// How the ask-action decision prompt introduces the viewer ("Chat (nova) — <this> — just
+// asked you..."); the player-persona wording there is "a voice only you can hear"
+export const TWITCH_CHAT_HEARD_AS = 'a viewer you cannot see but know by name';

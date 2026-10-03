@@ -124,6 +124,8 @@ export enum SettingsEnum {
   // "Name=simId" lines: extra !ask targets for sims the game reports namelessly (service
   // NPCs like the Grim Reaper) — reachable by chat even when not on the lot
   TWITCH_SIM_ALIASES = 'twitchSimAliases',
+  // "twitchname=Name" lines: what the sims call a viewer instead of their Twitch name
+  TWITCH_VIEWER_NAMES = 'twitchViewerNames',
   TWITCH_CLIENT_ID = 'twitchClientId',
   TWITCH_AUTH = 'twitchAuth', // stored device-flow tokens + broadcaster identity
   // Speak each viewer's typed question aloud in a dedicated ElevenLabs voice before the reply

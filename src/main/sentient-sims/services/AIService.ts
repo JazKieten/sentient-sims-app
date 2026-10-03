@@ -59,7 +59,9 @@ import {
   buildSceneReviewSystemPrompt,
   buildSceneSalienceSystemPrompt,
   buildSpeechSystemPrompt,
+  deceptionFraming,
   DIRECTOR_REVIEW_SYSTEM_PROMPT,
+  performersAlreadyTalking,
   withContentFreeHint,
 } from '../pipeline/prompts/scene';
 import { buildDiaryOnlySystemPrompt } from '../pipeline/prompts/consolidation';
@@ -344,11 +346,21 @@ export type DirectedGenerationOptions = {
   // What the playerLine's speaker IS, for speakers outside the player-voice personas
   // (e.g. Twitch 'Chat'). Overrides the persona flavor sentence.
   playerLineFlavor?: string;
-  // Display-only speaker for the game (e.g. "Chat (viewer)"): decorates the scene-line
-  // subtitle and the mod-bound memory copy; the model and the stored row see only
-  // playerLine.speaker. Keep the first word identical to playerLine.speaker — the mod's
-  // memories window sections on it, and its 30s subtitle dedupe compares full strings.
+  // How the ask-action decision prompt introduces the speaker in apposition ("Chat (nova)
+  // — a viewer you cannot see but know by name — just asked you..."). Only read when the
+  // line turns out to be a request; the persona wording ("a voice only you can hear")
+  // is the default.
+  playerLineHeardAs?: string;
+  // Display-only speaker for the game (e.g. "Chat (viewer, to Lillie)"): decorates the
+  // scene-line subtitle and the mod-bound memory copy; the model and the stored row see
+  // playerLine.speaker (which may itself carry the viewer, "Chat (viewer)"). Keep the first
+  // word identical to playerLine.speaker — the mod's memories window sections on it, and
+  // its 30s subtitle dedupe compares full strings.
   playerLineDisplaySpeaker?: string;
+  // The speaker the conversation THREAD is keyed by when it differs from playerLine.speaker:
+  // Twitch passes "Chat" here while the model's speaker names the viewer, so every viewer
+  // resumes the one thread the sim is having with chat instead of splitting it per viewer.
+  playerLineThreadSpeaker?: string;
   directorModel?: string;
   // Parallel to event.sentient_sims order
   actorModels?: (string | undefined)[];
@@ -1563,6 +1575,10 @@ ${factsBlock}
     // between friends". Anything a sim can read back uses this; only the model sees
     // sceneAction.
     let displayAction: string | undefined;
+    // A spoken lie gives each side its own action (deceptionFraming): the listener must never
+    // read "a false story". Unset, every performer and the director get sceneAction.
+    let actionFor: ((name: string) => string) | undefined;
+    let directorAction: string | undefined;
     if (continuingScene && playerLine) {
       // The chat window's Continue inside an open thread: the sim keeps talking to the
       // player, who said nothing new — or wraps up
@@ -1586,24 +1602,48 @@ ${factsBlock}
         sceneAction += ` ${playerLine.speaker} is ${flavor}. Their words are heard only by ${formatListToString(performerNames)}; nobody else in the room hears them.`;
       }
     } else {
-      sceneAction = promptRequest.action ?? options.action;
-      displayAction = sceneAction;
-      // J6: a content-free social (inside joke, story, gossip) says where its material may
-      // come from. Model-only, after displayAction is taken: the memory row keeps the
-      // beat as it happened, never a stage direction (the 08-16 lesson above).
-      sceneAction = withContentFreeHint(sceneAction, (event as { interaction_name?: string }).interaction_name);
+      displayAction = promptRequest.action ?? options.action;
+      const interactionName = (event as { interaction_name?: string }).interaction_name;
       // V-5b: a fresh scene OPENS — the actors are just starting this conversation.
       // Without it they launched mid-thought ("That reminds me of a joke:" before the
-      // joke) because nothing told them this was the first exchange.
-      if (sceneAction && !previously) {
-        sceneAction = `${sceneAction} Open the scene: the characters are just starting this conversation — the first line begins it, nothing was said before.`;
-      }
+      // joke) because nothing told them this was the first exchange. Fresh means these
+      // performers have not been talking, not that nothing at all was said here before.
+      const opensScene = !performersAlreadyTalking(previously, performerNames);
       // N-1: the interaction's own valence frames the beat. Without it the model read
       // 'YellAT' as a friendly chat (playtest 08-04..08-14) — the pre_action text alone
       // was not enough once the director chose a warm genre.
       const valenceClause = valenceFraming((event as { valence?: string }).valence);
-      if (sceneAction && valenceClause) {
-        sceneAction = `${sceneAction} ${valenceClause}`;
+      const frame = (base: string | undefined, withValence: boolean): string | undefined => {
+        // J6: a content-free social (inside joke, story, gossip) says where its material may
+        // come from. Model-only, after displayAction is taken: the memory row keeps the
+        // beat as it happened, never a stage direction (the 08-16 lesson above).
+        let action = withContentFreeHint(base, interactionName);
+        if (action && opensScene) {
+          action += previously
+            ? ' Open the scene: the characters are just starting this conversation — the first line begins it. The lines above were an earlier conversation, not part of this one.'
+            : ' Open the scene: the characters are just starting this conversation — the first line begins it, nothing was said before.';
+        }
+        if (action && withValence && valenceClause) {
+          action += ` ${valenceClause}`;
+        }
+        return action;
+      };
+      sceneAction = frame(displayAction, true);
+
+      const liar = event.sentient_sims[0]?.name;
+      const target = event.sentient_sims[1]?.name;
+      const deception =
+        sceneAction && performers.length === 2 && liar && target
+          ? deceptionFraming(interactionName, liar, target)
+          : undefined;
+      if (sceneAction && deception) {
+        const liarAction = `${sceneAction} ${deception.liarHint}`;
+        // No valence for the target: "a HOSTILE beat" tells them as much as "false story"
+        const targetAction = frame(deception.targetView, false) ?? deception.targetView;
+        actionFor = (name) => (name === target ? targetAction : liarAction);
+        directorAction =
+          `${liarAction}\n\n${target} does not know it is a lie. Only ${liar}'s private briefing may say so; ` +
+          `the shared briefing and ${target}'s briefing describe the beat as ${target} experiences it: "${deception.targetView}"`;
       }
     }
 
@@ -1649,7 +1689,7 @@ ${factsBlock}
       const briefing = await this.runOneShot(
         'Director Briefing',
         briefingSystemPrompt,
-        `${previouslyBlock}${sceneAction}`,
+        `${previouslyBlock}${directorAction ?? sceneAction}`,
         500,
         options.directorModel,
         AIActionType.DIRECTED_SCENE_DIRECTOR,
@@ -1741,7 +1781,7 @@ ${factsBlock}
       });
 
       const conversationSoFar = toTranscript(sceneLines);
-      const actorUserText = `${previouslyBlock}${sceneAction}${
+      const actorUserText = `${previouslyBlock}${actionFor?.(sim.name) ?? sceneAction}${
         conversationSoFar ? `\n\nThe conversation so far:\n${conversationSoFar}` : ''
       }`;
       if (performedLines.length > 0 && overBudget()) {
@@ -2370,18 +2410,19 @@ ${factsBlock}
       return undefined;
     }
     const simIds = performers.map((sim) => sim.sim_id);
+    const threadSpeaker = options.playerLineThreadSpeaker ?? playerLine.speaker;
     if (options.continueScene) {
-      return this.openConversation(simIds, playerLine.speaker);
+      return this.openConversation(simIds, threadSpeaker);
     }
     try {
       const { conversation, resumed } = this.ctx.playerConversations.begin({
         simIds,
         simNames: performers.map((sim) => sim.name),
-        speaker: playerLine.speaker,
+        speaker: threadSpeaker,
       });
       if (resumed) {
         log.info(
-          `[Conversation] ${playerLine.speaker} -> ${performers.map((sim) => sim.name).join(' & ')}: ` +
+          `[Conversation] ${threadSpeaker} -> ${performers.map((sim) => sim.name).join(' & ')}: ` +
             `continuing thread ${conversation.sceneId} (${conversation.lines.length} lines so far)`,
         );
       }

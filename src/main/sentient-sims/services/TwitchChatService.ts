@@ -28,11 +28,12 @@ import {
 import {
   SimTargetCandidate,
   SimTargetResolution,
-  TWITCH_CHAT_FLAVOR,
+  TWITCH_CHAT_HEARD_AS,
   TWITCH_CHAT_SPEAKER,
   buildAskSentientSim,
   buildTwitchAskEvent,
   resolveSimTarget,
+  twitchChatFlavor,
 } from '../util/twitchSimTarget';
 import { isWebSocketConnected } from '../websocketServer';
 import { ApiContext } from './ApiContext';
@@ -253,7 +254,10 @@ export class TwitchChatService {
         return;
       }
       if (message.command === 'PRIVMSG') {
-        const viewer = message.tags['display-name'] || message.nick || 'viewer';
+        const twitchName = message.tags['display-name'] || message.nick || 'viewer';
+        const names = this.ctx.settings.twitchViewerNames;
+        const viewer =
+          names.get(twitchName.toLowerCase()) ?? names.get((message.nick ?? '').toLowerCase()) ?? twitchName;
         this.handleChatMessage(viewer, message.tags, message.trailing ?? '');
       }
     });
@@ -512,14 +516,18 @@ export class TwitchChatService {
     const speakQuestion =
       settings.twitchSpeakQuestions && settings.ttsEnabled && settings.ttsApiType === ApiType.ElevenLabs;
     // saveMemory: no mod round trip exists on this path to persist the exchange.
-    // The display speaker credits the asking viewer in-game ("Chat (viewer): ...") while
-    // the model and the stored memory row only ever see plain "Chat".
+    // The model sees WHICH viewer is talking ("Chat (viewer) just said ...") so the sim can
+    // tell one chatter from another and remember who said what; the display speaker adds
+    // the ", to Lillie" credit for the game, and the thread speaker stays plain "Chat" so
+    // every viewer shares one conversation with the sim instead of one thread each.
     await this.ctx.ai.runDirectedGeneration(
       event,
       {
-        playerLine: { speaker: TWITCH_CHAT_SPEAKER, text: target.question },
-        playerLineFlavor: TWITCH_CHAT_FLAVOR,
+        playerLine: { speaker: `${TWITCH_CHAT_SPEAKER} (${viewerTag})`, text: target.question },
+        playerLineFlavor: twitchChatFlavor(viewerTag),
+        playerLineHeardAs: TWITCH_CHAT_HEARD_AS,
         playerLineDisplaySpeaker: `${TWITCH_CHAT_SPEAKER} (${displayTag})`,
+        playerLineThreadSpeaker: TWITCH_CHAT_SPEAKER,
         saveMemory: true,
         ...(speakQuestion
           ? {

@@ -4,8 +4,9 @@ import { PlayerConversationService } from '../services/PlayerConversationService
 import {
   buildAskSentientSim,
   buildTwitchAskEvent,
-  TWITCH_CHAT_FLAVOR,
+  TWITCH_CHAT_HEARD_AS,
   TWITCH_CHAT_SPEAKER,
+  twitchChatFlavor,
 } from '../util/twitchSimTarget';
 import { countEvasive, PlayerThreadFixture } from './playerThreadFixtures';
 
@@ -63,11 +64,13 @@ export async function runPlayerThread(
   const entry = ctx.simStateCache.getSim(simId);
   const sim = buildAskSentientSim({ simId, name: fixture.simName, description, isActive: entry?.is_active });
   const isChat = fixture.speaker === 'Chat';
-  const speaker = isChat ? TWITCH_CHAT_SPEAKER : ctx.settings.playerSpeakerName;
+  // Chat lines name a viewer the way TwitchChatService does, sharing one "Chat" thread
+  const threadSpeaker = isChat ? TWITCH_CHAT_SPEAKER : ctx.settings.playerSpeakerName;
+  const speaker = isChat ? `${TWITCH_CHAT_SPEAKER} (viewer)` : threadSpeaker;
 
   // A clean thread every run, so a replay does not resume the last one
   ctx.playerConversations.closeAll('reset');
-  const key = PlayerConversationService.keyFor([simId], speaker);
+  const key = PlayerConversationService.keyFor([simId], threadSpeaker);
 
   const turns: PlayerThreadTurn[] = [];
   const actions: PlayerThreadRun['actions'] = [];
@@ -87,7 +90,9 @@ export async function runPlayerThread(
       event,
       {
         playerLine: { speaker, text },
-        playerLineFlavor: isChat ? TWITCH_CHAT_FLAVOR : undefined,
+        playerLineFlavor: isChat ? twitchChatFlavor('viewer') : undefined,
+        playerLineHeardAs: isChat ? TWITCH_CHAT_HEARD_AS : undefined,
+        playerLineThreadSpeaker: threadSpeaker,
         saveMemory: false,
         suggestActionsOnly: true,
         onConversationAction: (verdict) => {

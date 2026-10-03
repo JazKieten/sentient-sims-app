@@ -283,9 +283,9 @@ export class AskActionService {
 
     const speakerIs = flavor ? ` ${playerLine.speaker} is ${flavor}.` : '';
     // "a voice" reads wrong once the speaker has a name of their own ("Jaz — a voice...")
-    const heardAs = this.ctx.settings.playerVoicePersonaName
-      ? 'someone only you can hear'
-      : 'a voice only you can hear';
+    const heardAs =
+      options.playerLineHeardAs ??
+      (this.ctx.settings.playerVoicePersonaName ? 'someone only you can hear' : 'a voice only you can hear');
     // A consent decision turns on who is asking and who it involves: refusing to flirt
     // with your own child is a fact question, not a mood question. The target is the
     // focus so the block carries the relationship that matters here.

@@ -433,6 +433,10 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: '',
       },
+      [SettingsEnum.TWITCH_VIEWER_NAMES.toString()]: {
+        type: 'string',
+        default: '',
+      },
       [SettingsEnum.TWITCH_AUTH.toString()]: {
         type: 'object',
         default: {},
@@ -1368,6 +1372,23 @@ export class SettingsService {
         const simId = line.slice(eq + 1).trim();
         return name && /^\d+$/.test(simId) ? [{ name, simId }] : [];
       });
+  }
+
+  // "twitchname=Name" per line (or comma-separated), keyed lowercase: a viewer who
+  // wants to be called something other than their Twitch name
+  get twitchViewerNames(): Map<string, string> {
+    const names = new Map<string, string>();
+    (this.get(SettingsEnum.TWITCH_VIEWER_NAMES) as string)
+      .split(/[\r\n,]+/)
+      .forEach((line) => {
+        const eq = line.indexOf('=');
+        const twitchName = line.slice(0, eq).trim().replace(/^@/, '').toLowerCase();
+        const name = line.slice(eq + 1).trim();
+        if (eq > 0 && twitchName && name) {
+          names.set(twitchName, name);
+        }
+      });
+    return names;
   }
 
   get twitchAuth(): TwitchStoredAuth {

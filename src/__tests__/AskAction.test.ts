@@ -266,6 +266,31 @@ describe('Ask actions', () => {
     expect(opts?.modDisplayAction).toEqual('Chat (viewer): go read a book');
   });
 
+  // A viewer's request introduces the viewer by name: the persona wording ("a voice only
+  // you can hear") made a named chatter read as an anonymous voice in the sim's head
+  it('introduces a Twitch viewer by name in the decision prompt', async () => {
+    const generate = mockGeneration();
+    vi.spyOn(ctx.actionDispatcher, 'dispatch').mockReturnValue('rid-1');
+
+    await ctx.ai.runDirectedGeneration(
+      buildSoloChatEvent('go read a book'),
+      {
+        playerLine: { speaker: 'Chat (nova)', text: 'go read a book' },
+        playerLineFlavor: 'a viewer called nova, one of the friendly, curious crowd watching their life',
+        playerLineHeardAs: 'a viewer you cannot see but know by name',
+        playerLineDisplaySpeaker: 'Chat (nova)',
+      },
+      { priority: true },
+    );
+
+    const decisionPrompt = generate.mock.calls
+      .map(([request]) => request.messages.find((message) => message.role === 'system')?.content ?? '')
+      .find((prompt) => prompt.includes('just asked you to do something'));
+    expect(decisionPrompt).toContain('Chat (nova) — a viewer you cannot see but know by name — just asked you');
+    expect(decisionPrompt).toContain('Chat (nova) is a viewer called nova');
+    expect(decisionPrompt).not.toContain('a voice only you can hear');
+  });
+
   // The chat voice narrating the question is the whole reason a viewer's ask reads as a
   // viewer's ask on stream. It airs on the ordinary talk path; before this it went silent
   // the moment triage said "do", so the same question was narrated or not depending on

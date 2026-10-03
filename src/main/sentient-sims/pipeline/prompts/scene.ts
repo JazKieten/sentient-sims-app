@@ -36,6 +36,7 @@ export function buildBriefingSystemPrompt(context: BriefingPromptContext): strin
     : '';
   const lengthRule = playerFacing
     ? `- Direct them to answer FULLY and PLAINLY: this is someone talking to the character directly, and a dodge, a question back instead of an answer, or a bare "I don't know" is a failed performance. A real answer with its reasons can run several sentences.
+- The speaker has a name. Refer to them in the shared briefing and the private briefing by the name the user message gives them, exactly as written ("Chat (nova)" is a viewer called nova who cannot be seen but is known by name), never as "a voice", "a mysterious voice" or "someone".
 - The Want line must come from the character's <STATUS> and <TODAYS_PLAN> blocks when they are present (their current wants, needs and today's goals), never invented. When asked what they want, that is what they answer with.`
     : '- Direct them to be BRIEF: real conversation is quick short lines, not speeches. An actor who needs more than one short sentence is overacting.';
 

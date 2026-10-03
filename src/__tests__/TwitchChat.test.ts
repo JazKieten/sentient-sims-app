@@ -50,7 +50,9 @@ type GenerationCall = [
   {
     playerLine: { speaker: string; text: string };
     playerLineFlavor?: string;
+    playerLineHeardAs?: string;
     playerLineDisplaySpeaker?: string;
+    playerLineThreadSpeaker?: string;
     saveMemory?: boolean;
     speakPlayerLine?: { voiceId: string; spokenText: string };
   },
@@ -327,10 +329,14 @@ describe('TwitchChatService', () => {
     expect(event.sentient_sims[0].sim_id).toBe('222');
     expect(event.sentient_sims[0].name).toBe('Bella Goth');
     expect(event.event_type).toBe('chat');
-    expect(options.playerLine).toEqual({ speaker: 'Chat', text: 'how is ‹your› day?' });
+    // The model sees which viewer is talking; the thread they share is keyed by plain "Chat"
+    expect(options.playerLine).toEqual({ speaker: 'Chat (nova)', text: 'how is ‹your› day?' });
+    // ...and is told the label IS a name it can use (2026-09-30: "I don't see your name")
+    expect(options.playerLineFlavor).toContain('a viewer called nova');
     expect(options.playerLineFlavor).toContain('crowd');
-    // Viewer credit is display-only: the model's playerLine stays plain "Chat"
+    expect(options.playerLineHeardAs).toBe('a viewer you cannot see but know by name');
     expect(options.playerLineDisplaySpeaker).toBe('Chat (nova)');
+    expect(options.playerLineThreadSpeaker).toBe('Chat');
     expect(options.saveMemory).toBe(true);
     expect(playback.priority).toBe(true);
     service.shutdown();
@@ -405,9 +411,10 @@ describe('TwitchChatService', () => {
     expect(event.sentient_sims[0].description).toBe('a sweet fairy artist');
     const [, options] = runDirectedGeneration.mock.calls[0] as GenerationCall;
     expect(options.playerLine.text).toBe('what do you dream about?');
-    // Targeted asks credit the target sim in the display tag; the model still sees "Chat"
-    expect(options.playerLine.speaker).toBe('Chat');
+    // Targeted asks credit the target sim in the display tag only; the model sees the viewer
+    expect(options.playerLine.speaker).toBe('Chat (nova)');
     expect(options.playerLineDisplaySpeaker).toBe('Chat (nova, to Lillie)');
+    expect(options.playerLineThreadSpeaker).toBe('Chat');
 
     service.shutdown();
   });
@@ -653,6 +660,19 @@ describe('TwitchChatService', () => {
     expect(runDirectedGeneration).toHaveBeenCalledTimes(1);
     const [, options] = runDirectedGeneration.mock.calls[0] as GenerationCall;
     expect(options.playerLine.text).toBe('debug question?');
+    service.shutdown();
+  });
+
+  it('calls a viewer by their chosen name instead of their Twitch name', () => {
+    const { settingsService, sockets, service, runDirectedGeneration } = twitchContext();
+    settingsService.set(SettingsEnum.TWITCH_VIEWER_NAMES, 'TrappedButterfly=Kean');
+    connectSocket(sockets[0]);
+
+    privmsg(sockets[0], '!say hi there?', '@display-name=Trappedbutterfly ', 'trappedbutterfly');
+    const [, options] = runDirectedGeneration.mock.calls[0] as GenerationCall;
+    expect(options.playerLine.speaker).toBe('Chat (Kean)');
+    expect(options.playerLineFlavor).toContain('a viewer called Kean');
+    expect(options.playerLineFlavor).not.toMatch(/trappedbutterfly/i);
     service.shutdown();
   });
 

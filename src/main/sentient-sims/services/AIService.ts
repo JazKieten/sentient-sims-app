@@ -323,11 +323,21 @@ export type DirectedGenerationOptions = {
   // What the playerLine's speaker IS, for speakers outside the player-voice personas
   // (e.g. Twitch 'Chat'). Overrides the persona flavor sentence.
   playerLineFlavor?: string;
-  // Display-only speaker for the game (e.g. "Chat (viewer)"): decorates the scene-line
-  // subtitle and the mod-bound memory copy; the model and the stored row see only
-  // playerLine.speaker. Keep the first word identical to playerLine.speaker — the mod's
-  // memories window sections on it, and its 30s subtitle dedupe compares full strings.
+  // How the ask-action decision prompt introduces the speaker in apposition ("Chat (nova)
+  // — a viewer you cannot see but know by name — just asked you..."). Only read when the
+  // line turns out to be a request; the persona wording ("a voice only you can hear")
+  // is the default.
+  playerLineHeardAs?: string;
+  // Display-only speaker for the game (e.g. "Chat (viewer, to Lillie)"): decorates the
+  // scene-line subtitle and the mod-bound memory copy; the model and the stored row see
+  // playerLine.speaker (which may itself carry the viewer, "Chat (viewer)"). Keep the first
+  // word identical to playerLine.speaker — the mod's memories window sections on it, and
+  // its 30s subtitle dedupe compares full strings.
   playerLineDisplaySpeaker?: string;
+  // The speaker the conversation THREAD is keyed by when it differs from playerLine.speaker:
+  // Twitch passes "Chat" here while the model's speaker names the viewer, so every viewer
+  // resumes the one thread the sim is having with chat instead of splitting it per viewer.
+  playerLineThreadSpeaker?: string;
   directorModel?: string;
   // Parallel to event.sentient_sims order
   actorModels?: (string | undefined)[];
@@ -2443,18 +2453,19 @@ ${factsBlock}
       return undefined;
     }
     const simIds = performers.map((sim) => sim.sim_id);
+    const threadSpeaker = options.playerLineThreadSpeaker ?? playerLine.speaker;
     if (options.continueScene) {
-      return this.openConversation(simIds, playerLine.speaker);
+      return this.openConversation(simIds, threadSpeaker);
     }
     try {
       const { conversation, resumed } = this.ctx.playerConversations.begin({
         simIds,
         simNames: performers.map((sim) => sim.name),
-        speaker: playerLine.speaker,
+        speaker: threadSpeaker,
       });
       if (resumed) {
         log.info(
-          `[Conversation] ${playerLine.speaker} -> ${performers.map((sim) => sim.name).join(' & ')}: ` +
+          `[Conversation] ${threadSpeaker} -> ${performers.map((sim) => sim.name).join(' & ')}: ` +
             `continuing thread ${conversation.sceneId} (${conversation.lines.length} lines so far)`,
         );
       }

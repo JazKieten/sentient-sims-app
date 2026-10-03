@@ -1379,16 +1379,14 @@ export class SettingsService {
   // wants to be called something other than their Twitch name
   get twitchViewerNames(): Map<string, string> {
     const names = new Map<string, string>();
-    (this.get(SettingsEnum.TWITCH_VIEWER_NAMES) as string)
-      .split(/[\r\n,]+/)
-      .forEach((line) => {
-        const eq = line.indexOf('=');
-        const twitchName = line.slice(0, eq).trim().replace(/^@/, '').toLowerCase();
-        const name = line.slice(eq + 1).trim();
-        if (eq > 0 && twitchName && name) {
-          names.set(twitchName, name);
-        }
-      });
+    (this.get(SettingsEnum.TWITCH_VIEWER_NAMES) as string).split(/[\r\n,]+/).forEach((line) => {
+      const eq = line.indexOf('=');
+      const twitchName = line.slice(0, eq).trim().replace(/^@/, '').toLowerCase();
+      const name = line.slice(eq + 1).trim();
+      if (eq > 0 && twitchName && name) {
+        names.set(twitchName, name);
+      }
+    });
     return names;
   }
 

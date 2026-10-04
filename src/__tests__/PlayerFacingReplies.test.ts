@@ -6,7 +6,14 @@ import {
   buildSpeechSystemPrompt,
 } from 'main/sentient-sims/pipeline/prompts/scene';
 import { parseActorPerformance, parseSceneScores } from 'main/sentient-sims/services/AIService';
-import { splitLinesForAiring, splitTextForAiring } from 'main/sentient-sims/util/airingChunks';
+import {
+  AIRING_CHUNK_MAX_CHARS,
+  AIRING_CHUNK_MAX_CHARS_V4,
+  airingChunkMaxChars,
+  splitLinesForAiring,
+  splitTextForAiring,
+} from 'main/sentient-sims/util/airingChunks';
+import { ApiType } from 'main/sentient-sims/models/ApiType';
 import { formatSelfStatus } from 'main/sentient-sims/util/formatSelfStatus';
 
 // 2026-09-21: a reply to the player (chat window, voice, conscience, Twitch) is a full,
@@ -157,6 +164,27 @@ describe('airing a long reply in chunks', () => {
     });
     // Nothing lost, nothing invented
     expect(chunks.map((chunk) => chunk.text).join(' ')).toBe(reply);
+  });
+
+  it('airs bigger pieces on Eleven v4 only, and stays under the mod subtitle cap', () => {
+    expect(airingChunkMaxChars(ApiType.ElevenLabs, 'eleven_v4')).toEqual(AIRING_CHUNK_MAX_CHARS_V4);
+    expect(airingChunkMaxChars(ApiType.ElevenLabs, 'eleven_v4_turbo')).toEqual(AIRING_CHUNK_MAX_CHARS_V4);
+    expect(airingChunkMaxChars(ApiType.ElevenLabs, 'eleven_v3')).toEqual(AIRING_CHUNK_MAX_CHARS);
+    expect(airingChunkMaxChars(ApiType.ElevenLabs, 'eleven_flash_v2_5')).toEqual(AIRING_CHUNK_MAX_CHARS);
+    // Kokoro with the v4 model name stored on the (unused) ElevenLabs settings
+    expect(airingChunkMaxChars(ApiType.Kokoro, 'eleven_v4')).toEqual(AIRING_CHUNK_MAX_CHARS);
+    expect(airingChunkMaxChars(undefined, undefined)).toEqual(AIRING_CHUNK_MAX_CHARS);
+    expect(AIRING_CHUNK_MAX_CHARS_V4).toBeGreaterThan(AIRING_CHUNK_MAX_CHARS);
+    expect(AIRING_CHUNK_MAX_CHARS_V4).toBeLessThan(320);
+  });
+
+  it('cuts the same reply into fewer pieces at the v4 cap', () => {
+    const atDefault = splitLinesForAiring([{ speaker: 'Jake Flores', text: reply }], AIRING_CHUNK_MAX_CHARS);
+    const atV4 = splitLinesForAiring([{ speaker: 'Jake Flores', text: reply }], AIRING_CHUNK_MAX_CHARS_V4);
+    expect(atV4.length).toBeLessThan(atDefault.length);
+    atV4.forEach((chunk) => {
+      expect(chunk.text.length).toBeLessThanOrEqual(AIRING_CHUNK_MAX_CHARS_V4 + 24);
+    });
   });
 
   it('leaves a short line alone', () => {

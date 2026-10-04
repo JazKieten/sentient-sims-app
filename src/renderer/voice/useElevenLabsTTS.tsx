@@ -12,6 +12,7 @@ import useSetting from 'renderer/hooks/useSetting';
 import { defaultElevenLabsTTSSettings, ElevenLabsTTSSettings } from 'main/sentient-sims/models/ElevenLabsTTSSettings';
 import {
   buildElevenLabsLineRequest,
+  ELEVENLABS_MAX_PREVIOUS_REQUEST_IDS,
   elevenLabsLineText,
   usesDialogueEndpoint,
 } from 'main/sentient-sims/clients/ElevenLabsTTSRequest';
@@ -22,6 +23,30 @@ import { pacedDelay } from './playbackClock';
 import { TTSHook } from './TTSHook';
 
 type LineContext = { previousText?: string; nextText?: string };
+
+type FetchOptions = {
+  context?: LineContext;
+  // request-id headers of the lines just before this one in the same voice (the
+  // chunks of one long reply): ElevenLabs carries the delivery across them
+  previousRequestIds?: string[];
+  // Called as soon as the response headers are in, with this request's own id, so the
+  // next chunk's request can be built while this one's audio is still downloading
+  onRequestId?: (requestId: string | undefined) => void;
+};
+
+// Logged once per app run: the header's absence is a finding, not a per-line event
+let requestIdHeaderMissingLogged = false;
+
+function readRequestId(response: Response, voiceId: string): string | undefined {
+  const requestId = response.headers.get('request-id') ?? undefined;
+  if (requestId) {
+    log.info(`[TTS] ElevenLabs request-id=${requestId} voice=${voiceId}`);
+  } else if (!requestIdHeaderMissingLogged) {
+    requestIdHeaderMissingLogged = true;
+    log.warn('[TTS] ElevenLabs response carried no request-id header; chunked lines will not be stitched');
+  }
+  return requestId;
+}
 
 export function useElevenLabsTTS(): TTSHook {
   const aiSettings = useAISettings();
@@ -39,15 +64,16 @@ export function useElevenLabsTTS(): TTSHook {
   // v4 goes to Text to Dialogue (one line per request, neighbours as context); every
   // other model to Text to Speech. Both builders return the full URL, /stream included.
   const buildRequest = useCallback(
-    (text: string, voiceId: string, context?: LineContext, stream?: boolean) =>
+    (text: string, voiceId: string, options?: FetchOptions, stream?: boolean) =>
       buildElevenLabsLineRequest({
         text,
         voiceId,
         endpoint: elevenLabsEndpointSetting.value,
         apiKey: elevenLabsKeySetting.value,
         settings: elevenLabsTTSSettings.value,
-        previousText: context?.previousText,
-        nextText: context?.nextText,
+        previousText: options?.context?.previousText,
+        nextText: options?.context?.nextText,
+        previousRequestIds: options?.previousRequestIds,
         stream,
       }),
     [elevenLabsEndpointSetting.value, elevenLabsKeySetting.value, elevenLabsTTSSettings.value],
@@ -55,15 +81,17 @@ export function useElevenLabsTTS(): TTSHook {
   const endpointName = usesDialogueEndpoint(elevenLabsTTSSettings.value.model) ? 'dialogue' : 'tts';
 
   const fetchAudioUrl = useCallback(
-    async (text: string, voiceId: string, context?: LineContext): Promise<string> => {
-      const { url, headers, body } = buildRequest(text, voiceId, context);
+    async (text: string, voiceId: string, options?: FetchOptions): Promise<string> => {
+      const { url, headers, body } = buildRequest(text, voiceId, options);
       const startedAt = Date.now();
+      const stitched = options?.previousRequestIds?.length ? ` stitched=${options.previousRequestIds.length}` : '';
       log.info(
-        `[TTS] ElevenLabs request voice=${voiceId} model=${elevenLabsTTSSettings.value.model} endpoint=${endpointName} chars=${text.length}`,
+        `[TTS] ElevenLabs request voice=${voiceId} model=${elevenLabsTTSSettings.value.model} endpoint=${endpointName} chars=${text.length}${stitched}`,
       );
 
       const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
       log.info(`[TTS] ElevenLabs response voice=${voiceId} status=${response.status} in ${Date.now() - startedAt}ms`);
+      options?.onRequestId?.(response.ok ? readRequestId(response, voiceId) : undefined);
 
       if (!response.ok) {
         throw new Error(elevenLabsErrorMessage(response.status, await response.text().catch(() => '')));
@@ -77,8 +105,8 @@ export function useElevenLabsTTS(): TTSHook {
   // The /stream endpoint starts returning audio bytes ~0.6-0.8s in even on v3 (vs ~2-4s
   // for the whole file), so the first spoken line can start playing 1-3s sooner.
   const fetchAudioStream = useCallback(
-    async (text: string, voiceId: string, context?: LineContext): Promise<ReadableStream<Uint8Array>> => {
-      const { url, headers, body } = buildRequest(text, voiceId, context, true);
+    async (text: string, voiceId: string, options?: FetchOptions): Promise<ReadableStream<Uint8Array>> => {
+      const { url, headers, body } = buildRequest(text, voiceId, options, true);
       const startedAt = Date.now();
       log.info(
         `[TTS] ElevenLabs stream request voice=${voiceId} model=${elevenLabsTTSSettings.value.model} endpoint=${endpointName} chars=${text.length}`,
@@ -88,6 +116,7 @@ export function useElevenLabsTTS(): TTSHook {
       log.info(
         `[TTS] ElevenLabs stream first byte voice=${voiceId} status=${response.status} in ${Date.now() - startedAt}ms`,
       );
+      options?.onRequestId?.(response.ok ? readRequestId(response, voiceId) : undefined);
 
       if (!response.ok || !response.body) {
         throw new Error(elevenLabsErrorMessage(response.status, await response.text().catch(() => '')));
@@ -156,8 +185,9 @@ export function useElevenLabsTTS(): TTSHook {
       const speakable = lines.filter((line) => line.text.trim());
 
       const lineText = (line: DialogueLine): string => elevenLabsLineText(line, elevenLabsTTSSettings.value.model);
+      const voiceOf = (line: DialogueLine): string => line.voiceId ?? elevenLabsTTSSettings.value.voice;
       const lineVoice = (line: DialogueLine): string => {
-        const voiceId = line.voiceId ?? elevenLabsTTSSettings.value.voice;
+        const voiceId = voiceOf(line);
         // Voice inconsistencies are only debuggable if the cast is visible in the log
         log.info(`[TTS] Line for ${line.speaker}: voice=${voiceId}${line.voiceId ? '' : ' (default, no cast voice)'}`);
         return voiceId;
@@ -169,22 +199,64 @@ export function useElevenLabsTTS(): TTSHook {
         nextText: speakable[index + 1]?.text,
       });
 
+      // One long reply airs as sentence chunks flagged `continues`; each chunk is its own
+      // request, and ElevenLabs only joins them seamlessly when a chunk names the ids of
+      // the chunks before it. Each line's id settles when its response HEADERS arrive, so
+      // a chunk's request waits for the previous chunk's headers, never its audio.
+      const requestIds: (Promise<string | undefined> | undefined)[] = [];
+      let resolveFirstRequestId: (id: string | undefined) => void = () => {};
+      requestIds[0] = new Promise<string | undefined>((resolve) => {
+        resolveFirstRequestId = resolve;
+      });
+      const chainIdsFor = async (index: number): Promise<string[]> => {
+        const ids: string[] = [];
+        for (let j = index - 1; j >= 0 && ids.length < ELEVENLABS_MAX_PREVIOUS_REQUEST_IDS; j -= 1) {
+          // `continues` on line j means line j+1 is more of the same line
+          if (!speakable[j].continues || voiceOf(speakable[j]) !== voiceOf(speakable[index])) break;
+          const id = await requestIds[j];
+          if (!id) break;
+          ids.unshift(id);
+        }
+        return ids;
+      };
+
       // Conversation pacing: each line runs for exactly its audio's duration. The first
       // line streams (playback starts on the first audio chunk); later lines prefetch
       // as full files while the previous line plays, so lines flow back-to-back.
-      const fetchLine = (index: number): Promise<string | null> => {
+      const fetchLine = (
+        index: number,
+        previousRequestIds: string[],
+        onRequestId?: (id: string | undefined) => void,
+      ): Promise<string | null> => {
         const line = speakable[index];
-        return fetchAudioUrl(lineText(line), lineVoice(line), lineContext(index)).catch((err: unknown) => {
+        return fetchAudioUrl(lineText(line), lineVoice(line), {
+          context: lineContext(index),
+          previousRequestIds,
+          onRequestId,
+        }).catch((err: unknown) => {
           const errorMessage = `TTS request failed: ${err instanceof Error ? err.message : String(err)}`;
           log.error(errorMessage);
           setError(errorMessage);
+          onRequestId?.(undefined);
           return null;
         });
       };
       const audioPromises: (Promise<string | null> | undefined)[] = [];
       const startFetch = (index: number) => {
         if (index > 0 && index < speakable.length && !audioPromises[index]) {
-          audioPromises[index] = fetchLine(index);
+          let resolveRequestId: (id: string | undefined) => void = () => {};
+          requestIds[index] = new Promise<string | undefined>((resolve) => {
+            resolveRequestId = resolve;
+          });
+          audioPromises[index] = (async () => {
+            // Only a continuation waits; an ordinary line goes out at once as before
+            const chain = speakable[index - 1].continues ? await chainIdsFor(index) : [];
+            if (playSessionRef.current !== session) {
+              resolveRequestId(undefined);
+              return null;
+            }
+            return fetchLine(index, chain, resolveRequestId);
+          })();
         }
       };
 
@@ -198,7 +270,10 @@ export function useElevenLabsTTS(): TTSHook {
         let played = false;
         if (i === 0) {
           try {
-            const stream = await fetchAudioStream(lineText(speakable[0]), lineVoice(speakable[0]), lineContext(0));
+            const stream = await fetchAudioStream(lineText(speakable[0]), lineVoice(speakable[0]), {
+              context: lineContext(0),
+              onRequestId: resolveFirstRequestId,
+            });
             if (playSessionRef.current !== session) {
               stream.cancel().catch(() => {});
               break;
@@ -214,12 +289,12 @@ export function useElevenLabsTTS(): TTSHook {
             // Fall back to the buffered path below
             const errorMessage = `TTS stream failed, retrying buffered: ${err instanceof Error ? err.message : String(err)}`;
             log.error(errorMessage);
-            audioPromises[0] = fetchLine(0);
+            audioPromises[0] = fetchLine(0, [], resolveFirstRequestId);
           }
         }
 
         if (!played) {
-          if (!audioPromises[i]) audioPromises[i] = fetchLine(i);
+          if (!audioPromises[i]) audioPromises[i] = fetchLine(i, []);
           const audioUrl = (await audioPromises[i]) ?? null;
           if (playSessionRef.current !== session) {
             if (audioUrl) URL.revokeObjectURL(audioUrl);
@@ -250,6 +325,10 @@ export function useElevenLabsTTS(): TTSHook {
           await pacedDelay(speakable[i].continues ? sceneChunkGapMs : sceneLineGapMs);
         }
       }
+
+      // Nothing may wait on the first line's id past this point (a chain that never got
+      // its headers must not hold the cleanup below)
+      resolveFirstRequestId(undefined);
 
       // Release any prefetched audio that never played (cancelled session)
       const leftovers = await Promise.allSettled(audioPromises.filter(Boolean) as Promise<string | null>[]);

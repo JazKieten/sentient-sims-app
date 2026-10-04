@@ -79,7 +79,7 @@ import {
   parseDialogueLines,
   splitLinesForPacing,
 } from '../formatter/PromptFormatter';
-import { splitLinesForAiring } from '../util/airingChunks';
+import { airingChunkMaxChars, splitLinesForAiring } from '../util/airingChunks';
 import { formatSelfStatus, TodaysPlanBlock } from '../util/formatSelfStatus';
 import { PlayerConversation, PlayerConversationService } from './PlayerConversationService';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
@@ -2146,7 +2146,11 @@ ${factsBlock}
       // player personas ('The Voice', 'Chat') match no sim and stay untagged.
       // A long reply airs in sentence-sized chunks (util/airingChunks); the memory row and
       // the chat window keep the whole line
-      const castLines = [...spokenQuestion, ...splitLinesForAiring(finalLines)].map((line) => {
+      const chunkMaxChars = airingChunkMaxChars(
+        this.ctx.settings.ttsApiType,
+        this.ctx.settings.elevenLabsTtsSettings.model,
+      );
+      const castLines = [...spokenQuestion, ...splitLinesForAiring(finalLines, chunkMaxChars)].map((line) => {
         const simId = simIdByName.get(line.speaker);
         return simId ? { ...line, simId } : line;
       });

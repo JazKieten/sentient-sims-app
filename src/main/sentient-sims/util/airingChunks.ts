@@ -1,4 +1,6 @@
+import { usesDialogueEndpoint } from '../clients/ElevenLabsTTSRequest';
 import { DialogueLine } from '../formatter/PromptFormatter';
+import { ApiType } from '../models/ApiType';
 
 // A reply to the player may run to a paragraph (playerReplyMaxTokens). Aired as ONE scene
 // line it would be one long TTS fetch, one subtitle the mod cuts at its character cap, and
@@ -8,6 +10,19 @@ import { DialogueLine } from '../formatter/PromptFormatter';
 // `continues` so the renderer only breathes between them and the mod keeps the mouth open.
 
 export const AIRING_CHUNK_MAX_CHARS = 160;
+
+// Eleven v4's dialogue endpoint carries delivery across a longer piece and stitches
+// chunks by request id, so a bigger piece has fewer seams. Still under the mod's
+// SUBTITLE_MAX_CHARS (320), which cuts a subtitle at that length.
+export const AIRING_CHUNK_MAX_CHARS_V4 = 240;
+
+/** The chunk cap for the TTS setup that will voice the lines. */
+export function airingChunkMaxChars(ttsApiType: ApiType | undefined, elevenLabsModel: string | undefined): number {
+  if (ttsApiType === ApiType.ElevenLabs && elevenLabsModel && usesDialogueEndpoint(elevenLabsModel)) {
+    return AIRING_CHUNK_MAX_CHARS_V4;
+  }
+  return AIRING_CHUNK_MAX_CHARS;
+}
 
 // Anything shorter than this is folded into the chunk before it rather than aired alone
 // ("Okay." on its own subtitle reads as a stutter)

@@ -11,7 +11,7 @@ import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
 import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
-import { attachMoodDeliveryNotes, castVoicesForLines } from '../formatter/VoiceCasting';
+import { applyPronunciations, attachMoodDeliveryNotes, castVoicesForLines } from '../formatter/VoiceCasting';
 import { SentientSim } from '../models/SentientSim';
 import { VoiceType } from '../models/VoiceType';
 import { consumePacedScene } from './pacedScenes';
@@ -155,6 +155,9 @@ export type PlayTTSVoiceOptions = {
   // Deliver each line in the speaker's current mood (an audio tag on v3/v4). Undefined
   // means on; the ElevenLabs settings tab has the switch.
   moodTags?: boolean;
+  // IPA for the sims' names keyed by sim id, supplied only when the voicing model reads
+  // inline phonetics (Eleven v4); the voice reads these, the subtitle keeps the names
+  pronunciations?: Map<string, string>;
 };
 
 // Monotonic dispatch counter: the renderer orders queued scenes by it, so a scene
@@ -186,6 +189,9 @@ export function playTTSLines(
         .forEach((line) => {
           log.debug(`[TTS] ${line.speaker} delivery: [${line.deliveryNote}]`);
         });
+    }
+    if (options.pronunciations && options.pronunciations.size > 0) {
+      castLines = applyPronunciations(castLines, sims, options.pronunciations);
     }
   }
   notifyAllWindows('on-voice', castLines, {

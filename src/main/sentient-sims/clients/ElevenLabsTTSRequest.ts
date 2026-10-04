@@ -82,7 +82,8 @@ export function usesDialogueEndpoint(model: string): boolean {
  * the note aloud, so they only ever get the spoken text.
  */
 export function elevenLabsLineText(line: DialogueLine, model: string): string {
-  return supportsAudioTags(model) && line.deliveryNote ? `[${line.deliveryNote}] ${line.text}` : line.text;
+  const spoken = line.ttsText ?? line.text;
+  return supportsAudioTags(model) && line.deliveryNote ? `[${line.deliveryNote}] ${spoken}` : spoken;
 }
 
 /**

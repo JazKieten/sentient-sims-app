@@ -1,4 +1,4 @@
-import { Button, Card, CardActions, CardContent } from '@mui/material';
+import { Button, Card, CardActions, CardContent, TextField } from '@mui/material';
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { SimFactsDialog } from './components/SimFactsDialog';
 import log from 'electron-log';
@@ -198,6 +198,18 @@ export default function SimsPage() {
     }));
   }, []);
 
+  const handlePronunciationEdit = useCallback((event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setEditedSim((previousSim) => ({
+      index: Number(previousSim?.index),
+      sim: {
+        ...previousSim?.sim,
+        id: previousSim?.sim.id || '',
+        name: previousSim?.sim.name || '',
+        pronunciation: event.target.value,
+      },
+    }));
+  }, []);
+
   const handleVoiceEdit = useCallback(
     (voice: SimVoiceSelection) => {
       if (!activeVoiceType) return;
@@ -290,6 +302,18 @@ export default function SimsPage() {
             <KokoroSimVoiceSelect
               voiceId={editedSim.sim.voices?.[VoiceType.Kokoro]?.voiceId}
               onChange={handleVoiceEdit}
+            />
+          )}
+          {activeVoiceType === VoiceType.ElevenLabs && (
+            <TextField
+              label="Name pronunciation (IPA, Eleven v4)"
+              variant="outlined"
+              size="small"
+              fullWidth
+              sx={{ marginBottom: 2 }}
+              value={editedSim.sim.pronunciation ?? ''}
+              onChange={handlePronunciationEdit}
+              helperText="How the voice says this sim's name, e.g. ˈzɔːrvæθ. Leave empty to read it as spelled. Eleven v4 only."
             />
           )}
 

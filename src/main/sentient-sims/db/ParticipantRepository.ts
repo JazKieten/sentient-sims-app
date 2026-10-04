@@ -35,6 +35,7 @@ export class ParticipantRepository extends Repository {
         id: result[0].id.toString(),
         description: result[0].description,
         name: keepStored ? storedName : participantRequest.fullName,
+        pronunciation: result[0].pronunciation ?? undefined,
       };
 
       if (storedName !== participant.name) {
@@ -141,6 +142,7 @@ export class ParticipantRepository extends Repository {
         id: participantEntity.id.toString(),
         description: participantEntity.description,
         name: participantEntity.name,
+        pronunciation: participantEntity.pronunciation ?? undefined,
         voices: voicesByParticipant.get(participantEntity.id.toString()),
       };
     });
@@ -197,16 +199,46 @@ export class ParticipantRepository extends Repository {
     return names;
   }
 
+  // IPA pronunciations keyed by participant id, for the sims that have one stored
+  getParticipantPronunciations(participantIds: string[]): Map<string, string> {
+    const pronunciations = new Map<string, string>();
+    if (participantIds.length === 0) {
+      return pronunciations;
+    }
+
+    const placeholders = participantIds.map(() => '?').join(', ');
+    const rows = this.dbService
+      .getDb()
+      .prepare(
+        `SELECT id, pronunciation FROM participant
+         WHERE pronunciation IS NOT NULL AND TRIM(pronunciation) <> '' AND id IN (${placeholders})`,
+      )
+      .safeIntegers()
+      .all(participantIds.map((id) => BigInt(id))) as { id: bigint; pronunciation: string }[];
+
+    rows.forEach((row) => {
+      pronunciations.set(row.id.toString(), row.pronunciation.trim());
+    });
+
+    return pronunciations;
+  }
+
   // An UPSERT rather than INSERT OR REPLACE so the generated flag survives a write that
   // was not about the description at all: getParticipant re-writes the row whenever it
   // learns a sim's real name, and a REPLACE dropped the flag every time. The flag is kept
   // only while the description text is unchanged — a person editing the text has taken
   // ownership of it, and it must never be cleared out from under them afterwards.
+  //
+  // The pronunciation is the same shape of problem: most writes (the mod learning a name,
+  // a generated description) never mention it, so an absent value keeps what is stored
+  // and only an explicit empty string clears it.
   updateParticipant(participant: ParticipantDTO, options: { generated?: boolean } = {}) {
+    const pronunciation = participant.pronunciation?.trim();
     const result = this.dbService
       .getDb()
       .prepare(
-        `INSERT INTO participant(id, description, name, description_generated) VALUES(?, ?, ?, ?)
+        `INSERT INTO participant(id, description, name, description_generated, pronunciation)
+         VALUES(?, ?, ?, ?, NULLIF(?, ''))
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            description = excluded.description,
@@ -214,10 +246,26 @@ export class ParticipantRepository extends Repository {
              WHEN excluded.description_generated = 1 THEN 1
              WHEN excluded.description IS participant.description THEN participant.description_generated
              ELSE NULL
-           END`,
+           END,
+           pronunciation = COALESCE(excluded.pronunciation, participant.pronunciation)`,
       )
       .safeIntegers()
-      .run([BigInt(participant.id), participant.description, participant.name, options.generated ? 1 : null]);
+      .run([
+        BigInt(participant.id),
+        participant.description,
+        participant.name,
+        options.generated ? 1 : null,
+        pronunciation ?? null,
+      ]);
+    if (pronunciation === '') {
+      // COALESCE above cannot tell "clear it" from "not mentioned"; an explicit empty
+      // string is the clear
+      this.dbService
+        .getDb()
+        .prepare('UPDATE participant SET pronunciation = NULL WHERE id = ?')
+        .safeIntegers()
+        .run([BigInt(participant.id)]);
+    }
     notifySimsChanged();
     return result;
   }

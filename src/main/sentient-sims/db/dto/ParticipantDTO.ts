@@ -12,6 +12,9 @@ export type ParticipantDTO = {
   id: string;
   description?: string;
   name?: string;
+  // IPA for the name, read inline by Eleven v4. Undefined on a write means "leave the
+  // stored value alone" (the mod's updates never carry it); an empty string clears it.
+  pronunciation?: string;
   // Pinned voices keyed by voice type. A missing entry means that provider falls back
   // to automatic voice casting for this sim.
   voices?: Partial<Record<VoiceType, ParticipantVoiceDTO>>;

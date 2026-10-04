@@ -37,6 +37,51 @@ export function findSimForSpeaker(speaker: string, sims: SentientSim[]): Sentien
   return alias ? sims.find((sim) => sim.sim_id === alias.simId) : undefined;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Eleven v4 reads an inline IPA spelling between slashes in place of the word
+export function inlinePronunciation(ipa: string): string {
+  return `/${ipa.trim().replace(/^\/+|\/+$/g, '')}/`;
+}
+
+/**
+ * Replaces each named sim's full name and first name in what the voice READS with the
+ * stored IPA pronunciation (v4 only; the caller decides). The subtitle text is untouched:
+ * `text` stays the written name, `ttsText` carries the phonetic one. Longer names go
+ * first so "Lillie Cason" is not half-replaced by "Lillie".
+ */
+export function applyPronunciations(
+  lines: DialogueLine[],
+  sims: SentientSim[],
+  pronunciations: Map<string, string>,
+): DialogueLine[] {
+  const replacements = sims
+    .filter((sim) => pronunciations.has(sim.sim_id) && sim.name.trim())
+    .flatMap((sim) => {
+      const ipa = inlinePronunciation(pronunciations.get(sim.sim_id) as string);
+      const names = [sim.name.trim(), sim.name.trim().split(/\s+/)[0]];
+      return [...new Set(names)].map((name) => ({ name, ipa }));
+    })
+    .sort((a, b) => b.name.length - a.name.length);
+  if (replacements.length === 0) {
+    return lines;
+  }
+
+  return lines.map((line) => {
+    let spoken = line.ttsText ?? line.text;
+    replacements.forEach(({ name, ipa }) => {
+      // Word boundaries so "Al" never rewrites "Also"; names with apostrophes keep working
+      spoken = spoken.replace(
+        new RegExp(`(^|[^\\p{L}\\p{N}'’])${escapeRegExp(name)}(?![\\p{L}\\p{N}])`, 'gu'),
+        `$1${ipa}`,
+      );
+    });
+    return spoken === (line.ttsText ?? line.text) ? line : { ...line, ttsText: spoken };
+  });
+}
+
 /**
  * Gives each line whose speaker resolves to a sim in a tagged mood a delivery note for
  * that mood, unless the line already carries one (the classic screenplay path lets the

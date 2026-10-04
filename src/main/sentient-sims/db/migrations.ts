@@ -390,6 +390,13 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         PRIMARY KEY ( sim_id, absolute_day )
       );
     `,
+    // How a sim's name is said (IPA), typed in the Sims tab. Eleven v4 reads an inline
+    // phonetic spelling, so the voice stops guessing at invented names; the subtitle keeps
+    // the written name. NULL means "read it as spelled".
+    // Shipped as 021 on our fork before 021/022 above took their numbers; see RENAMED_MIGRATIONS.
+    '023-participant-pronunciation': (db: Database) => {
+      db.prepare('ALTER TABLE participant ADD COLUMN pronunciation TEXT').run();
+    },
   }),
 );
 
@@ -418,6 +425,7 @@ const getAppliedMigrations = (db: Database): string[] => {
 export const RENAMED_MIGRATIONS: Record<string, string> = {
   '014-add-memory-index-owner': '021-add-memory-index-owner',
   '015-create-daily-plan': '022-create-daily-plan',
+  '021-participant-pronunciation': '023-participant-pronunciation',
 };
 
 const relabelRenamedMigrations = (db: Database) => {

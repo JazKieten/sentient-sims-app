@@ -37,6 +37,48 @@ type FetchOptions = {
 // Logged once per app run: the header's absence is a finding, not a per-line event
 let requestIdHeaderMissingLogged = false;
 
+// A prefetched line that nobody speaks is let go after this long
+const prefetchTtlMs = 60_000;
+
+type PrefetchedLine = {
+  key: string;
+  url: Promise<string | null>;
+  requestId: Promise<string | undefined>;
+  expiry: ReturnType<typeof setTimeout>;
+};
+
+function discardPrefetched(entry: PrefetchedLine) {
+  clearTimeout(entry.expiry);
+  void entry.url.then((url) => {
+    if (url) URL.revokeObjectURL(url);
+    return null;
+  });
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+// One retry on a gateway error, or on a rate limit after its Retry-After (capped at 2 s).
+// Any other 4xx fails fast: a bad key or a bad request is not going to get better.
+async function fetchWithRetry(url: string, init: RequestInit, label: string): Promise<Response> {
+  let response = await fetch(url, init);
+  if (response.status >= 500 || response.status === 429) {
+    const retryAfterHeader = Number(response.headers.get('retry-after'));
+    const waitMs =
+      response.status === 429
+        ? Math.min(Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : 1000, 2000)
+        : 500;
+    log.warn(`[TTS] ElevenLabs ${label} returned ${response.status}; retrying once in ${waitMs}ms`);
+    await response.text().catch(() => '');
+    await sleep(waitMs);
+    response = await fetch(url, init);
+  }
+  return response;
+}
+
 function readRequestId(response: Response, voiceId: string): string | undefined {
   const requestId = response.headers.get('request-id') ?? undefined;
   if (requestId) {
@@ -60,6 +102,8 @@ export function useElevenLabsTTS(): TTSHook {
   const [error, setError] = useState<string | undefined>();
   // Bumped by stop() and by each new speakLines run so an in-flight loop knows to bail out
   const playSessionRef = useRef(0);
+  // The one line fetched ahead of its scene (TTSHook.prefetch)
+  const prefetchedRef = useRef<PrefetchedLine | null>(null);
 
   // v4 goes to Text to Dialogue (one line per request, neighbours as context); every
   // other model to Text to Speech. Both builders return the full URL, /stream included.
@@ -89,7 +133,7 @@ export function useElevenLabsTTS(): TTSHook {
         `[TTS] ElevenLabs request voice=${voiceId} model=${elevenLabsTTSSettings.value.model} endpoint=${endpointName} chars=${text.length}${stitched}`,
       );
 
-      const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      const response = await fetchWithRetry(url, { method: 'POST', headers, body: JSON.stringify(body) }, 'request');
       log.info(`[TTS] ElevenLabs response voice=${voiceId} status=${response.status} in ${Date.now() - startedAt}ms`);
       options?.onRequestId?.(response.ok ? readRequestId(response, voiceId) : undefined);
 
@@ -112,7 +156,7 @@ export function useElevenLabsTTS(): TTSHook {
         `[TTS] ElevenLabs stream request voice=${voiceId} model=${elevenLabsTTSSettings.value.model} endpoint=${endpointName} chars=${text.length}`,
       );
 
-      const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      const response = await fetchWithRetry(url, { method: 'POST', headers, body: JSON.stringify(body) }, 'stream');
       log.info(
         `[TTS] ElevenLabs stream first byte voice=${voiceId} status=${response.status} in ${Date.now() - startedAt}ms`,
       );
@@ -169,6 +213,71 @@ export function useElevenLabsTTS(): TTSHook {
       }
     },
     [fetchAudioStream, playStream, elevenLabsTTSSettings.value.voice],
+  );
+
+  // What identifies a prefetched line: the exact text the voice would read, in that voice,
+  // on that model. Anything else and it is a different request.
+  const prefetchKey = useCallback(
+    (line: DialogueLine): string =>
+      `${elevenLabsTTSSettings.value.model}|${line.voiceId ?? elevenLabsTTSSettings.value.voice}|${elevenLabsLineText(
+        line,
+        elevenLabsTTSSettings.value.model,
+      )}`,
+    [elevenLabsTTSSettings.value.model, elevenLabsTTSSettings.value.voice],
+  );
+
+  const prefetch = useCallback(
+    (line: DialogueLine) => {
+      if (!line.text.trim() || !elevenLabsKeySetting.value) return;
+      const key = prefetchKey(line);
+      if (prefetchedRef.current?.key === key) return;
+      if (prefetchedRef.current) discardPrefetched(prefetchedRef.current);
+
+      let resolveRequestId: (id: string | undefined) => void = () => {};
+      const requestId = new Promise<string | undefined>((resolve) => {
+        resolveRequestId = resolve;
+      });
+      const voiceId = line.voiceId ?? elevenLabsTTSSettings.value.voice;
+      log.info(`[TTS] Prefetching next scene's first line for ${line.speaker}`);
+      const url = fetchAudioUrl(elevenLabsLineText(line, elevenLabsTTSSettings.value.model), voiceId, {
+        onRequestId: resolveRequestId,
+      }).catch((err: unknown) => {
+        log.warn(`[TTS] Prefetch failed, the line will fetch when its scene starts: ${String(err)}`);
+        resolveRequestId(undefined);
+        return null;
+      });
+      const entry: PrefetchedLine = {
+        key,
+        url,
+        requestId,
+        expiry: setTimeout(() => {
+          if (prefetchedRef.current === entry) {
+            prefetchedRef.current = null;
+            discardPrefetched(entry);
+          }
+        }, prefetchTtlMs),
+      };
+      prefetchedRef.current = entry;
+    },
+    [
+      prefetchKey,
+      fetchAudioUrl,
+      elevenLabsKeySetting.value,
+      elevenLabsTTSSettings.value.model,
+      elevenLabsTTSSettings.value.voice,
+    ],
+  );
+
+  // Hands over the prefetched audio for this line, if it is the one that was prefetched
+  const takePrefetched = useCallback(
+    (line: DialogueLine): PrefetchedLine | undefined => {
+      const entry = prefetchedRef.current;
+      if (!entry || entry.key !== prefetchKey(line)) return undefined;
+      prefetchedRef.current = null;
+      clearTimeout(entry.expiry);
+      return entry;
+    },
+    [prefetchKey],
   );
 
   const speakLines = useCallback(
@@ -268,7 +377,14 @@ export function useElevenLabsTTS(): TTSHook {
         startFetch(i + 1);
 
         let played = false;
-        if (i === 0) {
+        // A line fetched ahead of its scene plays from the buffer at once: no first-byte
+        // wait, and it is already complete so nothing is lost to streaming either
+        const prefetched = i === 0 ? takePrefetched(speakable[0]) : undefined;
+        if (prefetched) {
+          log.info(`[TTS] Using prefetched audio for ${speakable[0].speaker}`);
+          audioPromises[0] = prefetched.url;
+          void prefetched.requestId.then(resolveFirstRequestId);
+        } else if (i === 0) {
           try {
             const stream = await fetchAudioStream(lineText(speakable[0]), lineVoice(speakable[0]), {
               context: lineContext(0),
@@ -343,6 +459,7 @@ export function useElevenLabsTTS(): TTSHook {
       fetchAudioStream,
       playUrl,
       playStream,
+      takePrefetched,
       elevenLabsTTSSettings.value.voice,
       elevenLabsTTSSettings.value.model,
     ],
@@ -356,5 +473,5 @@ export function useElevenLabsTTS(): TTSHook {
     }
   }, [playback]);
 
-  return { speak: tts, speakLines, stop: stopTTS, isPlaying: !!playback, error };
+  return { speak: tts, speakLines, prefetch, stop: stopTTS, isPlaying: !!playback, error };
 }

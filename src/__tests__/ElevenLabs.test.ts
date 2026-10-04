@@ -586,6 +586,17 @@ describe('elevenLabsLineText', () => {
     );
   });
 
+  it('reads ttsText over text when a line carries one, tag included', () => {
+    const phonetic: DialogueLine = {
+      speaker: 'Ricky',
+      text: 'Zorvath!',
+      ttsText: '/ˈzɔːrvæθ/!',
+      deliveryNote: 'excited',
+    };
+    expect(elevenLabsLineText(phonetic, ElevenLabsSpeechModel.ELEVEN_V4)).toEqual('[excited] /ˈzɔːrvæθ/!');
+    expect(elevenLabsLineText(phonetic, ElevenLabsSpeechModel.ELEVEN_FLASH_V2_5)).toEqual('/ˈzɔːrvæθ/!');
+  });
+
   it('leaves a line without a delivery note alone on v3', () => {
     const plain: DialogueLine = { speaker: 'Ricky', text: 'Been fishing here for years.' };
     expect(elevenLabsLineText(plain, ElevenLabsSpeechModel.ELEVEN_V3)).toEqual('Been fishing here for years.');

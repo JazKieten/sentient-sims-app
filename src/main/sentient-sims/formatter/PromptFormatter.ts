@@ -527,6 +527,10 @@ export function formatSceneForChatWindow(text: string): string {
 export type DialogueLine = {
   speaker: string;
   text: string;
+  // What the voice reads when it differs from the subtitle: sim names replaced by their
+  // stored IPA pronunciation on Eleven v4 (VoiceCasting.applyPronunciations). Absent
+  // means the voice reads `text`.
+  ttsText?: string;
   // Inline parenthetical delivery note, e.g. `Ricky: (nervous) "..."` — feeds v3 audio tags
   deliveryNote?: string;
   // Provider-specific voice cast for this speaker (an ElevenLabs voice id, or a Kokoro

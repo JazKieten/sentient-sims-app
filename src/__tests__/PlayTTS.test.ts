@@ -256,6 +256,28 @@ describe('playTTSLines', () => {
     expect(sentVoiceLines()[0].deliveryNote).toBeUndefined();
   });
 
+  it('reads a stored pronunciation in place of the name while the subtitle keeps the name', () => {
+    playTTSLines(
+      [
+        { speaker: 'Bella Goth', text: "Ricky, have you seen Ricky Rickerson's boat? Rickyson hasn't." },
+        { speaker: 'Ricky Rickerson', text: 'Maybe next weekend, Bella.' },
+      ],
+      [ricky, bella],
+      { voiceType: VoiceType.ElevenLabs, pronunciations: new Map([['1', 'ˈrɪki ˈrɪkərsən']]) },
+    );
+
+    const lines = sentVoiceLines();
+    expect(lines[0].text).toEqual("Ricky, have you seen Ricky Rickerson's boat? Rickyson hasn't.");
+    expect(lines[0].ttsText).toEqual("/ˈrɪki ˈrɪkərsən/, have you seen /ˈrɪki ˈrɪkərsən/'s boat? Rickyson hasn't.");
+    // Bella has no pronunciation stored, so Ricky's line reads as written
+    expect(lines[1].ttsText).toBeUndefined();
+  });
+
+  it('leaves lines alone when no pronunciations are supplied', () => {
+    playTTSLines([{ speaker: 'Bella Goth', text: 'Ricky!' }], [ricky, bella], { voiceType: VoiceType.ElevenLabs });
+    expect(sentVoiceLines()[0].ttsText).toBeUndefined();
+  });
+
   it('prefers a pinned kokoro blend over the automatic cast', () => {
     playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' }], [ricky], {
       voiceType: VoiceType.Kokoro,

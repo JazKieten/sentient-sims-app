@@ -80,6 +80,7 @@ import {
   splitLinesForPacing,
 } from '../formatter/PromptFormatter';
 import { airingChunkMaxChars, splitLinesForAiring } from '../util/airingChunks';
+import { usesDialogueEndpoint } from '../clients/ElevenLabsTTSRequest';
 import { formatSelfStatus, TodaysPlanBlock } from '../util/formatSelfStatus';
 import { PlayerConversation, PlayerConversationService } from './PlayerConversationService';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
@@ -2815,14 +2816,18 @@ Write me a buff description based on the conversation so that ${buffRequest.name
     // whose models read the tag, so it is the only one whose setting is consulted
     const moodTags =
       voiceType === VoiceType.ElevenLabs ? (this.ctx.settings.elevenLabsTtsSettings.moodTags ?? true) : true;
+    // Inline IPA is a v4 feature; on any other model the voice would read the slashes
+    const readsPhonetics =
+      voiceType === VoiceType.ElevenLabs && usesDialogueEndpoint(this.ctx.settings.elevenLabsTtsSettings.model);
     try {
+      const simIds = sims.map((sim) => sim.sim_id);
       return {
         voiceType,
         moodTags,
-        voiceOverrides: this.ctx.participantRepository.getParticipantVoices(
-          sims.map((sim) => sim.sim_id),
-          voiceType,
-        ),
+        voiceOverrides: this.ctx.participantRepository.getParticipantVoices(simIds, voiceType),
+        pronunciations: readsPhonetics
+          ? this.ctx.participantRepository.getParticipantPronunciations(simIds)
+          : undefined,
       };
     } catch (err) {
       log.warn('Unable to look up per-sim voice overrides', err);

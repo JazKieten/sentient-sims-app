@@ -77,6 +77,38 @@ describe('ParticipantRepository', () => {
     expect(noDefaultSimDescription.description).toBeUndefined();
   });
 
+  it('stores, keeps and clears a name pronunciation', () => {
+    const ctx = mockApiContext();
+    fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+    ctx.db.loadDatabase({ sessionId: '9587324', saveId: '2' });
+
+    const sim: ParticipantDTO = { id: '7101', name: 'Zorvath Vael', description: 'An alien king.' };
+    ctx.participantRepository.updateParticipant(sim);
+    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).size).toEqual(0);
+
+    ctx.participantRepository.updateParticipant({ ...sim, pronunciation: ' ˈzɔːrvæθ ' });
+    expect(ctx.participantRepository.getParticipantPronunciations(['7101'])).toEqual(new Map([['7101', 'ˈzɔːrvæθ']]));
+    expect(ctx.participantRepository.getParticipant({ id: '7101', fullName: 'Zorvath Vael' }).pronunciation).toEqual(
+      'ˈzɔːrvæθ',
+    );
+    expect(ctx.participantRepository.getAllParticipants().find((p) => p.id === '7101')?.pronunciation).toEqual(
+      'ˈzɔːrvæθ',
+    );
+
+    // A write that never mentions the pronunciation (the mod learning a name, a generated
+    // description) keeps it
+    ctx.participantRepository.updateParticipant({ ...sim, description: 'Still an alien king.' });
+    ctx.participantRepository.setDescriptionIfEmpty('7101', 'ignored, not empty');
+    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).get('7101')).toEqual('ˈzɔːrvæθ');
+
+    // An explicit empty string clears it
+    ctx.participantRepository.updateParticipant({ ...sim, pronunciation: '' });
+    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).size).toEqual(0);
+    expect(
+      ctx.participantRepository.getParticipant({ id: '7101', fullName: 'Zorvath Vael' }).pronunciation,
+    ).toBeUndefined();
+  });
+
   it('pins, keeps and clears a sim voice', () => {
     const ctx = mockApiContext();
     fs.mkdirSync(ctx.directory.getSentientSimsFolder(), {

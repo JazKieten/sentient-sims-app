@@ -3,6 +3,7 @@ import {
   defaultElevenLabsVoiceSettings,
   ElevenLabsSpeechModel,
   ElevenLabsTTSSettings,
+  ElevenLabsVoiceSettings,
 } from '../models/ElevenLabsTTSSettings';
 
 export type ElevenLabsSpeechRequest = {
@@ -16,9 +17,15 @@ export type ElevenLabsSpeechRequest = {
       similarity_boost: number;
       // Not sent on v4, which has no speed setting
       speed?: number;
+      // Only the v2-era models take these; v3/v4 reject or ignore them
+      style?: number;
+      use_speaker_boost?: boolean;
     };
     previous_text?: string;
     next_text?: string;
+    // Request ids of the lines just before this one in the same voice, so the model
+    // keeps the delivery continuous across them (the chunks of one long reply)
+    previous_request_ids?: string[];
   };
 };
 
@@ -32,8 +39,12 @@ export type ElevenLabsDialogueRequest = {
     settings: { stability: number; similarity: number };
     previous_text?: string;
     future_text?: string;
+    previous_request_ids?: string[];
   };
 };
+
+// ElevenLabs keeps at most three earlier requests as continuity context
+export const ELEVENLABS_MAX_PREVIOUS_REQUEST_IDS = 3;
 
 // Text to Dialogue accepts at most 100 chars of context on each side
 export const ELEVENLABS_DIALOGUE_CONTEXT_CHARS = 100;
@@ -75,22 +86,67 @@ export function elevenLabsLineText(line: DialogueLine, model: string): string {
 }
 
 /**
+ * The stored voice settings with every gap filled from the defaults. A stored object
+ * with no `stability` predates the sliders (2026-10-03): the app then hard-coded
+ * stability 0 / similarity 0 on every request while storing similarity_boost 0 from the
+ * old default, so that object's similarity is NOT a choice the user made and both get
+ * the new defaults.
+ */
+export function resolvedVoiceSettings(settings: ElevenLabsTTSSettings): Required<ElevenLabsVoiceSettings> {
+  const stored = settings.voice_settings;
+  const defaultStability = defaultElevenLabsVoiceSettings.stability as number;
+  const defaultSimilarity = defaultElevenLabsVoiceSettings.similarity_boost as number;
+  const legacy = stored?.stability === undefined;
+  return {
+    stability: legacy ? defaultStability : (stored.stability as number),
+    similarity_boost: legacy ? defaultSimilarity : (stored.similarity_boost ?? defaultSimilarity),
+    style: stored?.style ?? defaultElevenLabsVoiceSettings.style,
+    use_speaker_boost: stored?.use_speaker_boost ?? defaultElevenLabsVoiceSettings.use_speaker_boost,
+    speed: stored?.speed ?? defaultElevenLabsVoiceSettings.speed,
+  };
+}
+
+// v3 only takes stability as one of its three presets (Creative 0, Natural 0.5, Robust 1)
+// and rejects anything else with a 422, so the slider value snaps to the nearest one
+export function snapStabilityForModel(stability: number, model: string): number {
+  if (!isElevenLabsV3(model)) {
+    return stability;
+  }
+  return [0, 0.5, 1].reduce((best, preset) =>
+    Math.abs(preset - stability) < Math.abs(best - stability) ? preset : best,
+  );
+}
+
+/**
  * Voice settings the model accepts. "Style and Speed sliders are not available in
- * Eleven v4", so v4 gets stability and similarity only; every other model keeps the
- * configured speed (API range 0.7-1.2).
+ * Eleven v4", so v4 gets stability and similarity only; v3 adds the configured speed
+ * (API range 0.7-1.2); the v2-era models (flash, multilingual) take style and speaker
+ * boost as well.
  */
 export function elevenLabsVoiceSettings(
   settings: ElevenLabsTTSSettings,
 ): ElevenLabsSpeechRequest['body']['voice_settings'] {
+  const resolved = resolvedVoiceSettings(settings);
+  const stability = snapStabilityForModel(resolved.stability, settings.model);
   if (isElevenLabsV4(settings.model)) {
-    return { stability: 0, similarity_boost: 0 };
+    return { stability, similarity_boost: resolved.similarity_boost };
+  }
+  if (isElevenLabsV3(settings.model)) {
+    return { stability, similarity_boost: resolved.similarity_boost, speed: resolved.speed };
   }
 
   return {
-    stability: 0,
-    similarity_boost: 0,
-    speed: settings.voice_settings?.speed ?? defaultElevenLabsVoiceSettings.speed,
+    stability,
+    similarity_boost: resolved.similarity_boost,
+    style: resolved.style,
+    use_speaker_boost: resolved.use_speaker_boost,
+    speed: resolved.speed,
   };
+}
+
+function previousRequestIdsField(ids: string[] | undefined): { previous_request_ids?: string[] } {
+  const kept = (ids ?? []).filter(Boolean).slice(-ELEVENLABS_MAX_PREVIOUS_REQUEST_IDS);
+  return kept.length > 0 ? { previous_request_ids: kept } : {};
 }
 
 /**
@@ -125,6 +181,9 @@ export type ElevenLabsLineRequestParams = {
   nextText?: string;
   // Target the /stream variant (audio bytes start arriving before the file is done)
   stream?: boolean;
+  // `request-id` headers of the lines just spoken in this voice (oldest first), for
+  // stitching the chunks of one long line; only the last three are sent
+  previousRequestIds?: string[];
 };
 
 /**
@@ -132,10 +191,13 @@ export type ElevenLabsLineRequestParams = {
  * back to its own default and the configured model is silently ignored.
  */
 export function buildElevenLabsSpeechRequest(params: ElevenLabsLineRequestParams): ElevenLabsSpeechRequest {
-  const { text, voiceId, endpoint, apiKey, settings, previousText, nextText, stream } = params;
+  const { text, voiceId, endpoint, apiKey, settings, previousText, nextText, stream, previousRequestIds } = params;
+  const path = `text-to-speech/${voiceId}${stream ? '/stream' : ''}`;
 
   return {
-    url: `${endpoint}/text-to-speech/${voiceId}${stream ? '/stream' : ''}`,
+    // output_format is a query parameter on this endpoint too; the renderer's streaming
+    // player decodes 'audio/mpeg' (audioPlayback.ts), so the UI only offers mp3 formats
+    url: `${endpoint}/${path}?output_format=${encodeURIComponent(settings.output_format)}`,
     headers: elevenLabsHeaders(apiKey),
     body: {
       text,
@@ -143,6 +205,7 @@ export function buildElevenLabsSpeechRequest(params: ElevenLabsLineRequestParams
       voice_settings: elevenLabsVoiceSettings(settings),
       ...(previousText ? { previous_text: previousText } : {}),
       ...(nextText ? { next_text: nextText } : {}),
+      ...previousRequestIdsField(previousRequestIds),
     },
   };
 }
@@ -155,10 +218,11 @@ export function buildElevenLabsSpeechRequest(params: ElevenLabsLineRequestParams
  * There is no speed here at all; output_format is a query parameter on this endpoint.
  */
 export function buildElevenLabsDialogueRequest(params: ElevenLabsLineRequestParams): ElevenLabsDialogueRequest {
-  const { text, voiceId, endpoint, apiKey, settings, previousText, nextText, stream } = params;
+  const { text, voiceId, endpoint, apiKey, settings, previousText, nextText, stream, previousRequestIds } = params;
   const previous = dialogueContext(previousText, 'previous');
   const future = dialogueContext(nextText, 'next');
   const path = `text-to-dialogue${stream ? '/stream' : ''}`;
+  const resolved = resolvedVoiceSettings(settings);
 
   return {
     url: `${endpoint}/${path}?output_format=${encodeURIComponent(settings.output_format)}`,
@@ -166,9 +230,10 @@ export function buildElevenLabsDialogueRequest(params: ElevenLabsLineRequestPara
     body: {
       inputs: [{ text, voice_id: voiceId }],
       model_id: settings.model,
-      settings: { stability: 0, similarity: 0 },
+      settings: { stability: resolved.stability, similarity: resolved.similarity_boost },
       ...(previous ? { previous_text: previous } : {}),
       ...(future ? { future_text: future } : {}),
+      ...previousRequestIdsField(previousRequestIds),
     },
   };
 }

@@ -28,6 +28,10 @@ export enum ElevenLabsSpeechModel {
 }
 
 export type ElevenLabsVoiceSettings = {
+  // Optional because settings stored before 2026-10-03 carried neither (the app sent
+  // stability 0 / similarity 0 on every request, which is the API's "most expressive,
+  // least like the voice" corner). A stored object with no stability is treated as
+  // legacy and gets the defaults for both, see resolvedVoiceSettings.
   stability?: number;
   similarity_boost?: number;
   style: number;
@@ -41,10 +45,16 @@ export type ElevenLabsTTSSettings = {
   output_format: ElevenLabsOutputFormat;
   // Optional because settings stored by older app versions predate this field
   voice_settings?: ElevenLabsVoiceSettings;
+  // Prefix each line with an audio tag for the speaker's current mood on models that
+  // read tags (v3/v4). Undefined means on.
+  moodTags?: boolean;
 };
 
 export const defaultElevenLabsVoiceSettings: ElevenLabsVoiceSettings = {
-  similarity_boost: 0,
+  // Low-ish stability keeps the read expressive without the drift of 0; 0.75 keeps the
+  // voice recognisably itself across a scene
+  stability: 0.35,
+  similarity_boost: 0.75,
   style: 0,
   use_speaker_boost: true,
   // 1.2 is the ElevenLabs API maximum — dialogue reads sluggish at 1.0

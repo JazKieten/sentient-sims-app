@@ -140,14 +140,20 @@ describe('ElevenLabsIT', () => {
     expect(requestId).toBeTruthy();
     await firstResponse.blob();
 
+    // Built exactly as the renderer builds a stitched chunk: the line before rides along as
+    // previousText too. The builder must send only the ids; both together is a 400.
     const second = buildElevenLabsDialogueRequest({
       text: 'Never caught a thing, mind you.',
       voiceId: defaultElevenLabsTTSSettings.voice,
       endpoint: defaultElevenLabsEndpoint,
       apiKey: apiKey as string,
       settings: { ...defaultElevenLabsTTSSettings, model: ElevenLabsSpeechModel.ELEVEN_V4 },
+      previousText: 'Been fishing here for years.',
+      nextText: 'Not once.',
       previousRequestIds: [requestId as string],
     });
+    expect('previous_text' in second.body).toBe(false);
+    expect(second.body.previous_request_ids).toEqual([requestId]);
     const secondResponse = await fetch(second.url, {
       method: 'POST',
       headers: second.headers,

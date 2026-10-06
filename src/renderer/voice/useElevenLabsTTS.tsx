@@ -338,17 +338,27 @@ export function useElevenLabsTTS(): TTSHook {
         onRequestId?: (id: string | undefined) => void,
       ): Promise<string | null> => {
         const line = speakable[index];
-        return fetchAudioUrl(lineText(line), lineVoice(line), {
-          context: lineContext(index),
-          previousRequestIds,
-          onRequestId,
-        }).catch((err: unknown) => {
-          const errorMessage = `TTS request failed: ${err instanceof Error ? err.message : String(err)}`;
-          log.error(errorMessage);
-          setError(errorMessage);
-          onRequestId?.(undefined);
-          return null;
-        });
+        const text = lineText(line);
+        const voiceId = lineVoice(line);
+        const context = lineContext(index);
+        return fetchAudioUrl(text, voiceId, { context, previousRequestIds, onRequestId })
+          .catch((err: unknown) => {
+            // Stitching is a nicety; the chunk airing is not. Whatever the API disliked
+            // about the chain (2026-10-05: ids and previous_text together, a 400 on the
+            // second chunk of every long reply), the chunk goes out once more on its own.
+            if (!previousRequestIds.length) throw err;
+            log.warn(
+              `[TTS] stitched request failed (${err instanceof Error ? err.message : String(err)}); retrying unstitched`,
+            );
+            return fetchAudioUrl(text, voiceId, { context, previousRequestIds: [], onRequestId });
+          })
+          .catch((err: unknown) => {
+            const errorMessage = `TTS request failed: ${err instanceof Error ? err.message : String(err)}`;
+            log.error(errorMessage);
+            setError(errorMessage);
+            onRequestId?.(undefined);
+            return null;
+          });
       };
       const audioPromises: (Promise<string | null> | undefined)[] = [];
       const startFetch = (index: number) => {

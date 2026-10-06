@@ -275,6 +275,36 @@ describe('buildElevenLabsSpeechRequest', () => {
     expect(stitched.body.previous_request_ids).toEqual(['b', 'c', 'd']);
   });
 
+  it('drops previous_text when stitching ids are sent: the API takes one or the other', () => {
+    // 2026-10-05: both together got a 400 on the second chunk of every long reply
+    const stitched = buildElevenLabsSpeechRequest({
+      text: 'Never caught a thing, mind you.',
+      voiceId: rachelVoiceId,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: 'test-key',
+      settings: settings(),
+      previousText: 'Been fishing here for years.',
+      nextText: 'Come in, then.',
+      previousRequestIds: ['a'],
+    });
+    expect(stitched.body.previous_request_ids).toEqual(['a']);
+    expect('previous_text' in stitched.body).toBe(false);
+    expect(stitched.body.next_text).toEqual('Come in, then.');
+
+    // Blank ids are not stitching, so the text stays
+    const unstitched = buildElevenLabsSpeechRequest({
+      text: 'Never caught a thing, mind you.',
+      voiceId: rachelVoiceId,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: 'test-key',
+      settings: settings(),
+      previousText: 'Been fishing here for years.',
+      previousRequestIds: ['', ''],
+    });
+    expect(unstitched.body.previous_text).toEqual('Been fishing here for years.');
+    expect('previous_request_ids' in unstitched.body).toBe(false);
+  });
+
   it('omits previous_text and next_text unless given', () => {
     const request = buildRequest('Hello there.', rachelVoiceId, settings());
     expect('previous_text' in request.body).toBe(false);
@@ -373,6 +403,22 @@ describe('buildElevenLabsDialogueRequest', () => {
       previousRequestIds: ['a', 'b', 'c', 'd'],
     });
     expect(stitched.body.previous_request_ids).toEqual(['b', 'c', 'd']);
+  });
+
+  it('drops previous_text when stitching ids are sent, and keeps future_text', () => {
+    const stitched = buildElevenLabsDialogueRequest({
+      text: 'Never caught a thing, mind you.',
+      voiceId: rachelVoiceId,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: 'test-key',
+      settings: v4,
+      previousText: 'Been fishing here for years.',
+      nextText: 'Come in, then.',
+      previousRequestIds: ['a'],
+    });
+    expect(stitched.body.previous_request_ids).toEqual(['a']);
+    expect('previous_text' in stitched.body).toBe(false);
+    expect(stitched.body.future_text).toEqual('Come in, then.');
   });
 
   it('omits context unless given', () => {

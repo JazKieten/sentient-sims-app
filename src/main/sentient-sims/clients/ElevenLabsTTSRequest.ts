@@ -151,6 +151,25 @@ function previousRequestIdsField(ids: string[] | undefined): { previous_request_
 }
 
 /**
+ * What came before this line, for continuity of delivery: EITHER the ids of the requests
+ * just spoken (the chunks of one long reply, stitched) OR the plain text of the line
+ * before - never both. ElevenLabs rejects a request carrying both with a 400 ("Provide
+ * only one of previous_request_ids or previous_text"), which on the 2026-10-05 stream
+ * silenced the second chunk of every long reply. The ids win when there are any: they
+ * are the stronger signal, and the text they replace is the very chunk they name.
+ */
+function previousContextFields(
+  previousText: string | undefined,
+  previousRequestIds: string[] | undefined,
+): { previous_text?: string; previous_request_ids?: string[] } {
+  const ids = previousRequestIdsField(previousRequestIds);
+  if (ids.previous_request_ids) {
+    return ids;
+  }
+  return previousText ? { previous_text: previousText } : {};
+}
+
+/**
  * Clamps a neighbouring line to what the dialogue endpoint accepts: the TAIL of the
  * line before (what was just said), the HEAD of the line after (what comes next).
  */
@@ -204,9 +223,8 @@ export function buildElevenLabsSpeechRequest(params: ElevenLabsLineRequestParams
       text,
       model_id: settings.model,
       voice_settings: elevenLabsVoiceSettings(settings),
-      ...(previousText ? { previous_text: previousText } : {}),
+      ...previousContextFields(previousText, previousRequestIds),
       ...(nextText ? { next_text: nextText } : {}),
-      ...previousRequestIdsField(previousRequestIds),
     },
   };
 }
@@ -232,9 +250,8 @@ export function buildElevenLabsDialogueRequest(params: ElevenLabsLineRequestPara
       inputs: [{ text, voice_id: voiceId }],
       model_id: settings.model,
       settings: { stability: resolved.stability, similarity: resolved.similarity_boost },
-      ...(previous ? { previous_text: previous } : {}),
+      ...previousContextFields(previous, previousRequestIds),
       ...(future ? { future_text: future } : {}),
-      ...previousRequestIdsField(previousRequestIds),
     },
   };
 }

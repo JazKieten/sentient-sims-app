@@ -39,12 +39,13 @@ import {
   sentientSimsAIDefaultModel,
   defaultSentientSimsAIHost,
   defaultGameAppPath,
-  defaultVoiceInputHotkey,
+  defaultVoiceInputHotkeyFor,
   defaultVoiceInputModel,
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
 } from '../constants';
 import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
+import { redactSettingValue } from '../util/redactSetting';
 import { disableDebugLogging, enableDebugLogging } from '../util/debugLog';
 import { defaultSentientSimsAITTSSettings, SentientSimsAITTSSettings } from '../models/SentientSimsAITTSSettings';
 import { defaultKokoroAITTSSettings, KokoroAITTSSettings } from '../models/KokoroAITTSSettings';
@@ -55,6 +56,7 @@ import {
   sanitizeElevenLabsVoicesCache,
 } from '../models/ElevenLabsVoice';
 import { WizardPage } from '../models/WizardPage';
+import { normalizeVoiceInputLanguage } from '../models/VoiceInputLanguages';
 
 export function defaultStore(cwd?: string) {
   return new Store({
@@ -366,6 +368,10 @@ export function defaultStore(cwd?: string) {
         type: 'boolean',
         default: true,
       },
+      [SettingsEnum.VOICE_INPUT_PROVIDER.toString()]: {
+        type: 'string',
+        default: ApiType.SentientSimsAI,
+      },
       [SettingsEnum.VOICE_INPUT_ENDPOINT.toString()]: {
         type: 'string',
         default: openaiDefaultEndpoint,
@@ -380,7 +386,7 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.VOICE_INPUT_HOTKEY.toString()]: {
         type: 'string',
-        default: defaultVoiceInputHotkey,
+        default: defaultVoiceInputHotkeyFor(process.platform === 'darwin'),
       },
       [SettingsEnum.VOICE_INPUT_HOTKEY_MODE.toString()]: {
         type: 'string',
@@ -520,16 +526,8 @@ export function defaultStore(cwd?: string) {
   });
 }
 
-// Player log bundles are uploaded publicly to Discord, so secret-bearing
-// settings (openaiKey, elevenlabsKey, geminiKeys, ...) must never be logged
-// verbatim.
-const secretSettingKey = /(key|keys|token|secret|password)$/i;
-
 function loggableSettingValue(key: string, value: unknown): string {
-  if (secretSettingKey.test(key) && typeof value === 'string' && value !== '') {
-    return '"<redacted>"';
-  }
-  return JSON.stringify(value);
+  return JSON.stringify(redactSettingValue(key, value));
 }
 
 export class SettingsService {
@@ -1239,12 +1237,13 @@ export class SettingsService {
   }
 
   get playerVoicePersona(): PlayerVoicePersona {
-    const raw = String(this.get(SettingsEnum.PLAYER_VOICE_PERSONA) ?? 'voice');
-    return (PLAYER_VOICE_PERSONAS as readonly string[]).includes(raw) ? (raw as PlayerVoicePersona) : 'voice';
+    const stored = this.get(SettingsEnum.PLAYER_VOICE_PERSONA);
+    return PLAYER_VOICE_PERSONAS.find((persona) => persona === stored) ?? 'voice';
   }
 
   get playerVoicePersonaBio(): string {
-    return String(this.get(SettingsEnum.PLAYER_VOICE_PERSONA_BIO) ?? '').trim();
+    const bio = this.get(SettingsEnum.PLAYER_VOICE_PERSONA_BIO);
+    return typeof bio === 'string' ? bio.trim() : '';
   }
 
   get playerVoicePersonaName(): string {
@@ -1259,7 +1258,8 @@ export class SettingsService {
   }
 
   get voiceCommandHotkey(): string {
-    return String(this.get(SettingsEnum.VOICE_COMMAND_HOTKEY) ?? '').trim();
+    const hotkey = this.get(SettingsEnum.VOICE_COMMAND_HOTKEY);
+    return typeof hotkey === 'string' ? hotkey.trim() : '';
   }
 
   get askActionsEnabled(): boolean {
@@ -1300,6 +1300,10 @@ export class SettingsService {
     return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
   }
 
+  get voiceInputProvider(): ApiType.OpenAI | ApiType.SentientSimsAI {
+    return this.get(SettingsEnum.VOICE_INPUT_PROVIDER) === ApiType.OpenAI ? ApiType.OpenAI : ApiType.SentientSimsAI;
+  }
+
   get voiceInputEndpoint(): string {
     return this.get(SettingsEnum.VOICE_INPUT_ENDPOINT) as string;
   }
@@ -1321,7 +1325,7 @@ export class SettingsService {
   }
 
   get voiceInputLanguage(): string {
-    return this.get(SettingsEnum.VOICE_INPUT_LANGUAGE) as string;
+    return normalizeVoiceInputLanguage(this.get(SettingsEnum.VOICE_INPUT_LANGUAGE) as string);
   }
 
   get twitchChatEnabled(): boolean {

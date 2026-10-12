@@ -2,8 +2,10 @@ import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Alert,
   Autocomplete,
   Box,
+  Chip,
   createFilterOptions,
   Button,
   CircularProgress,
@@ -56,12 +58,16 @@ import {
   novelaiDefaultModel,
   openaiDefaultModel,
   openrouterDefaultModel,
+  patreonMembershipUrl,
   sentientSimsAIDefaultEmbeddingModel,
   sentientSimsAIDefaultModel,
 } from 'main/sentient-sims/constants';
 import { AIHealthCheckResponse, AITestStatus } from 'main/sentient-sims/models/AIHealthCheckResponse';
+import { AIModel } from 'main/sentient-sims/models/AIModel';
 import { parseJsonResponse } from 'main/sentient-sims/clients/jsonResponse';
+import { PatreonUser } from 'main/sentient-sims/wrappers/PatreonUser';
 import HelpButton from 'renderer/components/HelpButton';
+import handleOpenExternalLink from 'renderer/hooks/handleOpenExternalLink';
 import useSetting from '../hooks/useSetting';
 import { useAIModels } from '../hooks/useAIModels';
 import { useProviderConnectionStatus } from '../hooks/useProviderConnectionStatus';
@@ -151,12 +157,13 @@ function defaultModelFor(capability: ProviderCapability, apiType: ApiType): stri
 }
 
 // Mirrors SettingsService.hasProviderCredentials for the capability-capable
-// providers (OpenAI, Sentient Sims AI, Gemini) so the Auto row shows the same
-// provider the backend will resolve to
+// providers (OpenAI, Sentient Sims AI, Gemini, OpenRouter) so the Auto row shows
+// the same provider the backend will resolve to
 function useAutoApiType(capableTypes: ApiType[]): ApiType {
   const aiSettings = useAISettings();
   const openaiKey = useSetting<string>(SettingsEnum.OPENAI_KEY, '');
   const geminiKeys = useSetting<string>(SettingsEnum.GEMINI_KEYS, '');
+  const openrouterKey = useSetting<string>(SettingsEnum.OPENROUTER_KEY, '');
   const { userAttributes } = useAuth();
 
   return deriveAutoApiType(aiSettings.aiApiType, capableTypes, (apiType) => {
@@ -165,6 +172,8 @@ function useAutoApiType(capableTypes: ApiType[]): ApiType {
         return openaiKey.value.trim() !== '';
       case ApiType.Gemini:
         return geminiKeys.value.trim() !== '';
+      case ApiType.OpenRouter:
+        return openrouterKey.value.trim() !== '';
       case ApiType.SentientSimsAI:
       case ApiType.CustomAI:
         return Boolean(userAttributes);
@@ -196,6 +205,8 @@ function ProviderConfigDialog({ capability, initial, onCancel, onSave }: Provide
   // fetched model list. Only filter after the user actually types.
   const [modelFilterActive, setModelFilterActive] = useState(false);
   const [testResult, setTestResult] = useState<AITestStatus | undefined>();
+  const { userAttributes } = useAuth();
+  const patreonUser = new PatreonUser(userAttributes);
 
   const connection = useProviderConnectionStatus(apiType);
   const modelSelectionSupported = capability !== 'text' || apiType !== ApiType.KoboldAI;
@@ -207,11 +218,21 @@ function ProviderConfigDialog({ capability, initial, onCancel, onSave }: Provide
   const aiModels = useAIModels(apiType, capability === 'text' && modelsEnabled);
   const staticSuggestions =
     capability === 'image' ? imageModelSuggestions(apiType) : embeddingModelSuggestions(apiType);
-  const modelOptions =
-    capability === 'text' ? (aiModels.data?.map((aiModel) => aiModel.name) ?? []) : staticSuggestions;
+  const modelsByName = new Map<string, AIModel>(
+    capability === 'text' ? (aiModels.data?.map((aiModel) => [aiModel.name, aiModel]) ?? []) : [],
+  );
+  const modelOptions = capability === 'text' ? [...modelsByName.keys()] : staticSuggestions;
   const modelsFetching = capability === 'text' && aiModels.isFetching;
 
   const missingModel = modelRequired && model.trim() === '';
+  // Tier-gated models stay in the list so lower tiers can see them, but the
+  // server refuses them, so saving one is blocked and the upgrade path shown
+  const selectedModel = modelsByName.get(model.trim());
+  const upgradeRequired = selectedModel !== undefined && !patreonUser.canUseModel(selectedModel);
+  const lockedModel = (option: string) => {
+    const aiModel = modelsByName.get(option);
+    return aiModel !== undefined && !patreonUser.canUseModel(aiModel);
+  };
 
   const handleProviderChange = (value: unknown) => {
     const type = ApiTypeFromValue(value);
@@ -324,6 +345,25 @@ function ProviderConfigDialog({ capability, initial, onCancel, onSave }: Provide
                 }
               }}
               loading={modelsFetching}
+              renderOption={({ key, ...optionProps }, option) => {
+                const requiresTier = modelsByName.get(option)?.requiresTier;
+                return (
+                  <li key={key} {...optionProps}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: 1 }}>
+                      <span>{option}</span>
+                      {requiresTier ? (
+                        <Chip
+                          size="small"
+                          label="Tier 2"
+                          color={lockedModel(option) ? 'warning' : 'success'}
+                          variant="outlined"
+                          sx={{ marginLeft: 2 }}
+                        />
+                      ) : null}
+                    </Box>
+                  </li>
+                );
+              }}
               renderInput={(params) => (
                 <TextField
                   {...params}
@@ -375,6 +415,24 @@ function ProviderConfigDialog({ capability, initial, onCancel, onSave }: Provide
         {apiType === ApiType.VLLM ? (
           <FormHelperText>Leave the model empty to use the VLLM server default.</FormHelperText>
         ) : null}
+        {upgradeRequired ? (
+          <Alert
+            severity="warning"
+            sx={{ marginTop: 2 }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                href={patreonMembershipUrl}
+                onClick={handleOpenExternalLink(patreonMembershipUrl)}
+              >
+                Upgrade
+              </Button>
+            }
+          >
+            {selectedModel.displayName} is a Tier 2 perk. Upgrade your Patreon membership to Tier 2 to use it.
+          </Alert>
+        ) : null}
       </DialogContent>
       <DialogActions>
         <Button
@@ -390,7 +448,7 @@ function ProviderConfigDialog({ capability, initial, onCancel, onSave }: Provide
           <FormHelperText error={Boolean(testResult.error)}>{testResult.error || testResult.status}</FormHelperText>
         ) : null}
         <Button onClick={onCancel}>Cancel</Button>
-        <Button variant="contained" disabled={missingModel} onClick={handleSave}>
+        <Button variant="contained" disabled={missingModel || upgradeRequired} onClick={handleSave}>
           Save
         </Button>
       </DialogActions>

@@ -64,6 +64,8 @@ import { ModelSettingsService } from './ModelSettingsService';
 import { NovelAIService } from './NovelAIService';
 import { OpenAIImageGenerationService } from './OpenAIImageGenerationService';
 import { OpenAIService } from './OpenAIService';
+import { OpenRouterEmbeddingService } from './OpenRouterEmbeddingService';
+import { OpenRouterImageGenerationService } from './OpenRouterImageGenerationService';
 import { OpenRouterService } from './OpenRouterService';
 import { PatreonService } from './PatreonService';
 import { PromptRequestBuilderService } from './PromptRequestBuilderService';
@@ -97,6 +99,9 @@ export type ApiContextParams = {
   // The build tiers this context runs (release 4.5). Defaults to the generated list for
   // the build; tests that pin core behaviour pass [].
   tiers?: TierRegistration[];
+  // True when the app runs from source (main.ts: !app.isPackaged). The startup mod
+  // auto-update stays off, so a mod built from the repo is not replaced by a release.
+  devBuild?: boolean;
 };
 
 class ControllerContext {
@@ -266,6 +271,7 @@ export class ApiContext {
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
+  private readonly _openRouterEmbeddingService: OpenRouterEmbeddingService;
   private readonly _noopEmbeddingService: NoopEmbeddingService;
   private readonly _memoryAnnotationService: MemoryAnnotationService;
   private readonly _memoryRetrievalService: MemoryRetrievalService;
@@ -302,6 +308,7 @@ export class ApiContext {
   private readonly _modelSettingsService: ModelSettingsService;
   private readonly _providerConfigService: ProviderConfigService;
   private readonly _openAIImageService: OpenAIImageGenerationService;
+  private readonly _openRouterImageService: OpenRouterImageGenerationService;
   private readonly _imageProviderConfigService: ImageProviderConfigService;
   private readonly _embeddingProviderConfigService: EmbeddingProviderConfigService;
 
@@ -313,12 +320,15 @@ export class ApiContext {
 
   private readonly _tiers: TierRegistration[];
 
+  readonly devBuild: boolean;
+
   // Capability slots the build tiers fill in construct() (tiers/types.ts TierExtensions).
   // Core code calls only these, and carries on without the feature when a slot is empty.
   readonly ext: TierExtensions = {};
 
   constructor(options: ApiContextParams) {
     this._tiers = options.tiers ?? TIER_REGISTRATIONS;
+    this.devBuild = options.devBuild ?? false;
     this._port = options.port;
     this._getAssetPath = options.getAssetPath;
     this._settings = options.settingsService;
@@ -335,6 +345,7 @@ export class ApiContext {
     this._openAIService = new OpenAIService(this);
     this._openRouterService = new OpenRouterService(this);
     this._openAIImageService = new OpenAIImageGenerationService(this._openAIService);
+    this._openRouterImageService = new OpenRouterImageGenerationService(this._openRouterService);
 
     this._novelAITokenCounter = new NovelAITokenCounter();
     this._openAITokenCounter = new OpenAITokenCounter();
@@ -392,18 +403,22 @@ export class ApiContext {
         }
         sendSceneEndedToMod(sceneId, reason);
       },
-      trimMemory: (memoryId, content) => {
+      rewriteMemory: (memoryId, content) => {
+        if (!this._db.isLoaded()) {
+          return;
+        }
         const existing = this._memoryRepository.getMemory({ id: memoryId });
         this._memoryRepository.updateMemory({ ...existing, content });
       },
     });
-    // A scene's transcript row is saved before a word of it is spoken; this is how a
-    // cut scene finds its row again to shrink it to what was actually said.
+    // A scene's transcript row is saved from round 1 alone; this is how the scene
+    // finds its row again at its close to rewrite it to what was actually said.
     setSceneMemoryObserver((pacedText, memoryId) => this._scenePlaybackRegistry.attachMemory(pacedText, memoryId));
     this._simStateCache = new SimStateCache();
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
     this._geminiEmbeddingService = new GeminiEmbeddingService(this);
+    this._openRouterEmbeddingService = new OpenRouterEmbeddingService(this);
     this._noopEmbeddingService = new NoopEmbeddingService();
 
     this._promptBuilder = new PromptRequestBuilderService(this);
@@ -559,6 +574,9 @@ export class ApiContext {
     if (apiType === ApiType.Gemini) {
       return this._geminiEmbeddingService;
     }
+    if (apiType === ApiType.OpenRouter) {
+      return this._openRouterEmbeddingService;
+    }
     return this._openAIEmbeddingService;
   }
 
@@ -634,6 +652,10 @@ export class ApiContext {
     return this._sentientSimsAIService;
   }
 
+  get sentientSimsTranscription(): Pick<SentientSimsAIService, 'transcribe' | 'healthCheck'> {
+    return this._sentientSimsAIService;
+  }
+
   private get koboldAIService(): KoboldAIService {
     return this._koboldAIService;
   }
@@ -683,6 +705,10 @@ export class ApiContext {
       return this.geminiService;
     }
 
+    if (aiType === ApiType.OpenRouter) {
+      return this._openRouterImageService;
+    }
+
     throw new Error(`Image generation is not supported for provider: ${aiType}`);
   }
 
@@ -724,7 +750,7 @@ export class ApiContext {
         if (property === 'sentientSimsGenerate') {
           return loggedGenerate;
         }
-        const value = Reflect.get(target, property, receiver);
+        const value: unknown = Reflect.get(target, property, receiver);
         // Bound to the real service so delegated methods keep their own `this`
         return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
       },

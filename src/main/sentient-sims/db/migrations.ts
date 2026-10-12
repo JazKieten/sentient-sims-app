@@ -152,32 +152,6 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         voice_name           TEXT
       );
     `,
-    // Private memories (a sim's inner monologue) are owned by one participant: retrieval
-    // for any other sim must never surface them. Lives in the memory_index sidecar because
-    // the mod parses memory rows into a Python class with fixed fields (see migration 011).
-    // NULL owner = shared memory, visible to everyone as before.
-    '014-add-memory-index-owner': `
-      ALTER TABLE memory_index
-      ADD COLUMN owner_participant_id INTEGER;
-    `,
-    // One row per sim per game day: the nightly planner's goals (validated against the
-    // mod's goal_pool), the free-form persona sentence, and the discretionary action
-    // loadout. Its own table, never memory columns (see migration 011); no FK to
-    // participant for the same REPLACE-delete reason as participant_voice (013).
-    // review is written the FOLLOWING night when the diary grades how the day went.
-    '015-create-daily-plan': `
-      CREATE TABLE daily_plan (
-        sim_id               TEXT NOT NULL  ,
-        absolute_day         INTEGER NOT NULL  ,
-        goals                TEXT     ,
-        persona              TEXT     ,
-        loadout              TEXT     ,
-        source               TEXT     ,
-        review               TEXT     ,
-        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
-        PRIMARY KEY ( sim_id, absolute_day )
-      );
-    `,
     // An embedding is only comparable to vectors from the model that produced it, so
     // embeddings move out of memory_index into their own table keyed by
     // (memory_id, embedding_model). Every model's vectors persist side by side: switching
@@ -388,6 +362,34 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
     '020-participant-description-generated': (db: Database) => {
       db.prepare('ALTER TABLE participant ADD COLUMN description_generated INTEGER').run();
     },
+    // Private memories (a sim's inner monologue) are owned by one participant: retrieval
+    // for any other sim must never surface them. Lives in the memory_index sidecar because
+    // the mod parses memory rows into a Python class with fixed fields (see migration 011).
+    // NULL owner = shared memory, visible to everyone as before.
+    // Shipped as 014 on our fork before 4.1.0 took that number; see RENAMED_MIGRATIONS.
+    '021-add-memory-index-owner': `
+      ALTER TABLE memory_index
+      ADD COLUMN owner_participant_id INTEGER;
+    `,
+    // One row per sim per game day: the nightly planner's goals (validated against the
+    // mod's goal_pool), the free-form persona sentence, and the discretionary action
+    // loadout. Its own table, never memory columns (see migration 011); no FK to
+    // participant for the same REPLACE-delete reason as participant_voice (013).
+    // review is written the FOLLOWING night when the diary grades how the day went.
+    // Shipped as 015 on our fork before 4.1.0 took that number; see RENAMED_MIGRATIONS.
+    '022-create-daily-plan': `
+      CREATE TABLE daily_plan (
+        sim_id               TEXT NOT NULL  ,
+        absolute_day         INTEGER NOT NULL  ,
+        goals                TEXT     ,
+        persona              TEXT     ,
+        loadout              TEXT     ,
+        source               TEXT     ,
+        review               TEXT     ,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        PRIMARY KEY ( sim_id, absolute_day )
+      );
+    `,
   }),
 );
 
@@ -406,6 +408,31 @@ const createDbMigrationsTable = (db: Database) => {
 const getAppliedMigrations = (db: Database): string[] => {
   const rows = db.prepare('SELECT name FROM migrations').all() as { name: string }[];
   return rows.map((row) => row.name);
+};
+
+// Two migrations first shipped on a fork under numbers 4.1.0 later used for its own
+// (014-move-embeddings-to-memory-embedding, 015-participant-voice-per-voice-type), so
+// they were renumbered. A database that applied them under the old names already has
+// the column and the table; its ledger row is relabelled before the to-apply set is
+// computed, so the migration neither runs twice (the DDL would throw) nor dangles.
+export const RENAMED_MIGRATIONS: Record<string, string> = {
+  '014-add-memory-index-owner': '021-add-memory-index-owner',
+  '015-create-daily-plan': '022-create-daily-plan',
+};
+
+const relabelRenamedMigrations = (db: Database) => {
+  const applied = getAppliedMigrations(db);
+  Object.entries(RENAMED_MIGRATIONS).forEach(([oldName, newName]) => {
+    if (!applied.includes(oldName)) {
+      return;
+    }
+    if (applied.includes(newName)) {
+      db.prepare('DELETE FROM migrations WHERE name = ?').run(oldName);
+    } else {
+      db.prepare('UPDATE migrations SET name = ? WHERE name = ?').run(newName, oldName);
+    }
+    log.info(`Migration ledger: ${oldName} is recorded as ${newName}`);
+  });
 };
 
 const applyMigration = (db: Database, dbMigration: DbMigration) => {
@@ -431,6 +458,7 @@ export const migrate = (db: Database) => {
   db.pragma('foreign_keys = ON');
   db.pragma('journal_mode = WAL');
   createDbMigrationsTable(db);
+  relabelRenamedMigrations(db);
 
   const appliedMigrations = getAppliedMigrations(db);
   const migrationsToApply: string[] = [];

@@ -6,7 +6,7 @@ import { formatLog } from './util/format';
 import { mirrorModLog } from './util/modLogMirror';
 import { LogLevel } from './models/LogLevel';
 import { WebsocketNotification } from './models/ModWebsocketMessage';
-import { ModInfo, ModLogWebsocketMessage } from './models/ModLogWebsocketMessage';
+import { ClockState, ModInfo, ModLogWebsocketMessage, VoiceKeyEvent } from './models/ModLogWebsocketMessage';
 import { modWebsocketPort } from './constants';
 import { WebsocketStatusChange } from './models/WebsocketStatusResponse';
 import { ApiContext } from './services/ApiContext';
@@ -45,8 +45,31 @@ export function reportRendererSocket(connected: boolean) {
   });
 }
 
-// The last mod_info the mod sent; kept across a disconnect so a reconnect overwrites it
+// The mod_info the mod on the current socket sent; a 4.1 mod never sends one
 let lastModInfo: ModInfo | undefined;
+
+// The voice hotkey lives in the game overlay (D8): VoiceInputService registers its
+// hotkey service here so the mod learns the chords on connect and the key edges it
+// reports (`voice_key`) reach it
+export type VoiceKeySink = {
+  onModConnected(): void;
+  onKey(event: VoiceKeyEvent): void;
+};
+let voiceKeySink: VoiceKeySink | undefined;
+
+export function setVoiceKeySink(sink: VoiceKeySink | undefined) {
+  voiceKeySink = sink;
+}
+
+const runningClock: ClockState = { speed: 'NORMAL', paused: false, paused_by: null };
+// The clock the connected mod last reported
+let modClockState: ClockState | undefined;
+
+// V-1: the renderer holds playback on the last state it was sent, so it is sent again
+// whenever the mod reports, the mod disconnects, or the setting changes
+export function publishClockState(ctx: ApiContext) {
+  notifyClockState(ctx.settings.playbackFollowsGameClock && modClockState ? modClockState : runningClock);
+}
 
 export const startWebSocketServer = (ctx: ApiContext) => {
   const modServer = new WebSocketServer({ host: '127.0.0.1', port: modWebsocketPort });
@@ -57,6 +80,9 @@ export const startWebSocketServer = (ctx: ApiContext) => {
     modWs = ws;
 
     modConnected = true;
+    lastModInfo = undefined;
+    // The overlay starts with no voice chords bound
+    voiceKeySink?.onModConnected();
     notifyWebsocketStatus({
       type: 'mod',
       status: true,
@@ -68,6 +94,10 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       }
       modWs = undefined;
       modConnected = false;
+      modClockState = undefined;
+      publishClockState(ctx);
+      // The next game session numbers its state reports from 1 again
+      ctx.simStateCache.reset();
       notifyWebsocketStatus({
         type: 'mod',
         status: false,
@@ -85,12 +115,13 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       }
 
       if (parsedData.clock_state) {
-        // V-1: forwarded to the renderer's playback clock; when the feature is off the
-        // renderer is told the clock runs normally so nothing ever holds playback
-        const state = ctx.settings.playbackFollowsGameClock
-          ? parsedData.clock_state
-          : { speed: 'NORMAL', paused: false, paused_by: null };
-        notifyClockState(state);
+        modClockState = parsedData.clock_state;
+        publishClockState(ctx);
+        return;
+      }
+
+      if (parsedData.voice_key) {
+        voiceKeySink?.onKey(parsedData.voice_key);
         return;
       }
 

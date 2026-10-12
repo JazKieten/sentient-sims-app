@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import log from 'electron-log';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
+import { redactSettingValue } from 'main/sentient-sims/util/redactSetting';
 
 export type SettingsHook<T> = {
   value: T;
@@ -41,7 +42,9 @@ export default function useSetting<T>(settingsEnum: SettingsEnum, defaultValue: 
       }
       queryClient.setQueryData<T>(['setting', settingName], settingValue);
       bounceTimeoutRef.current = setTimeout(() => {
-        log.debug(`Setting debounce running: ${settingsEnum.toString()}, value: ${String(settingValue)}`);
+        log.debug(
+          `Setting debounce running: ${settingName}, value: ${String(redactSettingValue(settingName, settingValue))}`,
+        );
         window.electron.setSetting(settingsEnum, settingValue);
       }, 600);
       return Promise.resolve();
@@ -60,7 +63,7 @@ export default function useSetting<T>(settingsEnum: SettingsEnum, defaultValue: 
   useEffect(() => {
     const unsubscribe = window.electron.onSettingChange((_event: unknown, setting: SettingsEnum, newValue: unknown) => {
       if (setting === settingsEnum) {
-        log.debug(`New value: ${String(newValue)}`);
+        log.debug(`New value: ${String(redactSettingValue(settingName, newValue))}`);
         queryClient.setQueryData<T>(['setting', settingName], newValue as T);
       }
     });
@@ -69,5 +72,7 @@ export default function useSetting<T>(settingsEnum: SettingsEnum, defaultValue: 
     };
   }, [queryClient, settingName, settingsEnum]);
 
-  return { value, isLoading, setSetting, resetSetting };
+  // A fresh object per render lets an effect keyed on the hook result re-run on
+  // every provider render; one that writes the setting then re-renders forever.
+  return useMemo(() => ({ value, isLoading, setSetting, resetSetting }), [value, isLoading, setSetting, resetSetting]);
 }

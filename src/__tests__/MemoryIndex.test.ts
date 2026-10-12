@@ -199,12 +199,13 @@ describe('MemoryIndexRepository', () => {
     expect(ctx.memoryIndexRepository.getIndex(String(memory.id))?.importance).toEqual(7);
 
     // The inline columns are gone from memory_index (owner_participant_id is ours, from
-    // 014-add-memory-index-owner, and stays)
+    // 021-add-memory-index-owner, once 014, and stays)
     const columns = (db.prepare('PRAGMA table_info(memory_index)').all() as { name: string }[]).map(
       (column) => column.name,
     );
-    // game_day joined the index in 019 so retrieval can decay on the sim's own clock
-    expect(columns).toEqual(['memory_id', 'importance', 'owner_participant_id', 'game_day']);
+    // game_day joined the index in 019 so retrieval can decay on the sim's own clock;
+    // owner_participant_id follows it on a fresh database now that its migration is 021
+    expect(columns).toEqual(['memory_id', 'importance', 'game_day', 'owner_participant_id']);
   });
 });
 

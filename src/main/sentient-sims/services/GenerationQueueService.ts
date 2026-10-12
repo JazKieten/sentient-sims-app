@@ -10,7 +10,8 @@ import {
 import { InteractionEvent } from '../models/InteractionEvents';
 import { InteractionEventResult, InteractionEventStatus } from '../models/InteractionEventResult';
 import { ApiContext } from './ApiContext';
-import { DeferredInteractionResult, toPrimaryInteractionEvent } from './AIService';
+import { DeferredInteractionResult, ScenePlay, toPrimaryInteractionEvent } from './AIService';
+import type { SimRef } from './SceneFreshness';
 
 export type InteractionPrefetchRequest = {
   correlation_id: string;
@@ -41,7 +42,9 @@ type PrefetchEntry = {
   state: EntryState;
   createdAt: number;
   result?: InteractionEventResult;
-  play?: () => void;
+  play?: ScenePlay;
+  // When the interaction was claimed: the game event time its scene is judged against
+  claimedAt?: number;
   finalizeDeadline?: number;
   waiters: ClaimWaiter[];
 };
@@ -50,14 +53,25 @@ function noopResult(): InteractionEventResult {
   return { status: InteractionEventStatus.NOOP };
 }
 
-function once(callback: () => void): () => void {
+// Plays once; later calls report what the first one did
+function once(callback: ScenePlay): ScenePlay {
   let called = false;
-  return () => {
+  let aired = true;
+  return (claimedAt?: number) => {
     if (!called) {
       called = true;
-      callback();
+      aired = callback(claimedAt);
     }
+    return aired;
   };
+}
+
+function simRefs(event: InteractionEvent): SimRef[] {
+  // An older mod may claim with an event that carries no cast
+  if (!Array.isArray(event.sentient_sims)) {
+    return [];
+  }
+  return event.sentient_sims.map((sim) => ({ simId: sim.sim_id, name: sim.name }));
 }
 
 export class GenerationQueueService {
@@ -129,19 +143,24 @@ export class GenerationQueueService {
 
   async claim(request: InteractionClaimRequest): Promise<DeferredInteractionResult> {
     this.pruneExpired();
+    // The claim is the game event: the interaction is running now (the prefetch was
+    // speculative, queued behind whatever the sim was doing before)
+    const claimedAt = Date.now();
+    this.ctx.sceneFreshness.recordEvent(simRefs(request.event), claimedAt);
     const entry = this.entries.get(request.correlation_id);
     if (!entry) {
-      const result = await this.enqueue(() => this.ctx.ai.interactionEvent(request.event));
+      const result = await this.enqueue(() => this.ctx.ai.interactionEvent(request.event, { eventAt: claimedAt }));
       result.result_source = 'synchronous';
-      return { result, play: () => {} };
+      return { result, play: () => true };
     }
+    entry.claimedAt = claimedAt;
 
     if (entry.state === 'done' || entry.state === 'fallback' || entry.state === 'abandoned') {
       return this.consume(entry);
     }
     if (entry.state === 'cancelled') {
       this.entries.delete(entry.correlationId);
-      return { result: noopResult(), play: () => {} };
+      return { result: noopResult(), play: () => true };
     }
 
     return new Promise<DeferredInteractionResult>((resolve) => {
@@ -180,7 +199,7 @@ export class GenerationQueueService {
     entry.state = 'cancelled';
     this.entries.delete(correlationId);
     entry.waiters.splice(0).forEach((resolve) => {
-      resolve({ result: noopResult(), play: () => {} });
+      resolve({ result: noopResult(), play: () => true });
     });
     return true;
   }
@@ -320,11 +339,12 @@ export class GenerationQueueService {
     this.entries.delete(entry.correlationId);
     if (entry.state === 'done' && entry.result && entry.play) {
       entry.result.result_source = 'prefetch';
-      return { result: entry.result, play: once(entry.play) };
+      const { play, claimedAt } = entry;
+      return { result: entry.result, play: once(() => play(claimedAt)) };
     }
     const result = this.ctx.ai.createInteractionPreActionFallback(entry.event, entry.preActionText);
     result.result_source = 'preaction_fallback';
-    return { result, play: () => {} };
+    return { result, play: () => true };
   }
 
   private resolveWaiters(entry: PrefetchEntry) {
@@ -338,7 +358,7 @@ export class GenerationQueueService {
     const claimed = this.consume(entry);
     waiters[0](claimed);
     waiters.slice(1).forEach((resolve) => {
-      resolve({ result: noopResult(), play: () => {} });
+      resolve({ result: noopResult(), play: () => true });
     });
   }
 
@@ -372,7 +392,7 @@ export class GenerationQueueService {
         entry.state = 'cancelled';
         this.entries.delete(correlationId);
         entry.waiters.splice(0).forEach((resolve) => {
-          resolve({ result: noopResult(), play: () => {} });
+          resolve({ result: noopResult(), play: () => true });
         });
       }
     });

@@ -26,11 +26,13 @@ import { modWebsocketPort } from 'main/sentient-sims/constants';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { SimStateCache } from 'main/sentient-sims/services/SimStateCache';
+import { SceneFreshness } from 'main/sentient-sims/services/SceneFreshness';
 import { publishClockState, startWebSocketServer } from 'main/sentient-sims/websocketServer';
 
 const settings = { playbackFollowsGameClock: true };
 const simStateCache = new SimStateCache();
-const ctx = { settings, simStateCache, tiers: [] } as unknown as ApiContext;
+const sceneFreshness = new SceneFreshness({ maxAgeMs: () => 60_000 });
+const ctx = { settings, simStateCache, sceneFreshness, tiers: [] } as unknown as ApiContext;
 
 startWebSocketServer(ctx);
 const modServer = (servers as FakeServer[]).find((server) => server.options.port === modWebsocketPort);

@@ -331,6 +331,10 @@ function toTranscript(lines: DialogueLine[]): string {
 export type DirectedGenerationOptions = {
   action?: string;
   continueScene?: boolean;
+  // Wall clock when the game event behind this scene arrived (or, for a prefetched scene,
+  // when the interaction was claimed): what SceneFreshness judges the scene against. Absent
+  // for the chat window, the bench and the scenario tester, which are never stale.
+  eventAt?: number;
   // V-5a: which round of a self-continuing scene this is (1 = the opening beat) and the
   // lines the previous rounds already aired, so the continuation sees them before the
   // mod's POST /memories lands the transcript
@@ -382,14 +386,18 @@ export type DirectedGenerationOptions = {
   onConversationAction?: (result: { simId: string; acted: boolean; action?: string; target?: string }) => void;
 };
 
+// Airs a generated scene. For a prefetched scene the claim time is the event time the
+// scene is judged against. Returns false when it declined to air (the game moved on).
+export type ScenePlay = (claimedAt?: number) => boolean;
+
 export type DeferredInteractionResult = {
   result: InteractionEventResult;
-  play: () => void;
+  play: ScenePlay;
 };
 
 type PlaybackOptions = {
   deferPlayback?: boolean;
-  onPlaybackReady?: (play: () => void) => void;
+  onPlaybackReady?: (play: ScenePlay) => void;
   // Speak the whole output as this speaker. First-person generations (wants) have no
   // `Name:` prefix, so without this the dialogue parser falls back to Narrator and TTS
   // loses the sim's cast/pinned voice.
@@ -407,13 +415,15 @@ export type ResolvedInteractionPreAction =
   | { preAction: string; result?: never }
   | { preAction?: never; result: InteractionEventResult };
 
-function once(callback: () => void): () => void {
+function once<A extends unknown[], R>(callback: (...args: A) => R): (...args: A) => R {
   let called = false;
-  return () => {
+  let result: R;
+  return (...args: A) => {
     if (!called) {
       called = true;
-      callback();
+      result = callback(...args);
     }
+    return result;
   };
 }
 
@@ -759,7 +769,7 @@ ${factsBlock}
     }
   }
 
-  async interactionEvent(event: InteractionEvents): Promise<InteractionEventResult> {
+  async interactionEvent(event: InteractionEvents, meta?: { eventAt?: number }): Promise<InteractionEventResult> {
     await this.handleSceneBoundary(event);
 
     switch (event.event_type) {
@@ -770,13 +780,13 @@ ${factsBlock}
       case SSEventType.CHAT_CONTINUE:
         return this.handleChatContinue(event);
       case SSEventType.INTERACTION:
-        return this.handleInteraction(event as InteractionEvent);
+        return this.handleInteraction(event as InteractionEvent, meta);
       case SSEventType.WICKED_WHIMS:
         return this.handleWickedWhims(event as WWInteractionEvent);
       case SSEventType.WANTS:
         return this.handleWants(event);
       case SSEventType.CONTINUE:
-        return this.handleContinue(event);
+        return this.handleContinue(event, meta);
       case SSEventType.INTERACTION_MAPPING:
         return this.handleInteractionMapping(event as InteractionMappingEvent);
       default:
@@ -869,7 +879,7 @@ ${factsBlock}
     };
   }
 
-  async handleInteraction(event: InteractionEvent) {
+  async handleInteraction(event: InteractionEvent, meta?: { eventAt?: number }) {
     const primaryEvent = toPrimaryInteractionEvent(event);
     const resolved = await this.resolveInteractionPreAction(primaryEvent, event);
     if (resolved.result) {
@@ -877,7 +887,7 @@ ${factsBlock}
     }
     // Everything goes through the directed pipeline: pairs play dialogue + monologue,
     // a lone sim gets a monologue-only beat. There is no single-pass narrator anymore.
-    return this.runDirectedGeneration(primaryEvent, { action: resolved.preAction });
+    return this.runDirectedGeneration(primaryEvent, { action: resolved.preAction, eventAt: meta?.eventAt });
   }
 
   async interactionEventDeferred(
@@ -889,7 +899,7 @@ ${factsBlock}
     // later may already have reflected on the previous scene, which is harmless and keeps scene
     // state coherent.
     await this.handleSceneBoundary(primaryEvent);
-    let play = () => {};
+    let play: ScenePlay = () => true;
     const playbackOptions: PlaybackOptions = {
       deferPlayback: true,
       onPlaybackReady: (ready) => {
@@ -899,9 +909,7 @@ ${factsBlock}
     const result = await this.runDirectedGeneration(primaryEvent, { action: options.preAction }, playbackOptions);
     return {
       result,
-      play: once(() => {
-        play();
-      }),
+      play: once((claimedAt?: number) => play(claimedAt)),
     };
   }
 
@@ -920,12 +928,15 @@ ${factsBlock}
     }
   }
 
-  async handleContinue(event: ContinueInteractionEvent) {
+  async handleContinue(event: ContinueInteractionEvent, meta?: { eventAt?: number }) {
     // Group continues keep the full performer set (capped) like fresh interactions do
     const primaryEvent = toPrimaryInteractionEvent(event);
     if (primaryEvent.sentient_sims.length >= 1) {
       // Directed continue needs prior memories to pick up from; fall through when there are none
-      const directed = await this.tryDirectedGeneration(primaryEvent, { continueScene: true });
+      const directed = await this.tryDirectedGeneration(primaryEvent, {
+        continueScene: true,
+        eventAt: meta?.eventAt,
+      });
       if (directed?.status === InteractionEventStatus.GENERATED) {
         return directed;
       }
@@ -1306,6 +1317,7 @@ ${factsBlock}
         } else {
           this.playTts(output, event.sentient_sims);
         }
+        return true;
       });
       if (playbackOptions.deferPlayback) {
         playbackOptions.onPlaybackReady?.(play);
@@ -1515,6 +1527,23 @@ ${factsBlock}
     if (options.continueScene && sceneStopped()) {
       log.info(`[Pipeline] Scene ${sceneId} was ended in-game; dropping the continuation`);
       return { status: InteractionEventStatus.NOOP };
+    }
+    // A scene from a game event: is the event still what is happening? Judged here, before
+    // any model call, because the job may have waited in the queue behind other scenes
+    // (and a continuation round behind its own earlier rounds) while the game moved on.
+    // Age counts only for the opening round; later rounds are judged by what the game has
+    // done since (a newer event for a participant with somebody else, a departure).
+    const round = options.round ?? 1;
+    const sceneNames = event.sentient_sims.map((sim) => sim.name).join(' & ');
+    const participantRefs = event.sentient_sims.map((sim) => ({ simId: sim.sim_id, name: sim.name }));
+    const judgeStale = (eventAt: number) =>
+      this.ctx.sceneFreshness.staleReason(participantRefs, eventAt, { judgeAge: round <= 1 });
+    if (options.eventAt !== undefined && !options.playerLine) {
+      const stale = judgeStale(options.eventAt);
+      if (stale) {
+        log.info(`[Pipeline] skipping scene ${sceneNames} (round ${round}): ${stale}`);
+        return { status: InteractionEventStatus.NOOP };
+      }
     }
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
@@ -1997,7 +2026,6 @@ ${factsBlock}
     // remaining scene budget. Applies to dialogue AND voice replies (a sim's answer to the
     // player can take 2-3 beats to finish). The next round is kicked off from play() so
     // it appends to the same paced scene stream, after this round has started airing.
-    const round = options.round ?? 1;
     const wantsMore = [...sceneScores.scores.values()].some(
       (score) => score.unfinished === true || (score.continue ?? 0) >= 7,
     );
@@ -2097,12 +2125,23 @@ ${factsBlock}
     const simIdByName = new Map(event.sentient_sims.map((sim) => [sim.name, sim.sim_id]));
     const participantSimIds = performers.map((sim) => sim.sim_id);
 
-    const play = once(() => {
+    const play = once((claimedAt?: number): boolean => {
       if (sceneStopped()) {
         // Ended in-game while this round was still generating (or waiting on a
         // deferred prefetch): none of it describes the world any more
         log.info(`[Pipeline] Scene ${sceneId} ended in-game before playback; not airing it`);
-        return;
+        return false;
+      }
+      // Generation took 10-20 s and a prefetched scene waited for its claim on top: the
+      // game may have moved on in the meantime. A prefetch is judged from the claim (the
+      // interaction really running), not from when it was speculatively requested.
+      const eventAt = claimedAt ?? options.eventAt;
+      if (eventAt !== undefined && !playerLine) {
+        const stale = judgeStale(eventAt);
+        if (stale) {
+          log.info(`[Pipeline] skipping scene ${sceneNames} (round ${round}): ${stale}; not airing it`);
+          return false;
+        }
       }
       // Inner monologue becomes each sim's own PRIVATE memory the moment the scene
       // actually airs — a canceled prefetch leaves no trace. The shared transcript row
@@ -2171,6 +2210,7 @@ ${factsBlock}
         finalText,
         sceneCast,
         preActionLine,
+        eventAt,
       );
       this.playTtsLines(castLines, event.sentient_sims, {
         paced: true,
@@ -2201,6 +2241,8 @@ ${factsBlock}
                 event,
                 {
                   ...options,
+                  // A prefetched scene's rounds are judged from its claim time too
+                  eventAt,
                   continueScene: true,
                   playerLine: undefined,
                   speakPlayerLine: undefined,
@@ -2219,11 +2261,14 @@ ${factsBlock}
             this.ctx.scenePlayback.generationFinished(sceneId);
           });
       }
+      return true;
     });
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);
-    } else {
-      play();
+    } else if (!play()) {
+      // Nothing aired, so the mod gets nothing to remember: a generated text in the
+      // response would be stored as a memory of a conversation nobody heard
+      return { status: InteractionEventStatus.NOOP };
     }
 
     return {
@@ -2335,6 +2380,7 @@ ${factsBlock}
         paced: true,
         pacedText: finalText,
       });
+      return true;
     });
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);

@@ -32,7 +32,9 @@ export type SceneControl = {
   // 'soft' lets the line already playing finish; 'hard' cuts it off now
   mode: 'soft' | 'hard';
   scene_id?: string;
-  reason: 'walked_away' | 'left_lot' | 'zone_unload' | 'cheat';
+  // 'left_lot': a sim in the scene despawned; 'absent': a sim the scene names was not on
+  // the lot when its first line aired. Both carry sim_id and end every scene that sim is in.
+  reason: 'walked_away' | 'left_lot' | 'absent' | 'zone_unload' | 'cheat';
   // Who ended it, and how far away they had got
   sim_id?: string | null;
   distance_m?: number | null;

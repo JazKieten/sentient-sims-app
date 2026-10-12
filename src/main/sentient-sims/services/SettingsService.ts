@@ -43,6 +43,7 @@ import {
   defaultVoiceInputModel,
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
+  defaultSceneEventMaxAgeMs,
 } from '../constants';
 import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
 import { redactSettingValue } from '../util/redactSetting';
@@ -338,6 +339,10 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.SCENE_MAX_ROUNDS.toString()]: {
         type: 'number',
         default: 3,
+      },
+      [SettingsEnum.SCENE_EVENT_MAX_AGE_MS.toString()]: {
+        type: 'number',
+        default: 60000,
       },
       [SettingsEnum.PLAYER_REPLY_MAX_TOKENS.toString()]: {
         type: 'number',
@@ -1277,6 +1282,13 @@ export class SettingsService {
   get sceneMaxRounds(): number {
     const raw = Number(this.get(SettingsEnum.SCENE_MAX_ROUNDS));
     return Math.min(5, Math.max(1, Number.isFinite(raw) ? raw : 3));
+  }
+
+  // How old a game event may be before its scene is dropped instead of aired. Clamped so a
+  // typo can neither drop every scene (generation alone takes 10-20 s) nor disable the gate.
+  get sceneEventMaxAgeMs(): number {
+    const raw = Number(this.get(SettingsEnum.SCENE_EVENT_MAX_AGE_MS));
+    return Math.min(300_000, Math.max(10_000, Number.isFinite(raw) ? raw : defaultSceneEventMaxAgeMs));
   }
 
   // Player-facing replies: the actor's token budget when answering the player. Clamped so

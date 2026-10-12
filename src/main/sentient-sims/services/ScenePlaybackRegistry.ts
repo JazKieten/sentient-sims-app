@@ -9,7 +9,19 @@ import { SceneEndedReason } from '../models/ModWebsocketMessage';
 //          and audio from the old lot must never carry into the new one.
 export type SceneStopMode = 'soft' | 'hard';
 
-export type SceneStopReason = 'walked_away' | 'left_lot' | 'zone_unload' | 'cheat' | 'preempted';
+// 'absent' - the mod found a named sim not on the lot when the scene's first line aired;
+// 'superseded' - a newer game event showed the sims had moved on before this aired
+export type SceneStopReason =
+  | 'walked_away'
+  | 'left_lot'
+  | 'absent'
+  | 'zone_unload'
+  | 'cheat'
+  | 'preempted'
+  | 'superseded';
+
+// A scene the renderer holds but has not started: what a freshness judge sees of it
+export type PendingScene = { sceneId: string; participantSimIds: string[]; eventAt?: number };
 
 // A scene whose renderer never reported back (window closed mid-playback) would
 // otherwise sit here forever holding a memory id.
@@ -42,6 +54,8 @@ export type SceneClosed = {
 
 type SceneEntry = {
   participantSimIds: string[];
+  // Wall clock of the game event this conversation came from, when known
+  eventAt?: number;
   // Rounds handed to the renderer that have not reported playback finished
   pendingRounds: number;
   // Continuation rounds currently being generated
@@ -108,10 +122,14 @@ export class ScenePlaybackRegistry {
     pacedText?: string,
     cast?: SceneCastMember[],
     preAction?: string,
+    eventAt?: number,
   ) {
     const entry = this.entry(sceneId, participantSimIds);
     entry.pendingRounds += 1;
     entry.touchedAt = Date.now();
+    if (eventAt !== undefined && entry.eventAt === undefined) {
+      entry.eventAt = eventAt;
+    }
     const spoken = lines.filter((line) => !line.skipSceneLine);
     if (round <= 1) {
       // The mod writes the shared memory row from the opening round alone. Later
@@ -195,6 +213,39 @@ export class ScenePlaybackRegistry {
       log.error('[Scene] failed to report the scene ended', err);
     }
     this.close(sceneId, entry, { reason: 'stopped', stopReason: reason, mode });
+  }
+
+  /** A sim is gone: every conversation they were in ends, aired or not. */
+  stopForSim(simId: string, reason: SceneStopReason, mode: SceneStopMode = 'hard'): number {
+    let stopped = 0;
+    [...this.scenes.entries()].forEach(([sceneId, entry]) => {
+      if (!entry.stopped && entry.participantSimIds.includes(simId)) {
+        this.stop(sceneId, reason, mode);
+        stopped += 1;
+      }
+    });
+    return stopped;
+  }
+
+  /**
+   * Scenes handed to the renderer that have not started playing: the judge says why
+   * one no longer describes the world (SceneFreshness), and it is dropped before it
+   * can. A scene already heard is left to the mod's proximity watch.
+   */
+  stopPending(judge: (scene: PendingScene) => string | undefined): number {
+    let stopped = 0;
+    [...this.scenes.entries()].forEach(([sceneId, entry]) => {
+      if (entry.stopped || entry.airedLines > 0) {
+        return;
+      }
+      const reason = judge({ sceneId, participantSimIds: entry.participantSimIds, eventAt: entry.eventAt });
+      if (reason) {
+        log.info(`[Scene] ${sceneId} superseded before it aired: ${reason}`);
+        this.stop(sceneId, 'superseded', 'hard');
+        stopped += 1;
+      }
+    });
+    return stopped;
   }
 
   /** Every scene stops now: the lot is going away. */

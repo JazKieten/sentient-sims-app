@@ -58,9 +58,21 @@ export class AIController {
     // The chat window blocks on this response while prefetch traffic is speculative,
     // so chat messages skip ahead of queued prefetch generations
     const isChat = event.event_type === SSEventType.CHAT || event.event_type === SSEventType.CHAT_CONTINUE;
+    // A game event is stamped on arrival: the scene it becomes may wait in the queue
+    // behind other scenes, and it is dropped rather than aired once the game has moved on
+    const isGameEvent = event.event_type === SSEventType.INTERACTION || event.event_type === SSEventType.CONTINUE;
+    const eventAt = Date.now();
+    // (an older mod may post an event without a cast; Array.isArray keeps that alive)
+    if (isGameEvent && Array.isArray(event.sentient_sims)) {
+      this.ctx.sceneFreshness.recordEvent(
+        event.sentient_sims.map((sim) => ({ simId: sim.sim_id, name: sim.name })),
+        eventAt,
+      );
+    }
+    const meta = isGameEvent ? { eventAt } : undefined;
     const result = isPlayerVoice
-      ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event))
-      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event), {
+      ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event, meta))
+      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event, meta), {
           priority: isChat,
         });
     result.input = event;
@@ -84,8 +96,10 @@ export class AIController {
   interactionClaim = async (req: Request, res: Response) => {
     const request = req.body as InteractionClaimRequest;
     log.debug(`Interaction claim: ${request.correlation_id}`);
-    const { result, play } = await this.ctx.generationQueue.claim(request);
-    play();
+    const { result: generated, play } = await this.ctx.generationQueue.claim(request);
+    // A scene that declined to air (the game moved on while it waited) must not be
+    // handed to the mod as text either: it would be stored as a memory nobody heard
+    const result = !play() ? { status: InteractionEventStatus.NOOP } : generated;
     result.input = request.event;
     const spacedText = this.ctx.settings.directedScenesEnabled && result.text ? `\n${result.text}` : result.text;
     res.json({ ...result, text: spacedText });

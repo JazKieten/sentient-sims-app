@@ -99,6 +99,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       publishClockState(ctx);
       // The next game session numbers its state reports from 1 again
       ctx.simStateCache.reset();
+      ctx.sceneFreshness.reset();
       notifyWebsocketStatus({
         type: 'mod',
         status: false,
@@ -137,7 +138,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       }
 
       if (parsedData.scene_control) {
-        onSceneControl(ctx.scenePlayback, parsedData.scene_control);
+        onSceneControl(ctx.scenePlayback, ctx.sceneFreshness, parsedData.scene_control);
         return;
       }
 

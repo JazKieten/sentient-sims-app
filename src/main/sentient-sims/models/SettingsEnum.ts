@@ -99,6 +99,10 @@ export enum SettingsEnum {
   OUTCOME_INSTANT_SUCCESS_MS = 'outcomeInstantSuccessMs',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // A directed scene is dropped, not aired late, once its game event is older than this:
+  // the sims have moved on by then (stream 2026-10-11: fans at a VIP rope stacked up
+  // scenes that aired minutes after the game had paired the celebrity with someone else)
+  SCENE_EVENT_MAX_AGE_MS = 'sceneEventMaxAgeMs',
   // Player-facing replies (chat window, voice, conscience, Twitch): the actor's token
   // budget for a reply to the player, how long a conversation thread stays open between
   // the player's lines, and whether a reply may turn straight into an action

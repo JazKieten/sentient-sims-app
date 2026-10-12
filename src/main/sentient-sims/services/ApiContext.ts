@@ -36,6 +36,7 @@ import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { DefaultDescriptionService } from './DefaultDescriptionService';
 import { SimStateCache } from './SimStateCache';
+import { SceneFreshness } from './SceneFreshness';
 import { AIService } from './AIService';
 import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
@@ -268,6 +269,8 @@ export class ApiContext {
 
   private _defaultDescriptionService?: DefaultDescriptionService;
   private readonly _simStateCache: SimStateCache;
+
+  private readonly _sceneFreshness: SceneFreshness;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
@@ -415,6 +418,14 @@ export class ApiContext {
     // finds its row again at its close to rewrite it to what was actually said.
     setSceneMemoryObserver((pacedText, memoryId) => this._scenePlaybackRegistry.attachMemory(pacedText, memoryId));
     this._simStateCache = new SimStateCache();
+    // Whether a scene still describes the world when it is about to generate or air
+    this._sceneFreshness = new SceneFreshness({
+      maxAgeMs: () => this._settings.sceneEventMaxAgeMs,
+      stopPending: (judge) => this._scenePlaybackRegistry.stopPending(judge),
+    });
+    this._simStateCache.onReport((report) => {
+      this._sceneFreshness.onStateReport(report);
+    });
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
     this._geminiEmbeddingService = new GeminiEmbeddingService(this);
@@ -557,6 +568,10 @@ export class ApiContext {
 
   get simStateCache(): SimStateCache {
     return this._simStateCache;
+  }
+
+  get sceneFreshness(): SceneFreshness {
+    return this._sceneFreshness;
   }
 
   // Evaluated per access so changing the embedding provider (or setting a key/token at

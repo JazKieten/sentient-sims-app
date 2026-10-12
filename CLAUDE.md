@@ -73,6 +73,21 @@ priority/preempt — it queues like a cognition push and the mod lets the player
 sentence chunks (util/airingChunks, `continues` on DialogueLine → 150 ms gap, mouth stays open in the mod). Sim-to-sim
 scenes keep the short-line rules. Bench: GET /bench/player-threads, POST /bench/player-thread/:index {simId}.
 
+Stale scenes are dropped, not aired late (2026-10-12): services/SceneFreshness.ts judges a directed scene against
+the wall-clock time of the game event it came from (`eventAt`, stamped in AIController on arrival, or the CLAIM time
+for a prefetched scene; absent for chat/bench/scenario, which are never judged). Three gates in
+AIService.runDirectedGeneration: at dequeue before any model call, in play() before airing, and for each continuation
+round (which carries the scene's eventAt). Stale = older than `sceneEventMaxAgeMs` (setting, default 60000, round 1
+only) OR a participant has since been in an event whose cast does not hold all of this scene's (same pair or a
+superset never supersedes) OR a participant the mod reported gone after the event. The mod's `scene_control` with
+reason left_lot/absent + sim_id marks the departure (cleared by a later event naming the sim, or a state report
+listing them on the lot >6 s after the mark) and ScenePlaybackRegistry.stopForSim ends every scene they are in;
+recordEvent also runs ScenePlaybackRegistry.stopPending so a scene the renderer holds but has not started is dropped
+(reason 'superseded'). A scene that declines to air returns NOOP to the mod so no unheard dialogue is stored (the
+claim route checks play()'s boolean). Why: 2026-10-11 stream, fans at a VIP rope stacked scenes at 10-20 s a round
+with continuation rounds in the priority lane; one was still on round 3 minutes after the game moved on. Tests:
+SceneFreshness.test.ts, SceneStaleSkip.test.ts, SceneControl.test.ts, ScenePlaybackRegistry.test.ts.
+
 Sentient Moodlets (2026-09-22): when a voice-mode scene closes (ran its course, or the game stopped it),
 ScenePlaybackRegistry hands `onSceneClosed` (cast + the lines actually heard) to services/SceneMoodletService,
 which runs ONE buff-stage call (StageId.BUFF / AIActionType.BUFF, so its provider config and prompt override

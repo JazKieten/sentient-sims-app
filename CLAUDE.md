@@ -78,8 +78,10 @@ the wall-clock time of the game event it came from (`eventAt`, stamped in AICont
 for a prefetched scene; absent for chat/bench/scenario, which are never judged). Three gates in
 AIService.runDirectedGeneration: at dequeue before any model call, in play() before airing, and for each continuation
 round (which carries the scene's eventAt). Stale = older than `sceneEventMaxAgeMs` (setting, default 60000, round 1
-only) OR a participant has since been in an event whose cast does not hold all of this scene's (same pair or a
-superset never supersedes) OR a participant the mod reported gone after the event. The mod's `scene_control` with
+only) OR a participant has since been in an event whose cast does not hold all of this scene's AND that event is
+over MOVED_ON_GAP_MS (15 s) newer (same pair or a superset never supersedes; judged only before generation starts,
+never at play or on a queued scene - a side social with the next sim over arrives within seconds and must not cut
+a scene about to play, live 2026-10-12) OR a participant the mod reported gone after the event. The mod's `scene_control` with
 reason left_lot/absent + sim_id marks the departure (cleared by a later event naming the sim, or a state report
 listing them on the lot >6 s after the mark) and ScenePlaybackRegistry.stopForSim ends every scene they are in;
 recordEvent also runs ScenePlaybackRegistry.stopPending so a scene the renderer holds but has not started is dropped

@@ -1536,10 +1536,10 @@ ${factsBlock}
     const round = options.round ?? 1;
     const sceneNames = event.sentient_sims.map((sim) => sim.name).join(' & ');
     const participantRefs = event.sentient_sims.map((sim) => ({ simId: sim.sim_id, name: sim.name }));
-    const judgeStale = (eventAt: number) =>
-      this.ctx.sceneFreshness.staleReason(participantRefs, eventAt, { judgeAge: round <= 1 });
+    const judgeStale = (eventAt: number, judgeMovedOn: boolean) =>
+      this.ctx.sceneFreshness.staleReason(participantRefs, eventAt, { judgeAge: round <= 1, judgeMovedOn });
     if (options.eventAt !== undefined && !options.playerLine) {
-      const stale = judgeStale(options.eventAt);
+      const stale = judgeStale(options.eventAt, true);
       if (stale) {
         log.info(`[Pipeline] skipping scene ${sceneNames} (round ${round}): ${stale}`);
         return { status: InteractionEventStatus.NOOP };
@@ -2134,10 +2134,12 @@ ${factsBlock}
       }
       // Generation took 10-20 s and a prefetched scene waited for its claim on top: the
       // game may have moved on in the meantime. A prefetch is judged from the claim (the
-      // interaction really running), not from when it was speculatively requested.
+      // interaction really running), not from when it was speculatively requested. Only
+      // the hard signals here (age, a departure): a side social with the next sim over
+      // must not kill a scene that is about to play.
       const eventAt = claimedAt ?? options.eventAt;
       if (eventAt !== undefined && !playerLine) {
-        const stale = judgeStale(eventAt);
+        const stale = judgeStale(eventAt, false);
         if (stale) {
           log.info(`[Pipeline] skipping scene ${sceneNames} (round ${round}): ${stale}; not airing it`);
           return false;

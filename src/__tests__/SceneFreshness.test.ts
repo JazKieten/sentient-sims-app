@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { REPORT_CLEAR_GRACE_MS, SceneFreshness } from 'main/sentient-sims/services/SceneFreshness';
+import { MOVED_ON_GAP_MS, REPORT_CLEAR_GRACE_MS, SceneFreshness } from 'main/sentient-sims/services/SceneFreshness';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 
 const AUGUSTUS = { simId: '1', name: 'Augustus' };
@@ -38,15 +38,30 @@ describe('SceneFreshness', () => {
   it('is stale when a participant has since been with somebody else', () => {
     const { freshness } = build();
     freshness.recordEvent(PAIR, 1_000);
-    freshness.recordEvent([AUGUSTUS, DIRK], 5_000);
+    freshness.recordEvent([AUGUSTUS, DIRK], 1_000 + MOVED_ON_GAP_MS + 1);
     expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 6_000)).toBe(
       'Augustus has moved on (now with Dirk)',
     );
   });
 
+  it('is not moved on by a side social moments after the scene event', () => {
+    // Live 2026-10-12: the Halley scene was handed to the player and a Marcus mixer
+    // arrived 0.3 s later; everyone was still standing together
+    const { freshness } = build();
+    freshness.recordEvent(PAIR, 1_000);
+    freshness.recordEvent([AUGUSTUS, DIRK], 1_000 + MOVED_ON_GAP_MS);
+    expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 60_000)).toBeUndefined();
+  });
+
+  it('never judges moved-on when told not to', () => {
+    const { freshness } = build();
+    freshness.recordEvent([AUGUSTUS, DIRK], 1_000 + MOVED_ON_GAP_MS + 1);
+    expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false, judgeMovedOn: false }, 60_000)).toBeUndefined();
+  });
+
   it('is stale when a participant has since been alone', () => {
     const { freshness } = build();
-    freshness.recordEvent([AUGUSTUS], 5_000);
+    freshness.recordEvent([AUGUSTUS], 1_000 + MOVED_ON_GAP_MS + 1);
     expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 6_000)).toBe(
       'Augustus has moved on (now with nobody)',
     );
@@ -54,13 +69,13 @@ describe('SceneFreshness', () => {
 
   it('is not superseded by a later event for the same pair', () => {
     const { freshness } = build();
-    freshness.recordEvent(PAIR, 5_000);
+    freshness.recordEvent(PAIR, 50_000);
     expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 6_000)).toBeUndefined();
   });
 
   it('is not superseded by a bigger group that still holds the pair', () => {
     const { freshness } = build();
-    freshness.recordEvent([AUGUSTUS, TRAVIS, DIRK], 5_000);
+    freshness.recordEvent([AUGUSTUS, TRAVIS, DIRK], 50_000);
     expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 6_000)).toBeUndefined();
   });
 
@@ -97,16 +112,22 @@ describe('SceneFreshness', () => {
     expect(freshness.isDeparted('2')).toBe(false);
   });
 
-  it('asks pending scenes to stop when a new event makes them stale', () => {
-    const { freshness, stopPending } = build();
-    freshness.recordEvent([AUGUSTUS, DIRK], 5_000);
+  it('asks pending scenes to stop only on the hard signals', () => {
+    const { freshness, stopPending } = build(60_000);
+    freshness.markDeparted('4', 90_000);
+    freshness.recordEvent([AUGUSTUS, DIRK], 100_000);
     const judge = stopPending.mock.calls[0][0] as (scene: {
       sceneId: string;
       participantSimIds: string[];
       eventAt?: number;
     }) => string | undefined;
-    expect(judge({ sceneId: 'old', participantSimIds: ['1', '2'], eventAt: 1_000 })).toMatch(/moved on/);
-    expect(judge({ sceneId: 'new', participantSimIds: ['1', '3'], eventAt: 5_000 })).toBeUndefined();
+    // Too old to still describe the world
+    expect(judge({ sceneId: 'old', participantSimIds: ['1', '2'], eventAt: 30_000 })).toMatch(/old/);
+    // One of its sims left after its event
+    expect(judge({ sceneId: 'gone', participantSimIds: ['1', '4'], eventAt: 80_000 })).toMatch(/left the lot/);
+    // Fresh and everyone here: the new event with somebody else is NOT enough on its own
+    expect(judge({ sceneId: 'fresh', participantSimIds: ['1', '2'], eventAt: 70_000 })).toBeUndefined();
+    expect(judge({ sceneId: 'new', participantSimIds: ['1', '3'], eventAt: 100_000 })).toBeUndefined();
     // A scene with no event time (chat window, bench) is never judged
     expect(judge({ sceneId: 'chat', participantSimIds: ['1', '2'] })).toBeUndefined();
   });
@@ -116,8 +137,8 @@ describe('SceneFreshness', () => {
     freshness.markDeparted('2', 3_000);
     freshness.clearDepartures();
     expect(freshness.isDeparted('2')).toBe(false);
-    freshness.recordEvent([AUGUSTUS, DIRK], 5_000);
+    freshness.recordEvent([AUGUSTUS, DIRK], 50_000);
     freshness.reset();
-    expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 6_000)).toBeUndefined();
+    expect(freshness.staleReason(PAIR, 1_000, { judgeAge: false }, 60_000)).toBeUndefined();
   });
 });

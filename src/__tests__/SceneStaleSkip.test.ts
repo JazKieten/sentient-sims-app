@@ -8,6 +8,7 @@ import { SimAge } from 'main/sentient-sims/models/SimAge';
 import { SentientSim } from 'main/sentient-sims/models/SentientSim';
 import { InteractionEvent, SSEventType } from 'main/sentient-sims/models/InteractionEvents';
 import { ScenePlay } from 'main/sentient-sims/services/AIService';
+import { MOVED_ON_GAP_MS } from 'main/sentient-sims/services/SceneFreshness';
 import { mockApiContext } from './util';
 
 // The 2026-10-11 stream: fans at a VIP rope came one after another, and a scene with the
@@ -118,9 +119,9 @@ describe('a scene the game has moved on from', () => {
 
   it('is skipped before any model call when a sim has since been with somebody else', async () => {
     const { ctx, labels } = scene('scene-stale-moved-on');
-    const eventAt = Date.now() - 5_000;
+    const eventAt = Date.now() - MOVED_ON_GAP_MS - 5_000;
     ctx.sceneFreshness.recordEvent([AUGUSTUS, TRAVIS], eventAt);
-    ctx.sceneFreshness.recordEvent([AUGUSTUS, DIRK], eventAt + 1_000);
+    ctx.sceneFreshness.recordEvent([AUGUSTUS, DIRK], eventAt + MOVED_ON_GAP_MS + 1_000);
 
     const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt });
 
@@ -130,9 +131,9 @@ describe('a scene the game has moved on from', () => {
 
   it('still generates when the later event is for the same pair', async () => {
     const { ctx, labels } = scene('scene-fresh-same-pair');
-    const eventAt = Date.now() - 5_000;
+    const eventAt = Date.now() - MOVED_ON_GAP_MS - 5_000;
     ctx.sceneFreshness.recordEvent([AUGUSTUS, TRAVIS], eventAt);
-    ctx.sceneFreshness.recordEvent([TRAVIS, AUGUSTUS], eventAt + 1_000);
+    ctx.sceneFreshness.recordEvent([TRAVIS, AUGUSTUS], eventAt + MOVED_ON_GAP_MS + 1_000);
     ctx.settings.set(SettingsEnum.SCENE_MAX_ROUNDS, 1);
 
     const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt });
@@ -152,7 +153,21 @@ describe('a scene the game has moved on from', () => {
     expect(labels).toEqual([]);
   });
 
-  it('declines to air a prefetched scene whose claim comes after the game moved on', async () => {
+  it('still airs a scene when a side social with somebody else arrived moments later', async () => {
+    const { ctx, labels, roundQueued } = scene('scene-fresh-side-social');
+    ctx.settings.set(SettingsEnum.SCENE_MAX_ROUNDS, 1);
+    const eventAt = Date.now() - 5_000;
+    ctx.sceneFreshness.recordEvent([AUGUSTUS, TRAVIS], eventAt);
+    ctx.sceneFreshness.recordEvent([AUGUSTUS, DIRK], eventAt + 300);
+
+    const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt });
+
+    expect(result.status).toEqual(InteractionEventStatus.GENERATED);
+    expect(labels).toContain('Director Briefing');
+    expect(roundQueued).toHaveBeenCalledTimes(1);
+  });
+
+  it('declines to air a prefetched scene whose sim left before its claim could play', async () => {
     const { ctx, roundQueued } = scene('scene-stale-at-play');
     ctx.settings.set(SettingsEnum.SCENE_MAX_ROUNDS, 1);
     let play: ScenePlay = () => true;
@@ -168,9 +183,9 @@ describe('a scene the game has moved on from', () => {
     );
     expect(result.status).toEqual(InteractionEventStatus.GENERATED);
 
-    // Claimed, then Augustus was seen with Dirk before the scene could air
+    // Claimed, then Travis despawned before the scene could air
     const claimedAt = Date.now() - 2_000;
-    ctx.sceneFreshness.recordEvent([AUGUSTUS, DIRK], claimedAt + 500);
+    ctx.sceneFreshness.markDeparted('2', claimedAt + 500);
 
     expect(play(claimedAt)).toBe(false);
     expect(roundQueued).not.toHaveBeenCalled();
@@ -208,7 +223,7 @@ describe('a scene the game has moved on from', () => {
           briefings += 1;
           if (briefings === 2 && ref.ctx) {
             // Round 1 is on air (heard) and round 2 is being briefed when the game
-            // pairs Augustus with Dirk
+            // pairs Augustus with Dirk, well after the scene's own event
             ref.ctx.scenePlayback.lineShown(roundQueued.mock.calls[0][0]);
             ref.ctx.sceneFreshness.recordEvent([AUGUSTUS, DIRK]);
           }
@@ -216,15 +231,16 @@ describe('a scene the game has moved on from', () => {
       },
     });
     ref.ctx = ctx;
-    const eventAt = Date.now() - 1_000;
+    const eventAt = Date.now() - MOVED_ON_GAP_MS - 1_000;
 
     const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt });
     await settle();
 
     expect(result.status).toEqual(InteractionEventStatus.GENERATED);
-    // Round 1 aired; round 2 was generated but not aired; no round 3 was started
+    // Round 2 was already generating when the game moved on, so it still airs (a scene
+    // about to play is never cut for a side event); round 3 is never started
     expect(labels.filter((label) => label === 'Scene Scores').length).toBe(2);
-    expect(roundQueued).toHaveBeenCalledTimes(1);
+    expect(roundQueued).toHaveBeenCalledTimes(2);
     expect(ctx.scenePlayback.isStopped(roundQueued.mock.calls[0][0])).toBe(false);
   });
 });

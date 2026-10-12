@@ -13,9 +13,12 @@
 //   (a) the event is older than sceneEventMaxAgeMs (round 1 only: once the opening aired
 //       fresh, the mod's proximity watch and the rules below decide whether the
 //       conversation goes on);
-//   (b) a participant has since been in an event with somebody else (Augustus now with
-//       Dirk supersedes Augustus + Travis; a later event for the same pair, or a bigger
-//       group that still contains the pair, does not);
+//   (b) a participant has since been in an event with somebody else, clearly later than
+//       this one (Augustus now with Dirk supersedes Augustus + Travis; a later event for
+//       the same pair, or a bigger group that still contains the pair, does not). Only
+//       judged before a scene starts generating: on a lot with several sims the game
+//       fires side socials constantly, and a scene handed to the player was killed 0.3 s
+//       later by one (live 2026-10-12, Augustus + Halley dropped for a Marcus mixer);
 //   (c) a participant left the lot after the event.
 //
 // Departures come from the mod's scene watch (scene_control left_lot/absent with the
@@ -43,6 +46,18 @@ type SimEvent = { at: number; partners: Set<string> };
 // once it is clearly newer than the mark.
 export const REPORT_CLEAR_GRACE_MS = 6_000;
 
+// A later event with somebody else counts as "moved on" only when it is this much newer
+// than the scene's own event: the game fires a social with the next sim over within
+// seconds of the last one while everyone is still standing together.
+export const MOVED_ON_GAP_MS = 15_000;
+
+export type FreshnessJudgement = {
+  // Rule (a): opening rounds only
+  judgeAge: boolean;
+  // Rule (b): before generation only; defaults on
+  judgeMovedOn?: boolean;
+};
+
 export class SceneFreshness {
   private readonly latestBySim = new Map<string, SimEvent>();
 
@@ -63,13 +78,15 @@ export class SceneFreshness {
       // Whoever is in a game interaction here is here
       this.departed.delete(sim.simId);
     });
+    // A scene the renderer holds but has not started: dropped only on the hard signals
+    // (its event is too old, or one of its sims is gone), never on this event itself
     this.deps.stopPending?.((scene) =>
       scene.eventAt === undefined
         ? undefined
         : this.staleReason(
             scene.participantSimIds.map((simId) => ({ simId })),
             scene.eventAt,
-            { judgeAge: false },
+            { judgeAge: true, judgeMovedOn: false },
             at,
           ),
     );
@@ -101,12 +118,7 @@ export class SceneFreshness {
    * Why a scene from an event at `eventAt` between `participants` should not air now,
    * or undefined while it still describes the world.
    */
-  staleReason(
-    participants: SimRef[],
-    eventAt: number,
-    opts: { judgeAge: boolean },
-    now = Date.now(),
-  ): string | undefined {
+  staleReason(participants: SimRef[], eventAt: number, opts: FreshnessJudgement, now = Date.now()): string | undefined {
     if (opts.judgeAge) {
       const age = now - eventAt;
       const max = this.deps.maxAgeMs();
@@ -117,7 +129,12 @@ export class SceneFreshness {
     const ids = participants.map((sim) => sim.simId);
     for (const sim of participants) {
       const latest = this.latestBySim.get(sim.simId);
-      if (latest && latest.at > eventAt && !ids.every((id) => latest.partners.has(id))) {
+      if (
+        opts.judgeMovedOn !== false &&
+        latest &&
+        latest.at - eventAt > MOVED_ON_GAP_MS &&
+        !ids.every((id) => latest.partners.has(id))
+      ) {
         const others = [...latest.partners].filter((id) => id !== sim.simId).map((id) => this.nameOf(id));
         return `${this.nameOf(sim.simId, sim.name)} has moved on (now with ${others.length ? others.join(', ') : 'nobody'})`;
       }

@@ -4,6 +4,7 @@ import { notifyClockState } from './util/notifyRenderer';
 import { parseModMessage } from './util/modWebsocketMessage';
 import { formatLog } from './util/format';
 import { mirrorModLog } from './util/modLogMirror';
+import { onSceneControl } from './util/sceneControl';
 import { LogLevel } from './models/LogLevel';
 import { WebsocketNotification } from './models/ModWebsocketMessage';
 import { ClockState, ModInfo, ModLogWebsocketMessage, VoiceKeyEvent } from './models/ModLogWebsocketMessage';
@@ -135,7 +136,12 @@ export const startWebSocketServer = (ctx: ApiContext) => {
         return;
       }
 
-      // Messages a build tier owns (stream: scene_control, the game ending a conversation)
+      if (parsedData.scene_control) {
+        onSceneControl(ctx.scenePlayback, parsedData.scene_control);
+        return;
+      }
+
+      // Messages a build tier owns
       if (ctx.tiers.some((tier) => tier.onModMessage?.(ctx, parsedData) === true)) {
         return;
       }

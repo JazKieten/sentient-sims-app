@@ -82,18 +82,6 @@ function ipc(ipcMain: IpcMain, ctx: ApiContext) {
   });
 }
 
-// The game ending a conversation the app is airing: the sims in it walked apart, or one of
-// them left the lot. See the mod's scene/ss_scene_watch.py.
-function onSceneControl(ctx: ApiContext, control: SceneControl) {
-  const where = control.distance_m != null ? ` at ${control.distance_m}m` : '';
-  log.info(`[Scene] the game ended ${control.scene_id ?? 'every scene'} (${control.mode}): ${control.reason}${where}`);
-  if (control.action === 'stop_all') {
-    ctx.scenePlayback.stopAll(control.reason);
-  } else if (control.scene_id) {
-    ctx.scenePlayback.stop(control.scene_id, control.reason, control.mode);
-  }
-}
-
 export const streamTier: TierRegistration = {
   name: 'stream',
   construct,
@@ -108,13 +96,6 @@ export const streamTier: TierRegistration = {
   onSceneClosed: (ctx, closed) => {
     // A conversation that closed is weighed for the moodlet it leaves on each sim
     void streamOf(ctx).sceneMoodlets.appraise(closed);
-  },
-  onModMessage: (ctx, message) => {
-    if (!message.scene_control) {
-      return false;
-    }
-    onSceneControl(ctx, message.scene_control);
-    return true;
   },
   shutdown: (ctx) => {
     streamOf(ctx).twitchChat.shutdown();

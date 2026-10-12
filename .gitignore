@@ -53,8 +53,6 @@ certificate.p12
 interaction-cleanup-report*.csv
 
 # Personal working notes at the repo root, never committed
-TODO_STREAM_REVIEW_FIXES.md
-make them look at us when we talk t.txt
 
 # V5 notes: playtest logs and databases too large for git, kept on disk only
 /.claude/scheduled_tasks.lock

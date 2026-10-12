@@ -176,9 +176,9 @@ describe('resolveSimTarget', () => {
     expect(resolveSimTarget('lillie smith hi there', twins)?.simId).toBe('1');
   });
 
-  // Skipped 2026-09-28: the silent-final-e rule in util/nameCorrection.ts snaps "how" to
-  // Hope Day. Left for the voice-input rework rather than patched in the 4.5 merge.
-  it.skip('never snaps short question words to names', () => {
+  // The voice feature's silent-final-e rule used to snap "how" to Hope Day; the Twitch
+  // matcher has its own phonetic layer without it since 2026-10-12
+  it('never snaps short question words to names', () => {
     expect(resolveSimTarget('how is everyone', [{ simId: '9', name: 'Hope Day' }])).toBeUndefined();
   });
 });

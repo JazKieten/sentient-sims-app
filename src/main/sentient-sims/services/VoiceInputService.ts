@@ -1,6 +1,5 @@
 import log from 'electron-log';
-import { correctNames, correctPlaces } from '../util/nameCorrection';
-import { isPlaceholderName } from '../util/simAliases';
+import { isSilenceHallucination } from '../util/sttVocabulary';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
 import { SettingsEnum } from '../models/SettingsEnum';
@@ -153,19 +152,18 @@ export class VoiceInputService {
       if (audio.byteLength < voiceInputMinAudioBytes) {
         return '';
       }
-      const raw = await this.ctx.transcription.transcribe(audio, mimeType);
-      if (!raw) {
+      const text = await this.ctx.transcription.transcribe(audio, mimeType);
+      // What the model writes for silence ("Subs by www.zeoranger.co.uk", "Thank you for
+      // watching") was never said, and must not be addressed to a sim
+      if (isSilenceHallucination(text)) {
+        if (text) {
+          log.info(`Voice input heard silence as "${text}"; dropped`);
+        }
         sendPlayerVoiceStatusToMod('error', 'Heard nothing');
         return '';
       }
-      // V-7 post-pass: snap misheard worlds ("Dale Sol Valley") and near-miss names to
-      // the game's spelling. The settings Test button goes through transcribe()
-      // directly and stays raw on purpose.
-      const text = correctNames(correctPlaces(raw), this.knownNames(), this.onLotNames());
-      if (text !== raw) {
-        log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
-      }
-      log.info(`Voice input transcript${this.captureMode === 'command' ? ' (command)' : ''}: ${text}`);
+      const provider = this.ctx.settings.voiceInputProvider;
+      log.info(`Voice input transcript (${provider}${this.captureMode === 'command' ? ', command' : ''}): ${text}`);
       notifyAllWindows('voice-transcript', text);
       if (this.captureMode === 'command') {
         // V-8: an order, not talk — mapped to an offered action and dispatched; the
@@ -182,66 +180,6 @@ export class VoiceInputService {
       return '';
     } finally {
       this.reset();
-    }
-  }
-
-  // Every name the save knows, participants included. Deliberately wide: the player
-  // pauses the game to talk, and paused reports carry no sims — a scene-scoped pool went
-  // empty at exactly the moment corrections were needed (live 08-27). Filler-word snaps
-  // are handled by correctNames' COMMON_WORDS guard instead of by shrinking this pool.
-  private knownNames(): string[] {
-    try {
-      const report = this.ctx.simStateCache.getReport();
-      const names = new Set<string>();
-      const add = (name: string | undefined) => {
-        if (name && !isPlaceholderName(name)) {
-          names.add(name);
-        }
-      };
-      (report?.sims ?? []).forEach((entry) => {
-        add(entry.sim_name);
-        entry.sims.forEach((sim) => {
-          add(sim.name);
-        });
-      });
-      (report?.known_sims ?? []).forEach((sim) => {
-        add(sim.name);
-      });
-      try {
-        this.ctx.participantRepository.getAllParticipants().forEach((participant) => {
-          add(participant.name);
-        });
-      } catch {
-        // no DB loaded: the report names still apply
-      }
-      return [...names];
-    } catch {
-      return [];
-    }
-  }
-
-  // J7: the names actually in play right now - the reported sims and everyone they see
-  // in the room - so a phonetic tie between two known names goes to the one who is here
-  private onLotNames(): string[] {
-    try {
-      const entries = this.ctx.simStateCache.getReport()?.sims;
-      const names = new Set<string>();
-      if (!entries) {
-        return [];
-      }
-      entries.forEach((entry) => {
-        if (entry.sim_name && !isPlaceholderName(entry.sim_name)) {
-          names.add(entry.sim_name);
-        }
-        entry.sims.forEach((sim) => {
-          if (sim.name && !isPlaceholderName(sim.name)) {
-            names.add(sim.name);
-          }
-        });
-      });
-      return [...names];
-    } catch {
-      return [];
     }
   }
 

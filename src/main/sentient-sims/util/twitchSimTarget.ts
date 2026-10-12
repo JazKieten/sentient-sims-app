@@ -1,12 +1,51 @@
 // Twitch !ask sim targeting: "!ask lillie how are you" aims the question at Lillie even
 // when she is not the active sim. Pure functions — the resolver fuzzy-matches the leading
-// word(s) of the question against the live household roster (reusing the voice feature's
-// phonetic matching, so "lilly" hits Lillie), and the builders fabricate the one-sim chat
-// event that rides AIService.runDirectedGeneration's solo player-voice branch.
+// word(s) of the question against the live household roster (a loose phonetic match, so a
+// viewer's typed "lilly" hits Lillie), and the builders fabricate the one-sim chat event
+// that rides AIService.runDirectedGeneration's solo player-voice branch.
 import { SSEventType, ChatInteractionEvent } from '../models/InteractionEvents';
 import { SentientSim } from '../models/SentientSim';
 import { SimAge } from '../models/SimAge';
-import { levenshtein, phonetic } from './nameCorrection';
+
+export function levenshtein(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (a.length === 0) {
+    return b.length;
+  }
+  if (b.length === 0) {
+    return a.length;
+  }
+  let previous = new Array<number>(b.length + 1);
+  let current = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j += 1) {
+    previous[j] = j;
+  }
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+    }
+    [previous, current] = [current, previous];
+  }
+  return previous[b.length];
+}
+
+// Loose phonetic normalization for typed names: doubled letters collapse, y/ie -> i,
+// ph -> f, ck -> k, silent-w wr -> r, so "lilly"/"Lillie" and "meika"/"Mika" compare close.
+// No silent-final-e rule: it made "how" one edit from Hope (TwitchChat.test.ts).
+export function phonetic(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/wr/g, 'r')
+    .replace(/ph/g, 'f')
+    .replace(/ck/g, 'k')
+    .replace(/ie\b/g, 'i')
+    .replace(/y/g, 'i')
+    .replace(/(.)\1+/g, '$1');
+}
 
 export type SimTargetCandidate = {
   simId: string;

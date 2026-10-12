@@ -53,7 +53,10 @@ export default function VoiceInputSettingsComponent() {
   const personaName = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_NAME, '');
   const followsClock = useSetting<boolean>(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK, true);
 
-  const usesSentientSimsAI = provider.value !== ApiType.OpenAI;
+  const providerValue =
+    provider.value === ApiType.OpenAI || provider.value === ApiType.ElevenLabs
+      ? provider.value
+      : ApiType.SentientSimsAI;
   const hotkeyPresets = voiceHotkeyPresets(isMac, hotkey.value);
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -212,16 +215,25 @@ export default function VoiceInputSettingsComponent() {
             <Typography sx={{ minWidth: 110 }}>Transcription:</Typography>
             <Select
               size="small"
-              value={usesSentientSimsAI ? ApiType.SentientSimsAI : ApiType.OpenAI}
+              value={providerValue}
               onChange={(change) => void provider.setSetting(change.target.value)}
             >
               <MenuItem value={ApiType.SentientSimsAI}>Sentient Sims AI</MenuItem>
+              <MenuItem value={ApiType.ElevenLabs}>ElevenLabs Scribe</MenuItem>
               <MenuItem value={ApiType.OpenAI}>OpenAI-compatible endpoint</MenuItem>
             </Select>
           </Stack>
-          {usesSentientSimsAI ? (
+          {providerValue === ApiType.SentientSimsAI ? (
             <FormHelperText>Uses your Sentient Sims AI login. No endpoint, key or model is needed.</FormHelperText>
-          ) : (
+          ) : null}
+          {providerValue === ApiType.ElevenLabs ? (
+            <FormHelperText>
+              Uses the ElevenLabs API key from the Voices settings. Your Sims&apos; names are sent along as spellings
+              the model should prefer, so unusual names come out right. ElevenLabs bills transcription per second of
+              audio, with a 20% surcharge for the name list.
+            </FormHelperText>
+          ) : null}
+          {providerValue === ApiType.OpenAI ? (
             <>
               <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
                 <Typography sx={{ minWidth: 110 }}>Endpoint:</Typography>
@@ -253,7 +265,7 @@ export default function VoiceInputSettingsComponent() {
                 />
               </Stack>
             </>
-          )}
+          ) : null}
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
             <Typography sx={{ minWidth: 110 }}>Language:</Typography>
             <Select

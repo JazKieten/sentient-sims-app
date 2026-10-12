@@ -649,4 +649,126 @@ describe('VoiceInputService', () => {
 
     expect(notifyMocks.sendPlayerVoiceStatusToMod).not.toHaveBeenCalledWith('cancelled');
   });
+
+  it('drops what the model writes for silence instead of addressing a sim with it', async () => {
+    const { service, transcribe } = voiceInputContext();
+    transcribe.mockResolvedValue('Subs by www.zeoranger.co.uk');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('');
+    expect(notifyMocks.sendPlayerVoiceStatusToMod).toHaveBeenCalledWith('error', 'Heard nothing');
+    expect(notifyMocks.sendPlayerVoiceMessageToMod).not.toHaveBeenCalled();
+  });
+
+  it('sends the transcript as heard, with no fuzzy renaming', async () => {
+    const { service, transcribe } = voiceInputContext();
+    transcribe.mockResolvedValue('Anchor, how are you today?');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('Anchor, how are you today?');
+    expect(notifyMocks.sendPlayerVoiceMessageToMod).toHaveBeenCalledWith('Anchor, how are you today?');
+  });
+});
+
+function scribeContext(onLotNames: string[] = [], knownNames: string[] = []) {
+  const { settingsService } = mockEnvironment();
+  settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+  settingsService.elevenLabsKey = 'xi-test-key';
+  const ctx = {
+    settings: settingsService,
+    simStateCache: {
+      getReport: () => ({
+        sims: onLotNames.map((name) => ({ sim_name: name, sims: [] })),
+        known_sims: knownNames.map((name) => ({ name })),
+      }),
+    },
+    participantRepository: { getAllParticipants: () => [] },
+    locationRepository: { getAllLocations: () => [] },
+  } as unknown as ApiContext;
+  return { settingsService, service: new TranscriptionService(ctx) };
+}
+
+describe('TranscriptionService on ElevenLabs Scribe', () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    openaiMocks.create.mockReset();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts the audio to speech-to-text with the names in play as keyterms', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ text: '  Anker, how are you?  ' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const { settingsService, service } = scribeContext(['Anker Solheim'], ['Halley Calloway']);
+    settingsService.set(SettingsEnum.VOICE_INPUT_LANGUAGE, 'English');
+
+    const text = await service.transcribe(new Uint8Array([1, 2, 3, 4]).buffer, 'audio/webm;codecs=opus');
+
+    expect(text).toBe('Anker, how are you?');
+    expect(openaiMocks.create).not.toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
+    expect((init?.headers as Record<string, string>)['xi-api-key']).toBe('xi-test-key');
+    const body = init?.body as FormData;
+    expect(body.get('model_id')).toBe('scribe_v2');
+    expect(body.get('language_code')).toBe('en');
+    const terms = body.getAll('keyterms');
+    expect(terms.slice(0, 4)).toEqual(['Anker Solheim', 'Anker', 'Halley Calloway', 'Halley']);
+    expect(terms).toContain('Del Sol Valley');
+    expect(terms.length).toBeLessThanOrEqual(100);
+  });
+
+  it('refuses without an ElevenLabs key instead of calling the API', async () => {
+    const { settingsService, service } = scribeContext();
+    settingsService.elevenLabsKey = '';
+
+    await expect(service.transcribe(new ArrayBuffer(16))).rejects.toThrow(TranscriptionError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await service.healthCheck()).toEqual({ error: 'not working, ElevenLabs API key is not set' });
+  });
+
+  it('wraps an API failure in TranscriptionError with its message', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }), {
+        status: 401,
+      }),
+    );
+    const { service } = scribeContext();
+
+    const failure = service.transcribe(new ArrayBuffer(16));
+
+    await expect(failure).rejects.toThrow(TranscriptionError);
+    await expect(failure).rejects.toThrow('Invalid API key');
+  });
+
+  it('health-checks with the key against /user', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+    const { service } = scribeContext();
+
+    expect(await service.healthCheck()).toEqual({ status: 'OK' });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.elevenlabs.io/v1/user');
+  });
+});
+
+describe('voice input provider setting', () => {
+  it('accepts ElevenLabs and falls back to Sentient Sims AI for anything else', () => {
+    const { settingsService } = mockEnvironment();
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+    expect(settingsService.voiceInputProvider).toBe(ApiType.ElevenLabs);
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.OpenAI);
+    expect(settingsService.voiceInputProvider).toBe(ApiType.OpenAI);
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, 'kokoro');
+    expect(settingsService.voiceInputProvider).toBe(ApiType.SentientSimsAI);
+  });
 });

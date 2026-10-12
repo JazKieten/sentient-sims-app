@@ -1312,8 +1312,14 @@ export class SettingsService {
     return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
   }
 
-  get voiceInputProvider(): ApiType.OpenAI | ApiType.SentientSimsAI {
-    return this.get(SettingsEnum.VOICE_INPUT_PROVIDER) === ApiType.OpenAI ? ApiType.OpenAI : ApiType.SentientSimsAI;
+  // Anything unknown is the Sentient Sims AI server, so an older build's stored value
+  // never leaves a player without transcription
+  get voiceInputProvider(): ApiType.OpenAI | ApiType.SentientSimsAI | ApiType.ElevenLabs {
+    const stored = this.get(SettingsEnum.VOICE_INPUT_PROVIDER);
+    if (stored === ApiType.OpenAI || stored === ApiType.ElevenLabs) {
+      return stored;
+    }
+    return ApiType.SentientSimsAI;
   }
 
   get voiceInputEndpoint(): string {

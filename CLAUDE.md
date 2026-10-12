@@ -104,6 +104,20 @@ main.log as `[Mod] <LEVEL> <message>` (util/modLogMirror), so the mod's game-thr
 (`game thread stall: ...`, `game thread slow ...`) sit next to [Scene]/PUSHDIAG with local timestamps. DEBUG never
 reaches main.log. Test: ModLogMirror.test.ts.
 
+Voice transcription (2026-10-12): services/TranscriptionService.ts has three providers behind one transcribe():
+the Sentient Sims AI server (default; its own JSON request, the server picks the model), any OpenAI-compatible
+/audio/transcriptions endpoint, and ElevenLabs Scribe v2 (clients/ElevenLabsSTTRequest.ts; reuses the ElevenLabs
+key from the Voices settings; `voiceInputProvider = elevenlabs`). The names in play (util/sttVocabulary.ts: on-lot
+sims, the sims they see, known sims, the game's worlds, then the save's participants) reach Whisper as a text
+prompt and Scribe as `keyterms` (full name + first name each, capped at 100 because above that ElevenLabs bills a
+20 s minimum per request). There is NO post-transcription name correction any more: the fuzzy correctNames /
+correctPlaces pass (util/nameCorrection.ts) was removed the same day, because it could not reach the live misses
+(Anker -> "Anchor", Halley -> "Hallie", Kado -> "Cotto") without also renaming prose, while keyterms fixed every one
+of them in a live check with TTS clips. What stays in VoiceInputService.handleAudio is one guard: a transcript
+that is nothing but a Whisper silence hallucination ("Subs by ...", "Thank you for watching") is dropped as
+"Heard nothing". Log line: `Voice input transcript (<provider>): ...`. Twitch !ask keeps its own loose phonetic
+match for typed names (util/twitchSimTarget.ts), unrelated to voice.
+
 IPC: ipcHandlers.ts registers Electron IPC handlers (dialog, settings, clipboard, navigation). Renderer uses window.electron.ipcRenderer for direct main process calls, and HTTP clients for Express API calls.
 
 Build: electron-vite (config at electron.vite.config.ts) builds main/preload/renderer to release/app/dist/{main,preload,renderer}/. All node_modules deps are bundled (build.externalizeDeps: false); only native modules from release/app/package.json (better-sqlite3) stay external. Packaging via electron-builder (Windows NSIS, macOS DMG, Linux AppImage).

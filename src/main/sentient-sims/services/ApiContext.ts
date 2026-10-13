@@ -24,6 +24,7 @@ import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
+import { OnlineLocationRepository } from '../db/OnlineLocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
 import { MemoryRepository } from '../db/MemoryRepository';
 import { PaintingRepository } from '../db/PaintingRepository';
@@ -292,6 +293,7 @@ export class ApiContext {
 
   // --- Repositories ---
   private readonly _locationRepository: LocationRepository;
+  private readonly _onlineLocationRepository: OnlineLocationRepository;
   private readonly _memoryRepository: MemoryRepository;
   private readonly _memoryIndexRepository: MemoryIndexRepository;
   private readonly _paintingRepository: PaintingRepository;
@@ -368,7 +370,8 @@ export class ApiContext {
     this._imageProviderConfigService = new ImageProviderConfigService(this);
     this._embeddingProviderConfigService = new EmbeddingProviderConfigService(this);
 
-    this._locationRepository = new LocationRepository(this._db);
+    this._onlineLocationRepository = new OnlineLocationRepository(this);
+    this._locationRepository = new LocationRepository(this._db, this._onlineLocationRepository);
     this._memoryRepository = new MemoryRepository(this._db);
     this._memoryIndexRepository = new MemoryIndexRepository(this._db);
     this._paintingRepository = new PaintingRepository(this._db);
@@ -638,6 +641,10 @@ export class ApiContext {
 
   get locationRepository(): LocationRepository {
     return this._locationRepository;
+  }
+
+  get onlineLocationRepository(): OnlineLocationRepository {
+    return this._onlineLocationRepository;
   }
 
   get memoryRepository(): MemoryRepository {

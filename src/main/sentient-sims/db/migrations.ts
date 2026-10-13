@@ -397,6 +397,11 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
     '023-participant-pronunciation': (db: Database) => {
       db.prepare('ALTER TABLE participant ADD COLUMN pronunciation TEXT').run();
     },
+    // Which location descriptions the app wrote itself: 1 yields to a shared default, 0 or
+    // NULL is the player's own and always wins. 024 so it cannot collide with a fork's 023.
+    '024-location-description-generated': (db: Database) => {
+      db.prepare('ALTER TABLE location ADD COLUMN description_generated INTEGER').run();
+    },
   }),
 );
 

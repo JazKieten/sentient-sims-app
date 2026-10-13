@@ -56,13 +56,22 @@ export async function runPlayerThread(
 ): Promise<PlayerThreadRun> {
   const lines = linesOverride && linesOverride.length > 0 ? linesOverride : fixture.lines;
   let description: string | undefined;
+  // The stored row is READ, never fetched through getParticipant: that call writes the
+  // name it is handed back onto the row, and the fixture's name is not necessarily this
+  // sim's (live 2026-10-11: a bench turn aimed at Anker Solheim renamed him "Jake Flores"
+  // in the save's database). The caller's sim keeps its own name too.
+  let simName = fixture.simName;
   try {
-    description = ctx.participantRepository.getParticipant({ id: simId, fullName: fixture.simName }).description;
+    const stored = ctx.participantRepository.getAllParticipants().find((participant) => participant.id === simId);
+    description = stored?.description;
+    if (stored?.name) {
+      simName = stored.name;
+    }
   } catch {
     // no save loaded, or an unknown sim: the name and the state report still carry the scene
   }
   const entry = ctx.simStateCache.getSim(simId);
-  const sim = buildAskSentientSim({ simId, name: fixture.simName, description, isActive: entry?.is_active });
+  const sim = buildAskSentientSim({ simId, name: simName, description, isActive: entry?.is_active });
   const isChat = fixture.speaker === 'Chat';
   // Chat lines name a viewer the way TwitchChatService does, sharing one "Chat" thread
   const threadSpeaker = isChat ? TWITCH_CHAT_SPEAKER : ctx.settings.playerSpeakerName;
@@ -136,7 +145,7 @@ export async function runPlayerThread(
       id: fixture.id,
       title: fixture.title,
       speaker: fixture.speaker,
-      simName: fixture.simName,
+      simName,
       target: fixture.target,
     },
     simId,
@@ -147,7 +156,7 @@ export async function runPlayerThread(
     actions,
   };
   log.info(
-    `[Bench] player thread ${fixture.id} for ${fixture.simName}: ${turns.length} turn(s), ` +
+    `[Bench] player thread ${fixture.id} for ${simName}: ${turns.length} turn(s), ` +
       `closed ${closedAt === null ? 'never' : `on turn ${closedAt}`}, evasive ${JSON.stringify(run.evasiveHits)}, ` +
       `${actions.length} action verdict(s)`,
   );

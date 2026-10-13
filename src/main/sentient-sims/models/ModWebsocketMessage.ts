@@ -11,6 +11,9 @@ export enum ModWebsocketMessageType {
   SCENE_LINE = 'scene_line',
   // The line's audio finished playing; the mod stops the speaker's mouth
   SCENE_LINE_ENDED = 'scene_line_ended',
+  // More of a streamed line's word times (the first line of a scene starts playing
+  // before ElevenLabs has timed all of it); replaces the line's reveal list
+  SCENE_LINE_REVEAL_UPDATE = 'scene_line_reveal_update',
   // The whole conversation is over, however it ended. The mod stops watching the
   // sims in it for the walk-away that would have cut it short.
   SCENE_ENDED = 'scene_ended',
@@ -68,9 +71,28 @@ export type ModWebsocketNotificationMemoryCreated = ModWebsocketMessage & {
   paced: boolean;
 };
 
+// When each word of a line is spoken, so the mod can reveal the subtitle in time with
+// the voice (mod: overlay/subtitle_reveal.py). Omitted when the line has no timing.
+export type ModSceneLineReveal = {
+  // Start of each whitespace-delimited word of `text`, ms after started_at_ms; one per
+  // word (a prefix while partial), never decreasing
+  word_ms: number[];
+  // Wall clock (epoch ms) when playback started; the app and the game share a machine
+  started_at_ms: number;
+  // The audio rate at start (the game-speed table, playbackClock.ts)
+  rate: number;
+  // The app's playback follows the game clock: the mod freezes the reveal under the
+  // player's pause and follows the speed; false = the audio runs regardless
+  follows_clock: boolean;
+  // More word times follow in a scene_line_reveal_update
+  partial: boolean;
+  source: 'elevenlabs' | 'estimate';
+};
+
 export type ModSceneLine = ModWebsocketMessage & {
   speaker: string;
   text: string;
+  reveal?: ModSceneLineReveal;
   // The scene's driving action, shown above each line's subtitle section in-game
   preamble?: string;
   // false when no audio plays for the line; omitted means voiced (older senders)
@@ -91,6 +113,14 @@ export type ModSceneLineEnded = ModWebsocketMessage & {
   scene_id?: string;
   // More of the same line follows (a long reply aired in chunks): the mouth stays open
   continues?: boolean;
+};
+
+export type ModSceneLineRevealUpdate = ModWebsocketMessage & {
+  speaker: string;
+  // The line's text as the scene_line carried it: the mod matches on it
+  text: string;
+  scene_id?: string;
+  reveal: Pick<ModSceneLineReveal, 'word_ms' | 'partial'>;
 };
 
 export type ModConversationClosed = ModWebsocketMessage & {
@@ -185,6 +215,7 @@ export type WebsocketNotification =
   | ModAddBuff
   | ModSceneLine
   | ModSceneLineEnded
+  | ModSceneLineRevealUpdate
   | ModSceneEnded
   | ModConversationClosed
   | ModEnqueueInteraction

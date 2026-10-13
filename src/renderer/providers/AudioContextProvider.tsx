@@ -5,6 +5,7 @@ import { DialogueLine } from 'main/sentient-sims/formatter/PromptFormatter';
 import { sceneChunkGapMs, sceneLineGapMs, sceneLineReadingHoldMs } from 'main/sentient-sims/constants';
 import { useElevenLabsTTS } from 'renderer/voice/useElevenLabsTTS';
 import { useSentientSimsTTS } from 'renderer/voice/useSentientSimsTTS';
+import { LineReveal } from 'renderer/voice/TTSHook';
 import { useAISettings } from './AISettingsProvider';
 import { pacedDelay, setClockState, waitWhileUserPaused } from 'renderer/voice/playbackClock';
 import { insertScene } from 'renderer/voice/sceneQueue';
@@ -150,7 +151,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       if (lines.length === 0) return;
 
       const notifyLineShown = paced
-        ? (line: DialogueLine, voiced: boolean) => {
+        ? (line: DialogueLine, voiced: boolean, reveal?: LineReveal) => {
             // A skipSceneLine line's subtitle was already sent directly by the main
             // process (e.g. a Twitch question) — reporting it again would double it
             if (line.skipSceneLine) return;
@@ -165,6 +166,20 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
               sceneId,
               participantSimIds: scene.participantSimIds,
               continues: line.continues,
+              // When each word is spoken: the mod reveals the subtitle with the voice
+              reveal,
+            });
+          }
+        : undefined;
+      // A streamed line's timing grows after its start: the mod extends the reveal
+      const notifyLineRevealUpdate = paced
+        ? (line: DialogueLine, reveal: Pick<LineReveal, 'charMs' | 'wordMs' | 'partial'>) => {
+            if (line.skipSceneLine) return;
+            window.electron.notifySceneLineRevealUpdate({
+              speaker: line.speaker,
+              text: line.text,
+              sceneId,
+              reveal,
             });
           }
         : undefined;
@@ -189,7 +204,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
       const hasCastVoices = lines.some((line) => line.voiceId);
 
       if (aiSettings.ttsEnabled && (uniqueSpeakers.size > 1 || hasCastVoices) && tts?.speakLines) {
-        await tts.speakLines(lines, notifyLineShown, notifyLineEnded, shouldContinue);
+        await tts.speakLines(lines, notifyLineShown, notifyLineEnded, shouldContinue, notifyLineRevealUpdate);
         return;
       }
 

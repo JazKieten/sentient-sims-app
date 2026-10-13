@@ -7,6 +7,8 @@ import {
   elevenLabsLineText,
   isElevenLabsV3,
   isElevenLabsV4,
+  ndjsonTimestampChunks,
+  parseTimestampsJson,
   supportsAudioTags,
   usesDialogueEndpoint,
 } from 'main/sentient-sims/clients/ElevenLabsTTSRequest';
@@ -183,12 +185,101 @@ describe('buildElevenLabsSpeechRequest', () => {
     });
     expect(request.url).toEqual(`${defaultElevenLabsEndpoint}/text-to-speech/${rachelVoiceId}/stream`);
   });
+
+  it('sends no context on v3, which the API rejects with a 400', () => {
+    const request = buildElevenLabsSpeechRequest({
+      text: 'Hello there.',
+      voiceId: rachelVoiceId,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: 'test-key',
+      settings: settings({ model: ElevenLabsSpeechModel.ELEVEN_V3 }),
+      previousText: 'Who goes there?',
+      nextText: 'Come in, then.',
+    });
+    expect(request.body.previous_text).toBeUndefined();
+    expect(request.body.next_text).toBeUndefined();
+  });
+
+  it('targets the with-timestamps variants, buffered and streamed', () => {
+    const base = {
+      text: 'Hello there.',
+      voiceId: rachelVoiceId,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: 'test-key',
+      settings: settings(),
+    };
+    expect(buildElevenLabsSpeechRequest({ ...base, timestamps: true }).url).toEqual(
+      `${defaultElevenLabsEndpoint}/text-to-speech/${rachelVoiceId}/with-timestamps`,
+    );
+    expect(buildElevenLabsSpeechRequest({ ...base, stream: true, timestamps: true }).url).toEqual(
+      `${defaultElevenLabsEndpoint}/text-to-speech/${rachelVoiceId}/stream/with-timestamps`,
+    );
+  });
+});
+
+describe('with-timestamps responses', () => {
+  const alignment = {
+    characters: ['H', 'i'],
+    character_start_times_seconds: [0, 0.2],
+    character_end_times_seconds: [0.2, 0.4],
+  };
+
+  it('parses the audio bytes and prefers the alignment of the text as sent', () => {
+    const chunk = parseTimestampsJson({
+      audio_base64: 'AQID',
+      alignment,
+      normalized_alignment: { ...alignment, characters: ['h', 'i'] },
+    });
+    expect(Array.from(chunk.bytes)).toEqual([1, 2, 3]);
+    expect(chunk.alignment?.characters).toEqual(['H', 'i']);
+  });
+
+  it('falls back to the normalized alignment, and to none', () => {
+    expect(parseTimestampsJson({ audio_base64: 'AQID', normalized_alignment: alignment }).alignment).toEqual(alignment);
+    const bare = parseTimestampsJson({ audio_base64: 'AQID' });
+    expect(bare.alignment).toBeNull();
+    expect(parseTimestampsJson(null).bytes).toHaveLength(0);
+  });
+
+  it('splits a newline-delimited stream into chunks, the last line without a newline too', async () => {
+    const lines = [
+      JSON.stringify({ audio_base64: 'AQ==', alignment }),
+      'not json',
+      JSON.stringify({ audio_base64: 'Ag==', alignment: null }),
+    ];
+    const body = new TextEncoder().encode(`${lines[0]}\n${lines[1]}\n${lines[2]}`);
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // split mid-object to prove buffering across reads
+        controller.enqueue(body.slice(0, 20));
+        controller.enqueue(body.slice(20));
+        controller.close();
+      },
+    });
+    const reader = source.pipeThrough(ndjsonTimestampChunks()).getReader();
+    const chunks = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    expect(chunks).toHaveLength(2);
+    expect(Array.from(chunks[0].bytes)).toEqual([1]);
+    expect(chunks[0].alignment?.characters).toEqual(['H', 'i']);
+    expect(Array.from(chunks[1].bytes)).toEqual([2]);
+    expect(chunks[1].alignment).toBeNull();
+  });
 });
 
 describe('buildElevenLabsDialogueRequest', () => {
   const v4 = settings({ model: ElevenLabsSpeechModel.ELEVEN_V4 });
 
-  function buildDialogue(overrides?: { previousText?: string; nextText?: string; stream?: boolean }) {
+  function buildDialogue(overrides?: {
+    previousText?: string;
+    nextText?: string;
+    stream?: boolean;
+    timestamps?: boolean;
+  }) {
     return buildElevenLabsDialogueRequest({
       text: '[nervous] Been fishing here for years.',
       voiceId: rachelVoiceId,
@@ -212,6 +303,15 @@ describe('buildElevenLabsDialogueRequest', () => {
     const request = buildDialogue({ stream: true });
     expect(request.url).toEqual(
       `${defaultElevenLabsEndpoint}/text-to-dialogue/stream?output_format=${defaultElevenLabsTTSSettings.output_format}`,
+    );
+  });
+
+  it('targets the with-timestamps variants before the query string', () => {
+    expect(buildDialogue({ timestamps: true }).url).toEqual(
+      `${defaultElevenLabsEndpoint}/text-to-dialogue/with-timestamps?output_format=${defaultElevenLabsTTSSettings.output_format}`,
+    );
+    expect(buildDialogue({ stream: true, timestamps: true }).url).toEqual(
+      `${defaultElevenLabsEndpoint}/text-to-dialogue/stream/with-timestamps?output_format=${defaultElevenLabsTTSSettings.output_format}`,
     );
   });
 

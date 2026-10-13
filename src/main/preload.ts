@@ -160,8 +160,27 @@ const electronHandler = {
     sceneId?: string;
     participantSimIds?: string[];
     continues?: boolean;
+    // When each word is spoken (renderer/voice/TTSHook.tsx LineReveal), for the mod's
+    // word-by-word subtitle; absent when nothing times the line
+    reveal?: {
+      charMs?: number[];
+      wordMs?: number[];
+      partial: boolean;
+      startedAtMs: number;
+      rate: number;
+      source: 'elevenlabs' | 'estimate';
+    };
   }) => {
     ipcRenderer.send('scene-line-shown', line);
+  },
+  // More of a streamed line's word times, after its scene_line went out partial
+  notifySceneLineRevealUpdate: (line: {
+    speaker: string;
+    text: string;
+    sceneId?: string;
+    reveal: { charMs?: number[]; wordMs?: number[]; partial: boolean };
+  }) => {
+    ipcRenderer.send('scene-line-reveal-update', line);
   },
   notifySceneLineEnded: (line: { speaker: string; text: string; sceneId?: string; continues?: boolean }) => {
     ipcRenderer.send('scene-line-ended', line);

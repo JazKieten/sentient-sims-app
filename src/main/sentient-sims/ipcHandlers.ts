@@ -1,7 +1,13 @@
 import { IpcMainEvent, clipboard, dialog, ipcMain, shell } from 'electron';
 import log from 'electron-log';
 import { SettingsEnum } from './models/SettingsEnum';
-import { notifySettingChanged, sendSceneLineEndedToMod, sendSceneLineToMod } from './util/notifyRenderer';
+import {
+  LineRevealInput,
+  notifySettingChanged,
+  sendSceneLineEndedToMod,
+  sendSceneLineRevealUpdateToMod,
+  sendSceneLineToMod,
+} from './util/notifyRenderer';
 import { unmarkScenePaced } from './util/pacedScenes';
 import { redactSettingValue } from './util/redactSetting';
 import { DialogueLine } from './formatter/PromptFormatter';
@@ -72,11 +78,24 @@ export default function ipcHandlers(ctx: ApiContext, voiceInput: VoiceInputServi
         voiced?: boolean;
         sceneId?: string;
         participantSimIds?: string[];
+        reveal?: LineRevealInput;
       },
     ) => {
       // Counted so a conversation cut short can trim its memory row to what was heard
       ctx.scenePlayback.lineShown(line.sceneId);
-      sendSceneLineToMod(line);
+      // The word reveal follows the game clock exactly when the audio does
+      sendSceneLineToMod({ ...line, followsClock: ctx.settings.playbackFollowsGameClock });
+    },
+  );
+  // The rest of a streamed line's word times (the first line of a scene starts playing
+  // before ElevenLabs has timed all of it)
+  ipcMain.on(
+    'scene-line-reveal-update',
+    (
+      _event: IpcMainEvent,
+      line: DialogueLine & { sceneId?: string; reveal: Pick<LineRevealInput, 'charMs' | 'wordMs' | 'partial'> },
+    ) => {
+      sendSceneLineRevealUpdateToMod(line);
     },
   );
   // ...and as each one's audio finishes, so the speaker's mouth stops with the voice

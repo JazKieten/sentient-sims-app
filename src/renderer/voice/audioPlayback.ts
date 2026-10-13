@@ -10,6 +10,19 @@ export type AudioPlaybackHandle = {
   setRate?: (rate: number) => void;
 };
 
+// The moment a line's audio starts sounding, for whoever keeps a display in step with it
+// (the mod's word-by-word subtitle): the wall clock at the first sample, the rate it plays
+// at, and its length when known (a decoded buffer; a stream has no length yet).
+export type PlaybackStart = {
+  startedAtMs: number;
+  rate: number;
+  durationMs?: number;
+};
+
+export type PlaybackOptions = {
+  onStart?: (start: PlaybackStart) => void;
+};
+
 // V-1: a user pause suspends the shared context (every line, WebAudio and media
 // element alike); resume brings it back. Registered once, survives every line.
 let clockWired = false;
@@ -47,7 +60,11 @@ const playbackLeadInSeconds = 0.1;
  * Plays audio from a (blob) URL through the shared AudioContext. The audio is fully
  * decoded before playback starts, so nothing is dropped to buffering either.
  */
-export async function playAudioUrl(audioUrl: string, volume: number): Promise<AudioPlaybackHandle> {
+export async function playAudioUrl(
+  audioUrl: string,
+  volume: number,
+  options?: PlaybackOptions,
+): Promise<AudioPlaybackHandle> {
   const context = getAudioContext();
   wirePlaybackClock(context);
   // A user pause holds the line before it starts (never resume the context over a pause)
@@ -86,6 +103,17 @@ export async function playAudioUrl(audioUrl: string, volume: number): Promise<Au
     };
   });
 
+  // Reported before start() so a listener's own work cannot land after the first sample;
+  // the lead-in is what the clock is offset by
+  try {
+    options?.onStart?.({
+      startedAtMs: Date.now() + playbackLeadInSeconds * 1000,
+      rate: currentRate(),
+      durationMs: audioBuffer.duration * 1000,
+    });
+  } catch (err) {
+    log.debug('[TTS] onStart listener failed', err);
+  }
   source.start(context.currentTime + playbackLeadInSeconds);
 
   return {
@@ -112,6 +140,7 @@ export async function playAudioUrl(audioUrl: string, volume: number): Promise<Au
 export async function playAudioStream(
   stream: ReadableStream<Uint8Array>,
   volume: number,
+  options?: PlaybackOptions,
 ): Promise<AudioPlaybackHandle> {
   const context = getAudioContext();
   wirePlaybackClock(context);
@@ -258,6 +287,11 @@ export async function playAudioStream(
     'playing',
     () => {
       log.info(`[TTS] Streaming playback started ${Date.now() - startedAt}ms after fetch, volume=${volume}`);
+      try {
+        options?.onStart?.({ startedAtMs: Date.now(), rate: currentRate() });
+      } catch (err) {
+        log.debug('[TTS] onStart listener failed', err);
+      }
     },
     { once: true },
   );

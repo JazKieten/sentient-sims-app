@@ -5,7 +5,13 @@ import { InteractionEventResult } from '../models/InteractionEventResult';
 import { DatabaseSession } from '../models/DatabaseSession';
 import { DeleteMemoryRequest } from '../models/GetMemoryRequest';
 import { sendModNotification } from '../websocketServer';
-import { ModWebsocketMessageType, ModWebsocketNotificationType, SceneEndedReason } from '../models/ModWebsocketMessage';
+import {
+  ModSceneLineReveal,
+  ModWebsocketMessageType,
+  ModWebsocketNotificationType,
+  SceneEndedReason,
+} from '../models/ModWebsocketMessage';
+import { wordStartsMs } from '../voice/lineTiming';
 import { CaughtError } from '../models/CaughtError';
 import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
@@ -194,6 +200,41 @@ export function notifySceneStop(payload: { sceneId: string; mode: 'soft' | 'hard
   notifyAllWindows('scene-stop', payload);
 }
 
+// The renderer's word timing for a line as it starts playing: per-codepoint start times
+// from ElevenLabs (charMs, a prefix while the line streams) or ready-made word times
+// (wordMs, synthesized for Kokoro), plus when and how fast playback started.
+export type LineRevealInput = {
+  charMs?: number[];
+  wordMs?: number[];
+  partial: boolean;
+  startedAtMs: number;
+  rate: number;
+  source: 'elevenlabs' | 'estimate';
+};
+
+// The reveal the mod gets for a line, or undefined when there is nothing to time it by.
+// The words are counted on the neutralized text, which is what the mod shows
+// (neutralizeMarkup swaps one codepoint for one codepoint, so boundaries agree).
+export function sceneLineReveal(
+  text: string,
+  reveal: LineRevealInput | undefined,
+  followsClock: boolean,
+): ModSceneLineReveal | undefined {
+  if (!reveal) return undefined;
+  const timing = reveal.wordMs
+    ? { word_ms: reveal.wordMs, partial: reveal.partial }
+    : wordStartsMs(neutralizeMarkup(text), reveal.charMs ?? []);
+  if (timing.word_ms.length === 0 && !timing.partial) return undefined;
+  return {
+    word_ms: timing.word_ms,
+    started_at_ms: reveal.startedAtMs,
+    rate: reveal.rate,
+    follows_clock: followsClock,
+    partial: timing.partial || reveal.partial,
+    source: reveal.source,
+  };
+}
+
 // Called as each scene line starts playing so the in-game subtitle appears in step
 // with the voice playback; the preamble (the scene's driving action) heads each
 // line's subtitle section in-game
@@ -203,8 +244,11 @@ export function sendSceneLineToMod(
     voiced?: boolean;
     sceneId?: string;
     participantSimIds?: string[];
+    reveal?: LineRevealInput;
+    followsClock?: boolean;
   },
 ) {
+  const reveal = sceneLineReveal(line.text, line.reveal, line.followsClock !== false);
   sendModNotification({
     type: ModWebsocketMessageType.SCENE_LINE,
     speaker: line.speaker,
@@ -222,6 +266,27 @@ export function sendSceneLineToMod(
     // More of this same line follows (a long reply aired in sentence chunks): the mod
     // keeps the mouth open through the gap instead of closing it at this chunk's end
     continues: line.continues,
+    // When each word is spoken, so the mod reveals the subtitle with the voice; absent
+    // when nothing times the line (older renderer paths, TTS off)
+    ...(reveal ? { reveal } : {}),
+  });
+}
+
+// More of a streamed line's word times: the first line of a scene starts playing before
+// ElevenLabs has timed all of it, so its scene_line went out partial and this fills it in
+export function sendSceneLineRevealUpdateToMod(
+  line: DialogueLine & { sceneId?: string; reveal: Pick<LineRevealInput, 'charMs' | 'wordMs' | 'partial'> },
+) {
+  const text = neutralizeMarkup(line.text);
+  const timing = line.reveal.wordMs
+    ? { word_ms: line.reveal.wordMs, partial: line.reveal.partial }
+    : wordStartsMs(text, line.reveal.charMs ?? []);
+  sendModNotification({
+    type: ModWebsocketMessageType.SCENE_LINE_REVEAL_UPDATE,
+    speaker: line.speaker,
+    text,
+    scene_id: line.sceneId,
+    reveal: { word_ms: timing.word_ms, partial: timing.partial || line.reveal.partial },
   });
 }
 

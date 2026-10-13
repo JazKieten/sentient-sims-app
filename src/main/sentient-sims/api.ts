@@ -117,6 +117,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/sims/:id/facts', ctx.controller.simFacts.getFacts);
   expressApp.get('/sims/:id/facts/path/:otherId', ctx.controller.simFacts.getFactPath);
   expressApp.post('/sims/:id/facts', ctx.controller.simFacts.addFact);
+  expressApp.put('/sims/:id/facts/:factId', ctx.controller.simFacts.editFact);
   expressApp.delete('/sims/:id/facts/:factId', ctx.controller.simFacts.retireFact);
   expressApp.post('/cognition/sleep-boundary', ctx.controller.simState.postSleepBoundary);
 

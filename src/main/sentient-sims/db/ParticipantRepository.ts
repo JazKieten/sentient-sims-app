@@ -8,6 +8,7 @@ import { notifySimsChanged } from '../util/notifyRenderer';
 import { isPlaceholderName } from '../util/simAliases';
 import { SaveGame } from '../models/SaveGame';
 import { toVoiceType, VoiceType } from '../models/VoiceType';
+import { NamePronunciation } from '../formatter/VoiceCasting';
 
 export class ParticipantRepository extends Repository {
   /**
@@ -199,28 +200,19 @@ export class ParticipantRepository extends Repository {
     return names;
   }
 
-  // IPA pronunciations keyed by participant id, for the sims that have one stored
-  getParticipantPronunciations(participantIds: string[]): Map<string, string> {
-    const pronunciations = new Map<string, string>();
-    if (participantIds.length === 0) {
-      return pronunciations;
-    }
-
-    const placeholders = participantIds.map(() => '?').join(', ');
+  // Every sim with an IPA pronunciation stored, by name. ALL of them, not the scene's
+  // cast: a name is spoken by whoever mentions it, and Anker talking ABOUT Halley read
+  // her name wrong because she was not in his scene (live 2026-10-12).
+  getPronouncedNames(): NamePronunciation[] {
     const rows = this.dbService
       .getDb()
       .prepare(
-        `SELECT id, pronunciation FROM participant
-         WHERE pronunciation IS NOT NULL AND TRIM(pronunciation) <> '' AND id IN (${placeholders})`,
+        `SELECT name, pronunciation FROM participant
+         WHERE pronunciation IS NOT NULL AND TRIM(pronunciation) <> '' AND name IS NOT NULL AND TRIM(name) <> ''`,
       )
-      .safeIntegers()
-      .all(participantIds.map((id) => BigInt(id))) as { id: bigint; pronunciation: string }[];
+      .all() as { name: string; pronunciation: string }[];
 
-    rows.forEach((row) => {
-      pronunciations.set(row.id.toString(), row.pronunciation.trim());
-    });
-
-    return pronunciations;
+    return rows.map((row) => ({ name: row.name.trim(), ipa: row.pronunciation.trim() }));
   }
 
   // An UPSERT rather than INSERT OR REPLACE so the generated flag survives a write that

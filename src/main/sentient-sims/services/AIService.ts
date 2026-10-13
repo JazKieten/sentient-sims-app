@@ -81,6 +81,7 @@ import {
 } from '../formatter/PromptFormatter';
 import { airingChunkMaxChars, splitLinesForAiring } from '../util/airingChunks';
 import { usesDialogueEndpoint } from '../clients/ElevenLabsTTSRequest';
+import { NamePronunciation } from '../formatter/VoiceCasting';
 import { formatSelfStatus, TodaysPlanBlock } from '../util/formatSelfStatus';
 import { PlayerConversation, PlayerConversationService } from './PlayerConversationService';
 import { MemoryEntity } from '../db/entities/MemoryEntity';
@@ -2856,30 +2857,38 @@ Write me a buff description based on the conversation so that ${buffRequest.name
   // voices if the save database isn't loaded.
   private voiceCastingOptions(sims?: SentientSim[]): PlayTTSVoiceOptions {
     const voiceType = voiceTypeForTTS(this.ctx.settings.ttsApiType, this.ctx.settings.sentientSimsAITtsSettings.model);
+    // Inline IPA is a v4 feature; on any other model the voice would read the slashes.
+    // Every stored pronunciation applies, whoever is in the scene: a name is read by
+    // whoever says it, cast member or not.
+    const readsPhonetics =
+      voiceType === VoiceType.ElevenLabs && usesDialogueEndpoint(this.ctx.settings.elevenLabsTtsSettings.model);
+    let pronunciations: NamePronunciation[] | undefined;
+    if (readsPhonetics) {
+      try {
+        pronunciations = this.ctx.participantRepository.getPronouncedNames();
+      } catch (err) {
+        log.warn('Unable to look up name pronunciations', err);
+      }
+    }
     if (!voiceType || !sims || sims.length === 0) {
-      return { voiceType };
+      return { voiceType, pronunciations };
     }
 
     // The mood-tag switch lives with the ElevenLabs settings; it is the only provider
     // whose models read the tag, so it is the only one whose setting is consulted
     const moodTags =
       voiceType === VoiceType.ElevenLabs ? (this.ctx.settings.elevenLabsTtsSettings.moodTags ?? true) : true;
-    // Inline IPA is a v4 feature; on any other model the voice would read the slashes
-    const readsPhonetics =
-      voiceType === VoiceType.ElevenLabs && usesDialogueEndpoint(this.ctx.settings.elevenLabsTtsSettings.model);
     try {
       const simIds = sims.map((sim) => sim.sim_id);
       return {
         voiceType,
         moodTags,
         voiceOverrides: this.ctx.participantRepository.getParticipantVoices(simIds, voiceType),
-        pronunciations: readsPhonetics
-          ? this.ctx.participantRepository.getParticipantPronunciations(simIds)
-          : undefined,
+        pronunciations,
       };
     } catch (err) {
       log.warn('Unable to look up per-sim voice overrides', err);
-      return { voiceType, moodTags };
+      return { voiceType, moodTags, pronunciations };
     }
   }
 }

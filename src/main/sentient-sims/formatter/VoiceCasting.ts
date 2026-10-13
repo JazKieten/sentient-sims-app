@@ -41,28 +41,31 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Eleven v4 reads an inline IPA spelling between slashes in place of the word
+// A sim's name and the IPA the voice should read for it ("Halley Calloway", "ˈhæl.i")
+export type NamePronunciation = { name: string; ipa: string };
+
+// Eleven v4 reads an inline IPA spelling between slashes in place of the word. Measured
+// 2026-10-12 with Scribe listening back: "/ˈhæl.i/" read hah-lee on every voice tried,
+// while plain "Halley" read hay-lee on some, so the stored IPA goes through untouched
 export function inlinePronunciation(ipa: string): string {
   return `/${ipa.trim().replace(/^\/+|\/+$/g, '')}/`;
 }
 
 /**
- * Replaces each named sim's full name and first name in what the voice READS with the
- * stored IPA pronunciation (v4 only; the caller decides). The subtitle text is untouched:
- * `text` stays the written name, `ttsText` carries the phonetic one. Longer names go
- * first so "Lillie Cason" is not half-replaced by "Lillie".
+ * Replaces every pronounced sim's full name and first name in what the voice READS with
+ * the stored IPA (v4 only; the caller decides). Not scoped to the scene's cast: a name
+ * is read by whoever says it, and Anker talking ABOUT Halley read hers wrong because she
+ * was not in his scene (live 2026-10-12). The subtitle text is untouched: `text` stays
+ * the written name, `ttsText` carries the phonetic one. Longer names go first so
+ * "Lillie Cason" is not half-replaced by "Lillie".
  */
-export function applyPronunciations(
-  lines: DialogueLine[],
-  sims: SentientSim[],
-  pronunciations: Map<string, string>,
-): DialogueLine[] {
-  const replacements = sims
-    .filter((sim) => pronunciations.has(sim.sim_id) && sim.name.trim())
-    .flatMap((sim) => {
-      const ipa = inlinePronunciation(pronunciations.get(sim.sim_id) as string);
-      const names = [sim.name.trim(), sim.name.trim().split(/\s+/)[0]];
-      return [...new Set(names)].map((name) => ({ name, ipa }));
+export function applyPronunciations(lines: DialogueLine[], pronunciations: NamePronunciation[]): DialogueLine[] {
+  const replacements = pronunciations
+    .filter((entry) => entry.name.trim() && entry.ipa.trim())
+    .flatMap((entry) => {
+      const ipa = inlinePronunciation(entry.ipa);
+      const full = entry.name.trim();
+      return [...new Set([full, full.split(/\s+/)[0]])].map((name) => ({ name, ipa }));
     })
     .sort((a, b) => b.name.length - a.name.length);
   if (replacements.length === 0) {

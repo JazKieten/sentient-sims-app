@@ -84,10 +84,10 @@ describe('ParticipantRepository', () => {
 
     const sim: ParticipantDTO = { id: '7101', name: 'Zorvath Vael', description: 'An alien king.' };
     ctx.participantRepository.updateParticipant(sim);
-    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).size).toEqual(0);
+    expect(ctx.participantRepository.getPronouncedNames()).toEqual([]);
 
     ctx.participantRepository.updateParticipant({ ...sim, pronunciation: ' ˈzɔːrvæθ ' });
-    expect(ctx.participantRepository.getParticipantPronunciations(['7101'])).toEqual(new Map([['7101', 'ˈzɔːrvæθ']]));
+    expect(ctx.participantRepository.getPronouncedNames()).toEqual([{ name: 'Zorvath Vael', ipa: 'ˈzɔːrvæθ' }]);
     expect(ctx.participantRepository.getParticipant({ id: '7101', fullName: 'Zorvath Vael' }).pronunciation).toEqual(
       'ˈzɔːrvæθ',
     );
@@ -99,11 +99,11 @@ describe('ParticipantRepository', () => {
     // description) keeps it
     ctx.participantRepository.updateParticipant({ ...sim, description: 'Still an alien king.' });
     ctx.participantRepository.setDescriptionIfEmpty('7101', 'ignored, not empty');
-    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).get('7101')).toEqual('ˈzɔːrvæθ');
+    expect(ctx.participantRepository.getPronouncedNames()).toEqual([{ name: 'Zorvath Vael', ipa: 'ˈzɔːrvæθ' }]);
 
     // An explicit empty string clears it
     ctx.participantRepository.updateParticipant({ ...sim, pronunciation: '' });
-    expect(ctx.participantRepository.getParticipantPronunciations(['7101']).size).toEqual(0);
+    expect(ctx.participantRepository.getPronouncedNames()).toEqual([]);
     expect(
       ctx.participantRepository.getParticipant({ id: '7101', fullName: 'Zorvath Vael' }).pronunciation,
     ).toBeUndefined();

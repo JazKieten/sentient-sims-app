@@ -108,15 +108,23 @@ Voice transcription (2026-10-12): services/TranscriptionService.ts has three pro
 the Sentient Sims AI server (default; its own JSON request, the server picks the model), any OpenAI-compatible
 /audio/transcriptions endpoint, and ElevenLabs Scribe v2 (clients/ElevenLabsSTTRequest.ts; reuses the ElevenLabs
 key from the Voices settings; `voiceInputProvider = elevenlabs`). The names in play (util/sttVocabulary.ts: on-lot
-sims, the sims they see, known sims, the game's worlds, then the save's participants) reach Whisper as a text
-prompt and Scribe as `keyterms` (full name + first name each, capped at 100 because above that ElevenLabs bills a
-20 s minimum per request). There is NO post-transcription name correction any more: the fuzzy correctNames /
-correctPlaces pass (util/nameCorrection.ts) was removed the same day, because it could not reach the live misses
-(Anker -> "Anchor", Halley -> "Hallie", Kado -> "Cotto") without also renaming prose, while keyterms fixed every one
-of them in a live check with TTS clips. What stays in VoiceInputService.handleAudio is one guard: a transcript
-that is nothing but a Whisper silence hallucination ("Subs by ...", "Thank you for watching") is dropped as
-"Heard nothing". Log line: `Voice input transcript (<provider>): ...`. Twitch !ask keeps its own loose phonetic
-match for typed names (util/twitchSimTarget.ts), unrelated to voice.
+sims, the sims they see, known sims, then the save's participants) reach the Whisper-style providers as the V-7
+text prompt and Scribe as `keyterms` (full name + first name each, the game's worlds in between, capped at 100
+because above that ElevenLabs bills a 20 s minimum per request; 20% surcharge). Two paths after the transcript,
+in VoiceInputService.handleAudio: the Whisper-style providers keep the V-7 fuzzy post-pass (util/nameCorrection.ts
+correctNames/correctPlaces, conservative on purpose, a safety net for players without an ElevenLabs key), while a
+Scribe transcript is sent as heard - it was told the spellings up front, and in a live check with TTS clips of the
+logged misses (Anker -> "Anchor", Halley -> "Hallie", Kado -> "Cotto", which the fuzzy pass never reached)
+keyterms fixed every one. Every provider drops a transcript that is nothing but a silence hallucination ("Subs by
+...", "Thank you for watching") as Heard nothing. Log lines: `Voice input transcript corrected: "raw" -> "text"`
+(Whisper path only) then `Voice input transcript (<provider>): ...`. Twitch !ask has its own loose phonetic match
+for typed names (util/twitchSimTarget.ts).
+
+Name pronunciation for TTS: participant.pronunciation (IPA) is read inline as `/.../` on Eleven v4 only, and
+applies to EVERY line whoever speaks it (ParticipantRepository.getPronouncedNames, VoiceCasting.applyPronunciations) -
+it used to be looked up for the scene's cast alone, so a sim talked ABOUT kept the default reading (Halley as
+hay-lee, live 2026-10-12). Each swap logs `[TTS] <speaker> reads: ...`. Measured with Scribe listening back:
+"/ˈhæl.i/" read hah-lee on both voices tried, "/ˈhæli/" (no syllable dot) did not once, so keep syllable dots.
 
 IPC: ipcHandlers.ts registers Electron IPC handlers (dialog, settings, clipboard, navigation). Renderer uses window.electron.ipcRenderer for direct main process calls, and HTTP clients for Express API calls.
 

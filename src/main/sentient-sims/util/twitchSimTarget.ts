@@ -6,37 +6,13 @@
 import { SSEventType, ChatInteractionEvent } from '../models/InteractionEvents';
 import { SentientSim } from '../models/SentientSim';
 import { SimAge } from '../models/SimAge';
-
-export function levenshtein(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  if (a.length === 0) {
-    return b.length;
-  }
-  if (b.length === 0) {
-    return a.length;
-  }
-  let previous = new Array<number>(b.length + 1);
-  let current = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j += 1) {
-    previous[j] = j;
-  }
-  for (let i = 1; i <= a.length; i += 1) {
-    current[0] = i;
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
-    }
-    [previous, current] = [current, previous];
-  }
-  return previous[b.length];
-}
+import { levenshtein } from './nameCorrection';
 
 // Loose phonetic normalization for typed names: doubled letters collapse, y/ie -> i,
 // ph -> f, ck -> k, silent-w wr -> r, so "lilly"/"Lillie" and "meika"/"Mika" compare close.
-// No silent-final-e rule: it made "how" one edit from Hope (TwitchChat.test.ts).
-export function phonetic(text: string): string {
+// Unlike the voice feature's phonetic() there is no silent-final-e rule: it made "how" one
+// edit from Hope (TwitchChat.test.ts).
+function phonetic(text: string): string {
   return text
     .toLowerCase()
     .replace(/wr/g, 'r')

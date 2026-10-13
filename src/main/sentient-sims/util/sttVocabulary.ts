@@ -1,18 +1,15 @@
 // What the speech-to-text model is told about the names in play. Whisper-style
 // endpoints (the Sentient Sims AI server, any OpenAI-compatible one) take a free-text
-// prompt and treat it as a soft hint; ElevenLabs Scribe takes `keyterms`, a list of
-// spellings it is biased toward in context. Both come from the same vocabulary, built
-// tightest scope first (the sims on the lot, then everyone they see, then everyone the
-// household knows, then the save's participants) so what matters survives the caps.
-//
-// Nothing here corrects a transcript after the fact. The fuzzy post-pass that used to
-// live in nameCorrection.ts was retired 2026-10-12: it could not reach the live misses
-// (Anker -> "Anchor", Halley -> "Hallie", Kado -> "Cotto") without also renaming prose,
-// so the model is told the spellings up front instead.
+// prompt and treat it as a soft hint (buildTranscriptionPrompt in nameCorrection.ts, with
+// the fuzzy post-pass that backs it up); ElevenLabs Scribe takes `keyterms`, a list of
+// spellings it is biased toward in context, and needs no post-pass. Both come from the
+// same vocabulary, built tightest scope first (the sims on the lot, then everyone they
+// see, then everyone the household knows, then the save's participants) so what matters
+// survives the caps.
 import { isPlaceholderName } from './simAliases';
+import { SIMS_WORLDS } from './nameCorrection';
 
-// Whisper truncates the prompt at ~224 tokens; keep the hint short and name-dense
-const PROMPT_MAX_CHARS = 700;
+export { SIMS_WORLDS };
 
 // Scribe accepts up to 1000 keyterms, but a request carrying more than 100 is billed at
 // a 20 s minimum and a spoken line is 3-5 s. Each term: under 50 chars, at most 5 words,
@@ -22,44 +19,10 @@ const KEYTERM_MAX_CHARS = 49;
 const KEYTERM_MAX_WORDS = 5;
 const KEYTERM_FORBIDDEN = /[<>{}[\]\\]/;
 
-// The game's worlds. An STT model has never heard of them and spells what it hears
-// ("Dale Sol Valley" for Del Sol Valley, live 09-27), and the sims then remember the
-// wrong place.
-export const SIMS_WORLDS = [
-  'Willow Creek',
-  'Oasis Springs',
-  'Newcrest',
-  'Magnolia Promenade',
-  'Windenburg',
-  'San Myshuno',
-  'Forgotten Hollow',
-  'Brindleton Bay',
-  'Del Sol Valley',
-  'StrangerVille',
-  'Sulani',
-  'Glimmerbrook',
-  'Britechester',
-  'Evergreen Harbor',
-  'Mt. Komorebi',
-  'Henford-on-Bagley',
-  'Tartosa',
-  'Moonwood Mill',
-  'Copperdale',
-  'San Sequoia',
-  'Chestnut Ridge',
-  'Tomarang',
-  'Ciudad Enamorada',
-  'Ravenwood',
-  'Nordhaven',
-  'Innisgreen',
-  'Gibbi Point',
-  'Granite Falls',
-  'Selvadorada',
-  'Batuu',
-  'Sixam',
-];
-
 export type NameGroups = (string | null | undefined)[][];
+
+// The Whisper hint, unchanged from before Scribe: one sentence of names, tightest scope first
+export { buildTranscriptionPrompt } from './nameCorrection';
 
 // The names in order, trimmed, placeholders ("Sim 1326...") dropped, deduped
 // case-insensitively with the first spelling kept
@@ -80,20 +43,6 @@ function orderedNames(nameGroups: NameGroups): string[] {
     });
   });
   return ordered;
-}
-
-// The Whisper hint: one sentence of names, tightest scope first, cut from the tail
-export function buildTranscriptionPrompt(nameGroups: NameGroups): string | undefined {
-  const ordered = orderedNames(nameGroups);
-  if (ordered.length === 0) {
-    return undefined;
-  }
-  let prompt = `Names in this scene: ${ordered.join(', ')}.`;
-  while (prompt.length > PROMPT_MAX_CHARS && ordered.length > 1) {
-    ordered.pop();
-    prompt = `Names in this scene: ${ordered.join(', ')}.`;
-  }
-  return prompt;
 }
 
 function isValidKeyterm(term: string): boolean {

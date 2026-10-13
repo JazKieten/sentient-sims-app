@@ -57,7 +57,6 @@ describe('buildTranscriptionPrompt', () => {
 
   it('is undefined with nothing to say', () => {
     expect(buildTranscriptionPrompt([])).toBeUndefined();
-    expect(buildTranscriptionPrompt([['Sim 12345']])).toBeUndefined();
   });
 
   it('cuts from the tail to stay under the whisper prompt budget', () => {

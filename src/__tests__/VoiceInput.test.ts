@@ -456,12 +456,15 @@ class FakeHotkeyService extends VoiceHotkeyService {
 
 // voiceCommand: false is a build without the autonomy tier, which has nobody to carry an
 // order out (ApiContext.ext.voiceCommand stays empty)
-function voiceInputContext(options?: { enabled?: boolean; voiceCommand?: boolean }) {
+function voiceInputContext(options?: { enabled?: boolean; voiceCommand?: boolean; names?: string[] }) {
   const { settingsService } = mockEnvironment();
   settingsService.set(SettingsEnum.VOICE_INPUT_ENABLED, options?.enabled ?? true);
   const transcribe = vi.fn();
   const ext = options?.voiceCommand === false ? {} : { voiceCommand: { handleCommand: vi.fn() } };
-  const ctx = { settings: settingsService, transcription: { transcribe }, ext } as unknown as ApiContext;
+  const simStateCache = {
+    getReport: () => ({ sims: (options?.names ?? []).map((name) => ({ sim_name: name, sims: [] })) }),
+  };
+  const ctx = { settings: settingsService, transcription: { transcribe }, ext, simStateCache } as unknown as ApiContext;
   const hotkey = new FakeHotkeyService();
   const service = new VoiceInputService(ctx, hotkey);
   service.initialize();
@@ -661,14 +664,24 @@ describe('VoiceInputService', () => {
     expect(notifyMocks.sendPlayerVoiceMessageToMod).not.toHaveBeenCalled();
   });
 
-  it('sends the transcript as heard, with no fuzzy renaming', async () => {
-    const { service, transcribe } = voiceInputContext();
-    transcribe.mockResolvedValue('Anchor, how are you today?');
+  it('snaps near-miss names for the Whisper-style providers', async () => {
+    const { service, transcribe } = voiceInputContext({ names: ['Wren Calloway'] });
+    transcribe.mockResolvedValue('Hi, Ren, how are you?');
 
     const text = await service.handleAudio(bigAudio());
 
-    expect(text).toBe('Anchor, how are you today?');
-    expect(notifyMocks.sendPlayerVoiceMessageToMod).toHaveBeenCalledWith('Anchor, how are you today?');
+    expect(text).toBe('Hi, Wren, how are you?');
+    expect(notifyMocks.sendPlayerVoiceMessageToMod).toHaveBeenCalledWith('Hi, Wren, how are you?');
+  });
+
+  it('sends a Scribe transcript as heard: the keyterms already carried the spellings', async () => {
+    const { service, transcribe, settingsService } = voiceInputContext({ names: ['Wren Calloway'] });
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+    transcribe.mockResolvedValue('Hi, Ren, how are you?');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('Hi, Ren, how are you?');
   });
 });
 

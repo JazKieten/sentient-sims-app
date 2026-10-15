@@ -9,6 +9,7 @@ import { VoiceInputProvider, voiceInputProviderName } from '../models/VoiceInput
 import { isOpenRouterEndpoint, openrouterAttributionHeaders } from '../models/OpenRouterModels';
 import { VOICE_INPUT_LANGUAGES } from '../models/VoiceInputLanguages';
 import { buildTranscriptionPrompt, keyterms, NameGroups, nameTerms, SIMS_WORLDS } from '../util/sttVocabulary';
+import { isPromptEcho } from '../util/nameCorrection';
 import { elevenLabsHealthCheck, elevenLabsTranscribe } from '../clients/ElevenLabsSTTRequest';
 import { getRandomItem } from '../util/getRandomItem';
 
@@ -141,10 +142,12 @@ export class TranscriptionService {
       let locations: string[] = [];
       try {
         const lotId = report?.lot?.zone_id;
-        locations = this.ctx.locationRepository
-          .getAllLocations()
-          .filter((location) => lotId === undefined || String(location.id) === String(lotId))
-          .map((location) => location.name);
+        if (lotId !== undefined) {
+          locations = this.ctx.locationRepository
+            .getAllLocations()
+            .filter((location) => String(location.id) === String(lotId))
+            .map((location) => location.name);
+        }
       } catch {
         locations = [];
       }
@@ -171,19 +174,23 @@ export class TranscriptionService {
     const { provider } = this;
 
     try {
+      // Scribe takes the names as keyterms, never a prompt it could read back
       if (provider === ApiType.ElevenLabs) {
         return await this.transcribeWithScribe(audio, mimeType, language, withNames);
       }
       const prompt = withNames ? this.namePrompt() : undefined;
+      let text: string;
       if (provider === ApiType.SentientSimsAI) {
         const format = mimeType.split(';')[0].split('/')[1] ?? 'webm';
-        const text = await this.ctx.sentientSimsTranscription.transcribe(Buffer.from(audio), format, language, prompt);
-        return text.trim();
+        text = (
+          await this.ctx.sentientSimsTranscription.transcribe(Buffer.from(audio), format, language, prompt)
+        ).trim();
+      } else if (provider === ApiType.Gemini) {
+        text = await this.transcribeWithGemini(audio, mimeType, language, prompt);
+      } else {
+        text = await this.transcribeOpenAICompatible(provider, audio, mimeType, language, prompt);
       }
-      if (provider === ApiType.Gemini) {
-        return await this.transcribeWithGemini(audio, mimeType, language, prompt);
-      }
-      return await this.transcribeOpenAICompatible(provider, audio, mimeType, language, prompt);
+      return isPromptEcho(text, prompt) ? '' : text;
     } catch (error) {
       log.error(`Voice transcription failed (${voiceInputProviderName(provider)}):`, error);
       throw error instanceof TranscriptionError ? error : new TranscriptionError(errorMessage(error));

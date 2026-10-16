@@ -125,8 +125,16 @@ export interface DirectorSlot {
   status(): { active: boolean; arc?: string };
 }
 
+// AUTONOMY: what Plum's cognition_status tool reads for one Sim: today's plan and the
+// last few graded outcomes. Shapes are plain data so core never names the tier's types.
+export type PlumCognitionView = {
+  plan?: { goals: unknown[]; persona?: string; source?: string };
+  outcomes: unknown[];
+};
+
 export interface TierExtensions {
   director?: DirectorSlot;
+  plumCognition?: (simId: string) => PlumCognitionView;
   trace?: TraceSlot;
   askAction?: AskActionSlot;
   conversationActions?: ConversationActionsSlot;

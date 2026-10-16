@@ -74,6 +74,24 @@ function construct(ctx: ApiContext) {
       autonomy.cognitionService.armDesireFromScene(simId, desire);
     },
   };
+  ctx.ext.plumCognition = (simId) => {
+    const absoluteDay = ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+    const plan = autonomy.dailyPlan.activePlan(simId, absoluteDay);
+    const outcomes = autonomy.actionOutcomeRepository.isLoaded()
+      ? autonomy.actionOutcomeRepository.list({ simId, limit: 5 }).map((record) => ({
+          at: record.at,
+          action: record.action,
+          interaction: record.interactionName,
+          outcome: record.outcome,
+          verdict: record.verdict,
+          claim: record.claim,
+        }))
+      : [];
+    return {
+      ...(plan ? { plan: { goals: plan.goals, persona: plan.persona, source: plan.source } } : {}),
+      outcomes,
+    };
+  };
   ctx.ext.selfStatusPlan = (simId, absoluteDay) => {
     const plan = autonomy.dailyPlan.activePlan(simId, absoluteDay);
     if (!plan || (plan.goals.length === 0 && !plan.persona)) {

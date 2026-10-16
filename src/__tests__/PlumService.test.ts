@@ -132,7 +132,8 @@ describe('PlumService', () => {
     ctx.settings.set(SettingsEnum.PLUM_API_KEY, 'sk-test');
     client = new FakeModelClient();
     now = 1_000_000;
-    plum = new PlumService(ctx, { clientFactory: () => client, now: () => now });
+    // The mod's tools only: the app-side ones have their own test (PlumAppTools.test.ts)
+    plum = new PlumService(ctx, { clientFactory: () => client, now: () => now, appTools: [] });
     plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [lookAtLot, giveMoney, sendHome] });
     sendModNotification.mockClear();
   });

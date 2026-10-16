@@ -23,6 +23,7 @@ import { ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PlumModMessage, PlumModToolResult } from '../models/ModLogWebsocketMessage';
 import { AnthropicPlumClient, describeModelError, PlumModelClient } from './plum/PlumModelClient';
 import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
+import { buildAppTools } from './plum/PlumAppTools';
 import {
   AppTool,
   CatalogueEntry,
@@ -104,7 +105,7 @@ export class PlumService {
   constructor(ctx: ApiContext, options: PlumServiceOptions = {}) {
     this.ctx = ctx;
     this.clientFactory = options.clientFactory ?? ((apiKey) => new AnthropicPlumClient(apiKey));
-    this.appTools = options.appTools ?? [];
+    this.appTools = options.appTools ?? buildAppTools(ctx);
     this.now = options.now ?? (() => Date.now());
     this.catalogue = mergeCatalogue([], this.appTools);
     this.thread = this.newThread();

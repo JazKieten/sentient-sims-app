@@ -35,6 +35,10 @@ export enum ModWebsocketMessageType {
   // The chords the game overlay should listen for on the app's behalf; sent on every
   // mod connect and voice setting change (VoiceHotkeyService)
   VOICE_HOTKEYS = 'voice_hotkeys',
+  // Plum (Claude in the game): run one tool in the mod; the mod answers {plum: {kind: 'tool_result'}}
+  PLUM_TOOL_CALL = 'plum_tool_call',
+  // Plum: a row, status, history or error for the Plum tab (overlay/overlay_plum.py)
+  PLUM_EVENT = 'plum_event',
 }
 
 export type ModWebsocketMessage = {
@@ -205,8 +209,24 @@ export type ModVoiceHotkeys = ModWebsocketMessage & {
   command: string;
 };
 
+export type ModPlumToolCall = ModWebsocketMessage & {
+  request_id: string;
+  name: string;
+  args: Record<string, unknown>;
+  timeout_ms: number;
+};
+
+// kind: assistant | player | tool_call_started | tool_call_finished | director | status |
+// history | error; the rest of the fields depend on the kind (PlumService emits them)
+export type ModPlumEvent = ModWebsocketMessage & {
+  kind: string;
+  [field: string]: unknown;
+};
+
 export type WebsocketNotification =
   | ModWebsocketMessage
+  | ModPlumToolCall
+  | ModPlumEvent
   | ModVoiceHotkeys
   | ModWebsocketNotification
   | ModWebsocketNotificationMemoryEdited

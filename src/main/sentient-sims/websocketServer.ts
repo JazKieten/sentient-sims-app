@@ -99,6 +99,8 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       publishClockState(ctx);
       // The next game session numbers its state reports from 1 again
       ctx.simStateCache.reset();
+      // Plum's pending tool calls can never be answered now
+      ctx.plum.onModDisconnected();
       notifyWebsocketStatus({
         type: 'mod',
         status: false,
@@ -138,6 +140,11 @@ export const startWebSocketServer = (ctx: ApiContext) => {
 
       if (parsedData.scene_control) {
         onSceneControl(ctx.scenePlayback, parsedData.scene_control);
+        return;
+      }
+
+      if (parsedData.plum) {
+        ctx.plum.onModMessage(parsedData.plum);
         return;
       }
 
@@ -190,4 +197,9 @@ export function isWebSocketConnected(type: 'renderer' | 'mod'): boolean {
 
 export function getModInfo(): ModInfo | undefined {
   return lastModInfo;
+}
+
+// The clock the connected mod last reported (undefined with no mod connected)
+export function getModClockState(): ClockState | undefined {
+  return modClockState;
 }

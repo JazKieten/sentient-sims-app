@@ -24,6 +24,11 @@ describe('setting redaction', () => {
     expect(redactSettingValue('accessToken', undefined)).toBeUndefined();
   });
 
+  it("redacts Plum's Anthropic key", () => {
+    expect(secretSettings).toContain(SettingsEnum.PLUM_API_KEY);
+    expect(redactSettingValue(SettingsEnum.PLUM_API_KEY, SENTINEL)).toBe('<redacted>');
+  });
+
   it('redacts a secret whose value is not a string', () => {
     expect(redactSettingValue('geminiKeys', [SENTINEL])).toBe('<redacted>');
     expect(redactSettingValue('accessToken', { value: SENTINEL })).toBe('<redacted>');

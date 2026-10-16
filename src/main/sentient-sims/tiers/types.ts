@@ -117,7 +117,16 @@ export interface TraceSlot {
   appendExchange(memoryId: string, exchange: LLMExchange | undefined, pipeline?: MemoryTracePipeline): void;
 }
 
+// AUTONOMY: Plum's director mode (improv-watch as a service). Core's PlumService reports
+// director_available from this slot and routes the tab's start/stop buttons to it.
+export interface DirectorSlot {
+  start(brief?: string): void;
+  stop(): void;
+  status(): { active: boolean; arc?: string };
+}
+
 export interface TierExtensions {
+  director?: DirectorSlot;
   trace?: TraceSlot;
   askAction?: AskActionSlot;
   conversationActions?: ConversationActionsSlot;

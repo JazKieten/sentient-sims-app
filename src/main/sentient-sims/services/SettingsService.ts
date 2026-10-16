@@ -43,6 +43,7 @@ import {
   defaultVoiceInputModel,
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
+  defaultPlumModel,
 } from '../constants';
 import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
 import { redactSettingValue } from '../util/redactSetting';
@@ -508,6 +509,26 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.DEFAULT_EMBEDDING_PROVIDER_CONFIG_ID.toString()]: {
         type: 'string',
         default: '',
+      },
+      [SettingsEnum.PLUM_ENABLED.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
+      [SettingsEnum.PLUM_API_KEY.toString()]: {
+        type: 'string',
+        default: '',
+      },
+      [SettingsEnum.PLUM_MODEL.toString()]: {
+        type: 'string',
+        default: defaultPlumModel,
+      },
+      [SettingsEnum.PLUM_ALLOW_WRITES.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
+      [SettingsEnum.PLUM_DIRECTOR_MAX_TICKS_PER_HOUR.toString()]: {
+        type: 'number',
+        default: 30,
       },
     },
     migrations: {
@@ -1234,6 +1255,30 @@ export class SettingsService {
 
   get playbackFollowsGameClock(): boolean {
     return this.get(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK) !== false;
+  }
+
+  // Plum: Claude in the game (PlumService)
+  get plumEnabled(): boolean {
+    return this.get(SettingsEnum.PLUM_ENABLED) !== false;
+  }
+
+  get plumApiKey(): string {
+    const key = this.get(SettingsEnum.PLUM_API_KEY);
+    return typeof key === 'string' ? key.trim() : '';
+  }
+
+  get plumModel(): string {
+    const model = this.get(SettingsEnum.PLUM_MODEL);
+    return typeof model === 'string' && model.trim() ? model.trim() : defaultPlumModel;
+  }
+
+  get plumAllowWrites(): boolean {
+    return this.get(SettingsEnum.PLUM_ALLOW_WRITES) !== false;
+  }
+
+  get plumDirectorMaxTicksPerHour(): number {
+    const ticks = this.get(SettingsEnum.PLUM_DIRECTOR_MAX_TICKS_PER_HOUR);
+    return typeof ticks === 'number' && ticks > 0 ? Math.floor(ticks) : 30;
   }
 
   get playerVoicePersona(): PlayerVoicePersona {

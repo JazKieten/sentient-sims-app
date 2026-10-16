@@ -30,7 +30,9 @@ import { publishClockState, startWebSocketServer } from 'main/sentient-sims/webs
 
 const settings = { playbackFollowsGameClock: true };
 const simStateCache = new SimStateCache();
-const ctx = { settings, simStateCache, tiers: [] } as unknown as ApiContext;
+// Plum only hears that the socket closed
+const plum = { onModDisconnected: () => undefined };
+const ctx = { settings, simStateCache, tiers: [], plum } as unknown as ApiContext;
 
 startWebSocketServer(ctx);
 const modServer = (servers as FakeServer[]).find((server) => server.options.port === modWebsocketPort);

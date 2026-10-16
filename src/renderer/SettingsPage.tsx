@@ -10,6 +10,7 @@ import ConstructionIcon from '@mui/icons-material/Construction';
 import AppCard from './AppCard';
 import DebugLogsSettingsComponent from './settings/DebugLogsSettingsComponent';
 import DirectedScenesSettingsComponent from './settings/DirectedScenesSettingsComponent';
+import PlumSettingsComponent from './settings/PlumSettingsComponent';
 import { AnimationMappingSettingsComponent } from './settings/AnimationMappingSettingsComponent';
 import { ModsDirectoryComponent } from './ModsDirectoryComponent';
 import { GameAppPathComponent } from './GameAppPathComponent';
@@ -96,6 +97,7 @@ export default function SettingsPage() {
             <GameAppPathComponent />
             <DirectedScenesSettingsComponent />
             {tierRows('directed-scenes')}
+            <PlumSettingsComponent />
             <DebugLogsSettingsComponent />
             <Divider sx={{ marginTop: 2, marginBottom: 2 }} />
             <Typography variant="h5">AI Providers</Typography>

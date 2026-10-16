@@ -132,6 +132,12 @@ export enum SettingsEnum {
   // Speak each viewer's typed question aloud in a dedicated ElevenLabs voice before the reply
   TWITCH_SPEAK_QUESTIONS = 'twitchSpeakQuestions',
   TWITCH_CHAT_VOICE_ID = 'twitchChatVoiceId', // '' = the built-in default chat voice
+  // Plum: Claude in the game (PlumService). The key setting ends in Key so log bundles redact it.
+  PLUM_ENABLED = 'plumEnabled',
+  PLUM_API_KEY = 'plumApiKey',
+  PLUM_MODEL = 'plumModel',
+  PLUM_ALLOW_WRITES = 'plumAllowWrites',
+  PLUM_DIRECTOR_MAX_TICKS_PER_HOUR = 'plumDirectorMaxTicksPerHour',
 }
 
 export enum DeprecatedSettingsEnum {

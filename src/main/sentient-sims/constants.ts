@@ -257,3 +257,6 @@ export const defaultTwitchChatVoiceId = 'IKne3meq5aSn9XLyUdCD';
 // Shared by the cognition tick and the solo directed scene, which are two routes to the
 // same thing — a sim thinking to herself.
 export const thoughtMemoryFloor = 4;
+
+// Plum (Claude in the game): the model PlumService calls on the player's own Anthropic key
+export const defaultPlumModel = 'claude-opus-5-5';

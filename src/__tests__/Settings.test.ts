@@ -42,6 +42,18 @@ describe('Settings', () => {
     expect(ctx.settings.twitchSpeakQuestions).toBe(false);
   });
 
+  it('Plum defaults: on, no key, Opus, writes allowed, 30 director ticks an hour', () => {
+    expect(ctx.settings.plumEnabled).toBe(true);
+    expect(ctx.settings.plumApiKey).toBe('');
+    expect(ctx.settings.plumModel).toBe('claude-opus-5-5');
+    expect(ctx.settings.plumAllowWrites).toBe(true);
+    expect(ctx.settings.plumDirectorMaxTicksPerHour).toBe(30);
+    ctx.settings.set(SettingsEnum.PLUM_API_KEY, '  sk-ant-x  ');
+    ctx.settings.set(SettingsEnum.PLUM_MODEL, '   ');
+    expect(ctx.settings.plumApiKey).toBe('sk-ant-x');
+    expect(ctx.settings.plumModel).toBe('claude-opus-5-5');
+  });
+
   it('get ai type openai', () => {
     ctx.settings.aiApiType = ApiType.OpenAI;
     expect(ctx.tokenCounter instanceof OpenAITokenCounter).toBeTruthy();

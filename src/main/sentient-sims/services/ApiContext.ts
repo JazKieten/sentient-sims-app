@@ -22,6 +22,7 @@ import { VersionController } from '../controllers/VersionController';
 import { VoiceController } from '../controllers/VoiceController';
 import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
+import { PlumService } from './PlumService';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -268,6 +269,8 @@ export class ApiContext {
 
   private _defaultDescriptionService?: DefaultDescriptionService;
   private readonly _simStateCache: SimStateCache;
+
+  private readonly _plum: PlumService;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
@@ -415,6 +418,8 @@ export class ApiContext {
     // finds its row again at its close to rewrite it to what was actually said.
     setSceneMemoryObserver((pacedText, memoryId) => this._scenePlaybackRegistry.attachMemory(pacedText, memoryId));
     this._simStateCache = new SimStateCache();
+    // Plum, Claude in the game: the model loop over the mod's tools (core; director is a tier slot)
+    this._plum = new PlumService(this);
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
     this._geminiEmbeddingService = new GeminiEmbeddingService(this);
@@ -557,6 +562,10 @@ export class ApiContext {
 
   get simStateCache(): SimStateCache {
     return this._simStateCache;
+  }
+
+  get plum(): PlumService {
+    return this._plum;
   }
 
   // Evaluated per access so changing the embedding provider (or setting a key/token at

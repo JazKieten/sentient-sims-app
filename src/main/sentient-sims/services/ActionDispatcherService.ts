@@ -140,6 +140,19 @@ export class ActionDispatcherService {
     return requestId;
   }
 
+  // A push the mod ran on someone else's behalf (Plum's push_action, request ids
+  // 'plum-...'): registered after the fact so the outcome the mod reports grades it like
+  // one of cognition's. Never blocks a sim's in-flight slot: Plum is the player asking.
+  registerExternal(requestId: string, intent: ActionIntent) {
+    this.prune();
+    this.pending.set(requestId, { requestId, intent, dispatchedAt: Date.now() });
+    pushdiag(requestId, 'dispatch', {
+      sim_id: intent.sim_id,
+      action: intent.action,
+      source: intent.source ?? 'external',
+    });
+  }
+
   // Seam for tests; production sends over the mod websocket. Also used by other
   // cognition traffic (e.g. perception requests) so tests can intercept one place.
   sendToMod(message: WebsocketNotification) {
@@ -211,7 +224,11 @@ export class ActionDispatcherService {
     this.pending.forEach((entry, id) => {
       if (entry.dispatchedAt < cutoff) {
         log.debug(`[ActionDispatcher] expiring dispatch ${id} (${entry.intent.action}) with no outcome`);
-        pushdiag(id, 'expire', { sim_id: entry.intent.sim_id, action: entry.intent.action, ttl_s: PENDING_TTL_MS / 1000 });
+        pushdiag(id, 'expire', {
+          sim_id: entry.intent.sim_id,
+          action: entry.intent.action,
+          ttl_s: PENDING_TTL_MS / 1000,
+        });
         this.pending.delete(id);
         if (this.inFlightBySim.get(entry.intent.sim_id) === id) {
           this.inFlightBySim.delete(entry.intent.sim_id);

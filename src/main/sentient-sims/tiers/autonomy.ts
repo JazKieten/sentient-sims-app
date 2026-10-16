@@ -19,6 +19,7 @@ import { AskActionService } from '../services/AskActionService';
 import { VoiceCommandService } from '../services/VoiceCommandService';
 import { CognitionController } from '../controllers/CognitionController';
 import { createSleepPlanner } from '../services/SleepPlanner';
+import { DirectorService } from '../services/DirectorService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -30,6 +31,7 @@ export interface AutonomyServices {
   askAction: AskActionService;
   voiceCommand: VoiceCommandService;
   controller: CognitionController;
+  director: DirectorService;
 }
 
 const services = new WeakMap<ApiContext, AutonomyServices>();
@@ -56,7 +58,20 @@ function construct(ctx: ApiContext) {
   autonomy.askAction = new AskActionService(ctx, autonomy);
   autonomy.voiceCommand = new VoiceCommandService(ctx, autonomy);
   autonomy.controller = new CognitionController(ctx, autonomy);
+  // Plum's director mode (improv-watch as a service) and the grading of Plum's pushes
+  autonomy.director = new DirectorService(ctx, { outcomes: autonomy.actionOutcomeRepository });
   services.set(ctx, autonomy);
+
+  ctx.ext.director = autonomy.director;
+  ctx.ext.plumPush = (requestId, push) => {
+    const sims = ctx.simStateCache.getReport()?.sims ?? [];
+    const sim = sims.find((entry) => entry.sim_name?.toLowerCase() === push.sim_id.toLowerCase());
+    autonomy.actionDispatcher.registerExternal(requestId, {
+      sim_id: sim?.sim_id ?? push.sim_id,
+      action: push.action,
+      source: 'claude',
+    });
+  };
 
   ctx.ext.askAction = autonomy.askAction;
   ctx.ext.voiceCommand = autonomy.voiceCommand;
@@ -129,5 +144,8 @@ export const autonomyTier: TierRegistration = {
   onSceneClosed: (ctx, closed) => {
     // A reply to the player that wanted to act may act now that it has been heard
     autonomyOf(ctx).cognitionService.releaseConversationActions(closed.sceneId);
+  },
+  shutdown: (ctx) => {
+    autonomyOf(ctx).director.stop();
   },
 };

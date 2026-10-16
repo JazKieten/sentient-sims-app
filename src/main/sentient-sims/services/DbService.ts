@@ -135,6 +135,8 @@ export class DbService {
     // The AI exchange log is persisted in this save (F4), so its ids have to continue above
     // the rows already stored there before anything new is recorded against it.
     this.ctx.aiExchangeLog.onDatabaseLoaded();
+    // Plum picks its last conversation in this save back up
+    this.ctx.plum.onDatabaseLoaded();
 
     // The build tiers' own per-save work (autonomy: the graded outcomes' bounding pass)
     for (const tier of this.ctx.tiers) {

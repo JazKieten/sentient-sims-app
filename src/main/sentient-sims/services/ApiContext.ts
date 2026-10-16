@@ -23,6 +23,7 @@ import { VoiceController } from '../controllers/VoiceController';
 import { SimFactRepository } from '../db/SimFactRepository';
 import { SemanticMemoryService } from './SemanticMemoryService';
 import { PlumService } from './PlumService';
+import { PlumRepository } from '../db/PlumRepository';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
@@ -271,6 +272,8 @@ export class ApiContext {
   private readonly _simStateCache: SimStateCache;
 
   private readonly _plum: PlumService;
+
+  private readonly _plumRepository: PlumRepository;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
@@ -375,6 +378,7 @@ export class ApiContext {
     this._participantRepository = new ParticipantRepository(this._db);
     this._interactionRepository = new InteractionRepository(this);
     this._simFactRepository = new SimFactRepository(this._db);
+    this._plumRepository = new PlumRepository(this._db);
 
     this._sceneService = new SceneService();
     this._playerConversationService = new PlayerConversationService({
@@ -566,6 +570,10 @@ export class ApiContext {
 
   get plum(): PlumService {
     return this._plum;
+  }
+
+  get plumRepository(): PlumRepository {
+    return this._plumRepository;
   }
 
   // Evaluated per access so changing the embedding provider (or setting a key/token at

@@ -82,7 +82,7 @@ describe('Plum app-side tools', () => {
       subjectSimId: BELLA,
       predicate: 'likes',
       objectSimId: DON,
-      source: 'extracted',
+      source: 'told',
       confidence: 0.8,
     });
     const facts = (await tool(ctx, 'sim_facts').run({ sim: 'Bella Goth', about: null })) as {

@@ -191,5 +191,69 @@ export function buildAppTools(ctx: ApiContext): AppTool[] {
     },
   };
 
-  return [recentMemories, simFacts, cognitionStatus];
+  const remember: AppTool = {
+    definition: {
+      name: 'remember',
+      description:
+        'Keep a note for your future self in this save: a promise to the player, a fact about the household, ' +
+        'how the player likes things done. Notes come back at the start of every later conversation.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          note: { type: 'string', description: 'One or two sentences' },
+          sims: {
+            type: ['array', 'null'],
+            items: { type: 'string' },
+            description: 'Sim names or ids the note is about (null = none)',
+          },
+        },
+        required: ['note', 'sims'],
+        additionalProperties: false,
+      },
+      risk: 'write',
+      timeout_ms: 5000,
+      tier: 'core',
+    },
+    run: (args) => {
+      const note = typeof args.note === 'string' ? args.note.trim() : '';
+      if (!note) {
+        return Promise.reject(new Error('an empty note is nothing to remember'));
+      }
+      if (!ctx.plumRepository.isLoaded()) {
+        return Promise.reject(new Error('no save is loaded, so there is nowhere to keep the note'));
+      }
+      const specs = Array.isArray(args.sims) ? args.sims.filter((sim): sim is string => typeof sim === 'string') : [];
+      const simIds = specs.map((spec) => resolveSimId(ctx, spec) ?? spec);
+      const gameDay = ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+      ctx.plumRepository.addNote('note', note, simIds, gameDay);
+      return Promise.resolve({ changed: `noted: ${note.length > 80 ? `${note.slice(0, 80)}...` : note}` });
+    },
+  };
+
+  const recall: AppTool = {
+    definition: {
+      name: 'recall',
+      description:
+        'Every note you kept in this save (remember) and the summaries of earlier conversations, oldest first.',
+      input_schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      risk: 'read',
+      timeout_ms: 5000,
+      tier: 'core',
+    },
+    run: () => {
+      if (!ctx.plumRepository.isLoaded()) {
+        return Promise.resolve({ notes: [] });
+      }
+      return Promise.resolve({
+        notes: ctx.plumRepository.notes(40).map((note) => ({
+          kind: note.kind,
+          day: note.game_day,
+          text: note.text,
+          sims: note.sim_ids,
+        })),
+      });
+    },
+  };
+
+  return [recentMemories, simFacts, cognitionStatus, remember, recall];
 }

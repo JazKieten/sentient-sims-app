@@ -390,6 +390,33 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         PRIMARY KEY ( sim_id, absolute_day )
       );
     `,
+    // Plum (Claude in the game) remembers across sessions, per save: the conversation rows
+    // the tab showed (plum_message, role = the row kind, content_json = the row) and the
+    // notes Plum keeps for itself (plum_note: remember/recall and the end-of-thread
+    // summaries). No foreign keys and no memory column: the mod parses memory rows into a
+    // fixed-field class (migration 011), so Plum's state stays beside it.
+    // A function: the string form is one prepared statement, and this is three
+    '023-create-plum': (db: Database) => {
+      db.exec(`
+      CREATE TABLE plum_message (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        thread_id            TEXT NOT NULL  ,
+        role                 TEXT NOT NULL  ,
+        content_json         TEXT NOT NULL  ,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        game_day             INTEGER
+      );
+      CREATE INDEX plum_message_thread ON plum_message ( thread_id, id );
+      CREATE TABLE plum_note (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        kind                 TEXT NOT NULL  ,
+        text                 TEXT NOT NULL  ,
+        sim_ids_json         TEXT     ,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        game_day             INTEGER
+      );
+      `);
+    },
   }),
 );
 

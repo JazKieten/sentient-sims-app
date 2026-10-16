@@ -132,8 +132,15 @@ export type PlumCognitionView = {
   outcomes: unknown[];
 };
 
+// AUTONOMY: a push_action of Plum's registered with the dispatcher so its outcome is graded
+export type PlumPushRegistration = (
+  requestId: string,
+  push: { sim_id: string; action: string; target?: string },
+) => void;
+
 export interface TierExtensions {
   director?: DirectorSlot;
+  plumPush?: PlumPushRegistration;
   plumCognition?: (simId: string) => PlumCognitionView;
   trace?: TraceSlot;
   askAction?: AskActionSlot;

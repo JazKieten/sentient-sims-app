@@ -21,6 +21,7 @@
     "src/renderer/tiers/autonomy.tsx",
     "src/renderer/settings/ConversationActionsSettingsComponent.tsx",
     "src/renderer/settings/voice/VoiceCommandKeyRow.tsx",
+    "src/main/sentient-sims/services/DirectorService.ts",
     "src/main/sentient-sims/services/CognitionService.ts",
     "src/main/sentient-sims/services/ActionDispatcherService.ts",
     "src/main/sentient-sims/services/AskActionService.ts",
@@ -53,7 +54,8 @@
     "src/__tests__/CognitionVocabulary.test.ts",
     "src/__tests__/FormatPerception.test.ts",
     "src/__tests__/CognitionRoutes.test.ts",
-    "src/__tests__/FactsInPrompts.test.ts"
+    "src/__tests__/FactsInPrompts.test.ts",
+    "src/__tests__/DirectorService.test.ts"
   ],
   "dev": [
     "src/main/sentient-sims/tiers/dev.ts",

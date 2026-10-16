@@ -15,7 +15,12 @@ import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { MAX_ITERATIONS, PlumService } from 'main/sentient-sims/services/PlumService';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
-import { catalogueFingerprint, mergeCatalogue, toApiTools } from 'main/sentient-sims/services/plum/PlumTools';
+import {
+  catalogueFingerprint,
+  MAX_STRICT_TOOLS,
+  mergeCatalogue,
+  toApiTools,
+} from 'main/sentient-sims/services/plum/PlumTools';
 import { PLUM_SYSTEM_PROMPT } from 'main/sentient-sims/services/plum/plumPrompt';
 import { mockApiContext } from './util';
 
@@ -475,6 +480,21 @@ describe('Plum tool catalogue', () => {
     expect(merged[1].app).toBe(appTool);
     const api = toApiTools(merged);
     expect(api.every((tool) => tool.strict && tool.input_schema.additionalProperties === false)).toBe(true);
+    // Past the API's cap only the tools that move the game stay strict, destructive first
+    const many = mergeCatalogue(
+      Array.from({ length: 24 }, (_, i) => ({ ...lookAtLot, name: `read_${String(i).padStart(2, '0')}` })).concat([
+        giveMoney,
+        sendHome,
+      ]),
+      [],
+    );
+    const strictOnes = toApiTools(many)
+      .filter((tool) => tool.strict)
+      .map((tool) => tool.name);
+    expect(strictOnes).toHaveLength(MAX_STRICT_TOOLS);
+    expect(strictOnes).toContain('send_sim_home');
+    expect(strictOnes).toContain('give_money');
+    expect(strictOnes).not.toContain('read_23');
     expect(catalogueFingerprint(merged)).toBe(catalogueFingerprint(mergeCatalogue([lookAtLot, sendHome], [appTool])));
   });
 });

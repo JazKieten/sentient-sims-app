@@ -41,7 +41,24 @@ export function mergeCatalogue(modTools: ModToolDef[], appTools: AppTool[]): Cat
   return [...byName.values()].sort((a, b) => a.definition.name.localeCompare(b.definition.name));
 }
 
+// The API allows at most this many strict tools in one request (measured live 2026-10-15:
+// "Too many strict tools (25). The maximum number of strict tools supported is 20").
+export const MAX_STRICT_TOOLS = 20;
+const RISK_RANK: Record<PlumRisk, number> = { destructive: 0, write: 1, read: 2 };
+
+// Which tools get the schema guarantee when the catalogue is bigger than the cap: the ones
+// whose arguments move the game, destructive first. Deterministic for a given catalogue, so
+// the cache prefix never moves; the mod validates and coerces every call anyway.
+export function strictNames(catalogue: CatalogueEntry[]): Set<string> {
+  const ranked = [...catalogue].sort(
+    (a, b) =>
+      RISK_RANK[a.definition.risk] - RISK_RANK[b.definition.risk] || a.definition.name.localeCompare(b.definition.name),
+  );
+  return new Set(ranked.slice(0, MAX_STRICT_TOOLS).map((entry) => entry.definition.name));
+}
+
 export function toApiTools(catalogue: CatalogueEntry[]): Anthropic.Beta.Messages.BetaTool[] {
+  const strict = strictNames(catalogue);
   return catalogue.map(({ definition }) => ({
     name: definition.name,
     description: definition.description,
@@ -49,7 +66,7 @@ export function toApiTools(catalogue: CatalogueEntry[]): Anthropic.Beta.Messages
       ...(definition.input_schema as Anthropic.Beta.Messages.BetaTool.InputSchema),
       type: 'object' as const,
     },
-    strict: true,
+    ...(strict.has(definition.name) ? { strict: true } : {}),
   }));
 }
 

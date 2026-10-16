@@ -174,8 +174,9 @@ export class PlumService {
     const fingerprint = catalogueFingerprint(this.catalogue);
     if (fingerprint !== this.thread.fingerprint) {
       // Swapping tools under a transcript breaks the cache and confuses the model; a thread
-      // with no rows yet is simply re-stamped
-      if (this.thread.rows.length === 0) {
+      // that has not sent a turn yet (fresh, or restored from the save before the mod
+      // connected) is simply re-stamped and keeps its rows and seed
+      if (this.thread.messages.length === 0) {
         this.thread.fingerprint = fingerprint;
       } else {
         log.info('[Plum] the tool catalogue changed; starting a new conversation');

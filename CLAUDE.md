@@ -174,3 +174,39 @@ hold exactly, so treat every id as an opaque string everywhere — JSON, websock
 entity types. Only the SQLite layer touches the real integer: read INTEGER id columns with
 .safeIntegers() and convert to string with .toString(), and bind ids in queries with BigInt(id).
 Never pass an id through Number() or parseInt — it silently rounds and the id stops matching.
+
+Lot descriptions (2026-10-15): every scene prompt carries one LOCATION line, `{name} ({type}), {description}`. The
+shipped defaults (descriptions/locationDescriptions.ts, 181 lots + 2 stock; lots that ship empty, every Newcrest lot
+included, have none, and a player's own builds never belong there) are in the CARD shape: 3-4 present-tense
+sentences, what kind of place and where, then the real things in it, nobody in the text. The shape won a 360-scene
+blind-judged experiment against stock/minimal/long/flowery/key-value (harness src/__tests__/LotFormatExperiment.test.ts,
+gated on LOT_FORMAT_EXPERIMENT, not in tiers.json); the stock "suburban residence" placeholder was the worst of all, so
+an undescribed lot costs more than any shape choice. BuiltInDescriptions.test.ts holds every built-in to
+util/lotDescription.placeDescriptionProblems (1-4 sentences, "Mt." is not a sentence end, no person, no moment) and a
+no-people scrub; edit the file directly (the lot sheet it was first generated from is retired).
+"Auto-Generate Description" on the Locations page: POST /locations/:id/describe (LocationsController.describeLocation
+-> DefaultDescriptionService.describeLocation, the same facts and writer as the fire-and-forget fallback) returns
+{description, facts, lotType} for the editor and stores nothing (the page fills Lot Type when it is empty or the
+Residence placeholder); 409 until the lot has been reported this app run (SimStateCache.getLotBlock keeps every
+reported lot block by lot id). The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
+`bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts, mod builds from 2026-10-15) and, from 2026-10-16,
+`world_name`, `street`, `furnishings` (every object tuning name on the lot), `floors`, `styles` (catalog Style_* tags)
+and `music` (stereo station states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes; mod builds
+from 2026-10-16 add `floor_furnishings` (names per level; util/lotFurnishings.roomFloors counts a level only with 2+
+real furnishing kinds, so a roof of vents is no story, and one story is never mentioned) and `venue_type`, the lot
+type set in Manage Worlds, which lotVenue prefers (Ward Park's active venue is venue_Generic). The writer goes floor
+by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
+no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
+them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does
+not; names no rule knows are logged as "furnishings with no plain words") and names the place by
+descriptions/lotNeighborhoods.ts (lot id -> neighborhood + world, generated from the sheet's Neighborhood column),
+else the reported world (also the Locations page's Neighborhood column; LocationEntity.neighborhood). Lot types
+read as Manage Worlds names them (util/lotDescription VENUES + VENUE_PATTERNS: Residential, Café, National Park for
+venue_ForestPark, Recreation Center...). A stereo's station is its StereoChannel_* state. The button
+names the lot by the app's name, not the in-game one, so a rename made in game never leaks into a shared default.
+Screenshots: the editor's Add Screenshots (pick or Ctrl+V, up to 4, shrunk to 1568 px JPEG; components/LotScreenshots)
+sends { screenshots } to the same route; they stand in for a visit and ride on the user message (runOneShot
+options.images -> OpenAI-compatible image_url parts or Gemini inlineData). Only OpenAI, OpenRouter and Gemini as the
+Default Description provider take them (ScreenshotProviderError -> 400 otherwise); the AI log and debug lines keep a
+count, never the image data (OpenAIMessage.withoutImageData). Publishing refuses text naming a sim in the save (findSavedNames); everyday words a townie
+is called (savedNames COMMON_WORDS: story, blue, white, house, street, bright, someone) only count inside a full name.

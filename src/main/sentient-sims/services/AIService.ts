@@ -53,6 +53,7 @@ import {
   OpenAIRequestBuilder,
 } from '../models/OpenAIRequestBuilder';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
+import { MessageImage } from '../models/OpenAIMessage';
 import { promptFor } from '../pipeline/prompts';
 import { StageId } from '../pipeline/stages';
 import {
@@ -1449,8 +1450,9 @@ ${factsBlock}
     // honours an override set on the interaction (see getConfigForDirectedStage)
     interactionActionType?: AIActionType,
     // Which pipeline stage this call IS. An options bag rather than a ninth positional:
-    // 3.2 adds simId here so a stage can resolve against one Sim's Sentience.
-    options?: { stageId?: StageId },
+    // 3.2 adds simId here so a stage can resolve against one Sim's Sentience. Images ride on
+    // the user message (lot screenshots); only providers that can see them are given any.
+    options?: { stageId?: StageId; images?: MessageImage[] },
   ): Promise<{ exchange: LLMExchange; text: string }> {
     const providerConfig = this.ctx.providerConfigs.getConfigForDirectedStage(actionType, interactionActionType);
     // The context budget belongs to the model, not to this call site: a hardcoded 3900 threw
@@ -1478,6 +1480,10 @@ ${factsBlock}
     // An explicit model (scenario tester's per-stage picks) wins over the action's provider config
     openAIRequest.model = resolvedModel;
     openAIRequest.apiType = providerConfig.apiType;
+    const userMessage = openAIRequest.messages.findLast((message) => message.role === 'user');
+    if (userMessage && options?.images?.length) {
+      userMessage.images = options.images;
+    }
     const response = await this.ctx.aiExchangeLog.runLabeled(
       label,
       actionType,

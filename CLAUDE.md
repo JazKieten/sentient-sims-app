@@ -235,8 +235,9 @@ no-people scrub; edit the file directly (the lot sheet it was first generated fr
 Residence placeholder); 409 until the lot has been reported this app run (SimStateCache.getLotBlock keeps every
 reported lot block by lot id). The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
 `bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts, mod builds from 2026-10-15) and, from 2026-10-16,
-`world_name`, `street`, `furnishings` (every object tuning name on the lot), `floors`, `styles` (catalog Style_* tags)
-and `music` (stereo station states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes; mod builds
+`world_name`, `street`, `furnishings` (every object tuning name on the lot), `floors` and `music` (stereo station
+states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes (the app reads no decor style: the mod's
+catalog tag lookup found no Style_* tags live, so `styles` was dropped until one works); mod builds
 from 2026-10-16 add `floor_furnishings` (names per level; util/lotFurnishings.roomFloors counts a level only with 2+
 real furnishing kinds, so a roof of vents is no story, and one story is never mentioned) and `venue_type`, the lot
 type set in Manage Worlds, which lotVenue prefers (Ward Park's active venue is venue_Generic). The writer goes floor
@@ -246,12 +247,17 @@ them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its
 not; names no rule knows are logged as "furnishings with no plain words") and names the place by
 descriptions/lotNeighborhoods.ts (lot id -> neighborhood + world, generated from the sheet's Neighborhood column),
 else the reported world (also the Locations page's Neighborhood column; LocationEntity.neighborhood). Lot types
-read as Manage Worlds names them (util/lotDescription VENUES + VENUE_PATTERNS: Residential, Café, National Park for
-venue_ForestPark, Recreation Center...). A stereo's station is its StereoChannel_* state. The button
-names the lot by the app's name, not the in-game one, so a rename made in game never leaks into a shared default.
-Screenshots: the editor's Add Screenshots (pick or Ctrl+V, up to 4, shrunk to 1568 px JPEG; components/LotScreenshots)
-sends { screenshots } to the same route; they stand in for a visit and ride on the user message (runOneShot
-options.images -> OpenAI-compatible image_url parts or Gemini inlineData). Only OpenAI, OpenRouter and Gemini as the
-Default Description provider take them (ScreenshotProviderError -> 400 otherwise); the AI log and debug lines keep a
-count, never the image data (OpenAIMessage.withoutImageData). Publishing refuses text naming a sim in the save (findSavedNames); everyday words a townie
-is called (savedNames COMMON_WORDS: story, blue, white, house, street, bright, someone) only count inside a full name.
+read as Manage Worlds names them (util/lotDescription VENUES + VENUE_PATTERNS: Café, National Park for
+venue_ForestPark, Recreation Center...), except homes, which read Residence / Haunted House Residence / Tiny Home
+Residence (Jaz's choice; also the placeholder, so a home's lot type never changes). A stereo's station is its
+StereoChannel_* state. The button names the lot by the app's name, not the in-game one, so a rename made in game never
+leaks into a shared default. Lot screenshots were removed 2026-10-17 as too complex for players (the generic
+OpenAIMessage.images plumbing stays). The button's calls are runOneShot `interactive`: logged, but outside provider
+health (AIExchangeLogService LabelContext.health), so failed presses never raise the in-game "provider has failed"
+toast. Provider errors reach the player in plain words (util/providerErrorWords.plainProviderError: the editor's
+message, with "Open Settings" when the fix is there, the health chip and the mod toast); the raw text stays in
+main.log. Gemini thinking counts against maxOutputTokens (a 220-token description spent 209 thinking on
+gemini-3.8-flash), so GeminiService sends thinkingBudget 0, else thinkingLevel LOW, else nothing, the last two with
+1024 tokens of headroom, and remembers per model which one it accepted. Publishing refuses text naming a sim in the
+save (findSavedNames); everyday words a townie is called (savedNames COMMON_WORDS: story, blue, white, house, street,
+bright, someone) only count inside a full name.

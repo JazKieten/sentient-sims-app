@@ -1451,8 +1451,10 @@ ${factsBlock}
     interactionActionType?: AIActionType,
     // Which pipeline stage this call IS. An options bag rather than a ninth positional:
     // 3.2 adds simId here so a stage can resolve against one Sim's Sentience. Images ride on
-    // the user message (lot screenshots); only providers that can see them are given any.
-    options?: { stageId?: StageId; images?: MessageImage[] },
+    // the user message; only providers that can see them are given any.
+    // interactive: the player pressed a button and sees the result, so it is left out of
+    // provider health.
+    options?: { stageId?: StageId; images?: MessageImage[]; interactive?: boolean },
   ): Promise<{ exchange: LLMExchange; text: string }> {
     const providerConfig = this.ctx.providerConfigs.getConfigForDirectedStage(actionType, interactionActionType);
     // The context budget belongs to the model, not to this call site: a hardcoded 3900 threw
@@ -1489,6 +1491,7 @@ ${factsBlock}
       actionType,
       () => this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
       options?.stageId,
+      { health: !options?.interactive },
     );
     return { exchange: { label, request: openAIRequest, responseText: response.text }, text: response.text };
   }

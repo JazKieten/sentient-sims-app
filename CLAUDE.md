@@ -234,7 +234,10 @@ no-people scrub; edit the file directly (the lot sheet it was first generated fr
 {description, facts, lotType} for the editor and stores nothing (the page fills Lot Type when it is empty or the
 Residence placeholder); 409 until the lot has been reported this app run (SimStateCache.getLotBlock keeps every
 reported lot block by lot id). The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
-`bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts, mod builds from 2026-10-15) and, from 2026-10-16,
+`bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts; the game's names, zoneModifier_lotTrait_FreshAir is
+Bracing Breezes, and they only ARRIVE from mod builds of 2026-10-17: before that the mod asked for a resource type
+that does not exist; lot challenges such as Heist Havoc ride the same list and are repeated under `lot_challenges`,
+lotTraitName strips the zoneModifier_ prefix) and, from 2026-10-16,
 `world_name`, `street`, `furnishings` (every object tuning name on the lot), `floors` and `music` (stereo station
 states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes (the app reads no decor style: the mod's
 catalog tag lookup found no Style_* tags live, so `styles` was dropped until one works); mod builds

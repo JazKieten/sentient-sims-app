@@ -23,8 +23,9 @@ export interface PlumModelClient {
 export class AnthropicPlumClient implements PlumModelClient {
   private readonly client: Anthropic;
 
-  constructor(apiKey: string) {
-    this.client = new Anthropic({ apiKey });
+  // Tests hand in a stub SDK whose beta.messages.stream records the params
+  constructor(apiKey: string, sdk?: Anthropic) {
+    this.client = sdk ?? new Anthropic({ apiKey });
   }
 
   async create(request: PlumModelRequest): Promise<Anthropic.Beta.Messages.BetaMessage> {
@@ -33,12 +34,20 @@ export class AnthropicPlumClient implements PlumModelClient {
     // calls), no thinking parameter (always on; effort is the lever, and the default is
     // medium so it is set explicitly). Safety-classifier refusals re-run on Anthropic's
     // default fallback model inside the same call.
+    //
+    // Two cache markers. The explicit one on the system block (set by PlumService) is a
+    // guaranteed read point for tools + system prompt. The top-level one is automatic: the
+    // API puts it on the last cacheable block and walks it forward each request, so every
+    // request reads the whole prior thread and writes only the new tail. Without it the
+    // growing messages array was re-bought at full price on every request (2026-10-15:
+    // 8.5M uncached input tokens in one evening, cache_read flat at the prefix).
     const stream = this.client.beta.messages.stream({
       model: request.model,
       max_tokens: request.maxTokens,
       system: request.system,
       tools: request.tools,
       messages: request.messages,
+      cache_control: { type: 'ephemeral' },
       output_config: { effort: request.effort },
       betas: ['server-side-fallback-2026-07-01'],
       fallbacks: 'default',

@@ -282,6 +282,16 @@ export class DirectorService implements DirectorSlot {
     if (this.brief) {
       lines.push(`The player's brief: ${this.brief}`);
     }
+    // The chat rules (ask first, say so when nothing needs doing, wait for the player) do
+    // not apply here: a director tick is the show running with nobody at the keyboard.
+    // Measured 2026-10-17 on Haiku: every recap ended with "holding off until you want one"
+    // and the show stopped between arcs.
+    lines.push(
+      'The player is NOT at the keyboard during a director tick and you never wait for them: a question to the ' +
+        'player ends the show. When a script is finished, frozen beyond saving or collapsed, recap it in a sentence ' +
+        'and plan the NEXT script in this same turn, every time, without asking. A quiet lot is the raw material, ' +
+        'not a reason to hold: a script has three to seven beats, and a single beat is not a script.',
+    );
     if (planning) {
       lines.push(
         'Survey the lot (look_at_lot, then relationships for the awake Sims; sleeping Sims are set dressing; ' +

@@ -20,7 +20,7 @@ import { SettingsService } from './sentient-sims/services/SettingsService';
 import { DirectoryService } from './sentient-sims/services/DirectoryService';
 import { appApiPort } from './sentient-sims/constants';
 import { installExtension, REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
-import { disableDebugLogging, enableDebugLogging } from './sentient-sims/util/debugLog';
+import { disableConsoleTransport, disableDebugLogging, enableDebugLogging } from './sentient-sims/util/debugLog';
 import { notifySettingChanged } from './sentient-sims/util/notifyRenderer';
 import { publishClockState } from './sentient-sims/websocketServer';
 import { setSimAliases } from './sentient-sims/util/simAliases';
@@ -37,8 +37,55 @@ import { version as releaseAppVersion } from '../../release/app/package.json';
 import { TIER, TIER_STAMP } from './sentient-sims/tiers';
 
 log.initialize({ preload: true });
+
+// The EPIPE log loop (2026-10-15: eight 26 MB archives in two minutes, every earlier archive
+// pruned). electron-vite runs Electron with stdio inherited; when the reader of stdout/stderr
+// goes away, the console transport's console.error fails, the stream emits an 'error' with no
+// listener, that is a new uncaughtException, errorHandler logs it to the console again, and
+// round it goes. A listened-for stream error is no longer an uncaught exception, which alone
+// breaks the loop; the dead transport is then switched off for good.
+const DEAD_PIPE_CODES = new Set(['EPIPE', 'ERR_STREAM_DESTROYED']);
+const isDeadPipe = (error: unknown) => DEAD_PIPE_CODES.has(String((error as NodeJS.ErrnoException | undefined)?.code));
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (error: NodeJS.ErrnoException) => {
+    if (isDeadPipe(error)) {
+      disableConsoleTransport();
+      return;
+    }
+    disableConsoleTransport();
+    log.error('stdio stream error', error);
+  });
+}
+
+// Second guard, and a cap on any future loop: the same uncaught error more than
+// UNCAUGHT_REPEAT_CAP times within a second is logged once as a suppression and then dropped,
+// so a storm cannot rotate the archives of a whole night away.
+const UNCAUGHT_REPEAT_CAP = 20;
+let lastUncaught = { message: '', at: 0, count: 0 };
 // Get uncaught main-process errors into main.log so they show up in player log bundles.
-log.errorHandler.startCatching({ showDialog: false });
+log.errorHandler.startCatching({
+  showDialog: false,
+  onError: ({ error }) => {
+    if (isDeadPipe(error)) {
+      disableConsoleTransport();
+      return false;
+    }
+    const { message } = error;
+    const at = Date.now();
+    if (message === lastUncaught.message && at - lastUncaught.at < 1000) {
+      lastUncaught = { message, at, count: lastUncaught.count + 1 };
+      if (lastUncaught.count === UNCAUGHT_REPEAT_CAP + 1) {
+        log.warn(`suppressing repeats of uncaught error: ${message}`);
+      }
+      if (lastUncaught.count > UNCAUGHT_REPEAT_CAP) {
+        return false;
+      }
+    } else {
+      lastUncaught = { message, at, count: 1 };
+    }
+    return undefined;
+  },
+});
 
 // Log archiving. electron-log's default rotation is 1MB -> a single main.old.log, which
 // destroyed evidence mid-incident during the 08-04..08-14 playtest (a busy hour of cognition
@@ -56,7 +103,14 @@ log.transports.file.archiveLogFn = (oldLogFile) => {
     fs.renameSync(file, path.join(dir, `${base}.${stamp}${ext}`));
     const archives = fs
       .readdirSync(dir)
-      .filter((name) => name.startsWith(`${base}.`) && name.endsWith(ext) && name !== `${base}${ext}`)
+      .filter(
+        (name) =>
+          name.startsWith(`${base}.`) &&
+          name.endsWith(ext) &&
+          name !== `${base}${ext}` &&
+          // electron-log's own default archive is not one of ours to count or prune
+          name !== `${base}.old${ext}`,
+      )
       .sort();
     archives.slice(0, Math.max(0, archives.length - ARCHIVED_LOG_COUNT)).forEach((name) => {
       try {

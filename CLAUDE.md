@@ -268,7 +268,10 @@ words (Casual Nudity). The facts line is `Lot traits: Name (clause), ...; lot ch
 challenge told by the mod's `lot_challenges` OR the table, and the clause says what the place is like, never a
 mechanic (the prompt lets a trait colour the last sentence lightly and forbids explaining a game rule). Harness
 src/__tests__/LotTraitExperiment.test.ts (gated on LOT_TRAIT_EXPERIMENT=dry|live, not in tiers.json): 15 lots x
-none / names / names with clause, blind judge. Tests: LotTraitWords, LotRooms, LotFurnishings, LotDescription. The writer goes floor
+none / names / names with clause, blind judge; 2026-10-18 on llama-3.3-70b, 45 runs each: the trait's character
+reached the card 51% / 98% / 100% of the time (felt 0.31 / 1.00 / 1.42 of 2), a game rule was explained in 0 / 0 / 2%,
+so the clause ships; downstream it reached 1 of 6 "what do you think of this place" replies (LotFormatExperiment
+cardtrait), none of the chats, as on 2026-10-16. Tests: LotTraitWords, LotRooms, LotFurnishings, LotDescription. The writer goes floor
 by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
 no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
 them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does

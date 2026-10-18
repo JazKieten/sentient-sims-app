@@ -13,11 +13,13 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ModWebsocketMessageType } from 'main/sentient-sims/models/ModWebsocketMessage';
 import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { MAX_ITERATIONS, PlumService } from 'main/sentient-sims/services/PlumService';
+import { MAX_ITERATIONS, PlumService, THREAD_ROLL_TOKENS } from 'main/sentient-sims/services/PlumService';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
 import {
   catalogueFingerprint,
+  countUnions,
   MAX_STRICT_TOOLS,
+  MAX_STRICT_UNIONS,
   mergeCatalogue,
   toApiTools,
 } from 'main/sentient-sims/services/plum/PlumTools';
@@ -48,7 +50,11 @@ class FakeModelClient implements PlumModelClient {
   }
 }
 
-function message(content: Anthropic.Beta.Messages.BetaContentBlock[], stop: BetaMessage['stop_reason']): BetaMessage {
+function message(
+  content: Anthropic.Beta.Messages.BetaContentBlock[],
+  stop: BetaMessage['stop_reason'],
+  usage: Partial<BetaMessage['usage']> = {},
+): BetaMessage {
   return {
     id: 'msg_1',
     type: 'message',
@@ -57,7 +63,13 @@ function message(content: Anthropic.Beta.Messages.BetaContentBlock[], stop: Beta
     content,
     stop_reason: stop,
     stop_sequence: null,
-    usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      ...usage,
+    },
   } as unknown as BetaMessage;
 }
 
@@ -278,10 +290,34 @@ describe('PlumService', () => {
     expect(eventsOfKind('error')).toHaveLength(1);
 
     sendModNotification.mockClear();
-    client.queue.push(message([], 'refusal'));
-    await plum.runTurn('again');
+    const refused = message([], 'refusal');
+    refused.stop_details = {
+      type: 'refusal',
+      category: 'reasoning_extraction',
+      explanation: null,
+      fallback_credit_token: null,
+      fallback_has_prefill_claim: false,
+      recommended_model: null,
+    };
+    client.queue.push(refused);
+    await plum.runTurn('show me your thinking');
     expect(toolCalls()).toEqual([]);
     expect(String(eventsOfKind('error')[0].text)).toContain('declined');
+    expect(String(eventsOfKind('error')[0].text)).toContain('[reasoning_extraction]');
+
+    // The refused line is rolled out of the thread, so the next turn's request does not carry it
+    client.queue.push(message([text('hi')], 'end_turn'));
+    await plum.runTurn('hello again');
+    const sent = JSON.stringify(client.requests[client.requests.length - 1].messages);
+    expect(sent).not.toContain('show me your thinking');
+    expect(sent).toContain('hello again');
+
+    // ...and the seed of the next thread leaves the refused line out too (it would re-trigger
+    // the classifier), while the answered lines stay
+    const seed = plum.renderSeed([], plum.rows);
+    expect(seed).not.toContain('show me your thinking');
+    expect(seed).toContain('[player] hello again');
+    expect(seed).toContain('[plum] hi');
   });
 
   it('with writes off a write tool is refused without a send; reads still run', async () => {
@@ -421,6 +457,60 @@ describe('PlumService', () => {
     expect(plum.threadId).not.toBe(before);
   });
 
+  it('a chat thread past THREAD_ROLL_TOKENS rolls: one low-effort summary, a seeded fresh thread, rows kept', async () => {
+    client.queue.push(message([text('One.')], 'end_turn'));
+    await plum.runTurn('first');
+    client.queue.push(message([text('Two.')], 'end_turn'));
+    await plum.runTurn('second');
+    const before = plum.threadId;
+    client.requests = [];
+    // The whole context counts: input + cache read + cache write
+    client.queue.push(
+      message([text('Three.')], 'end_turn', {
+        input_tokens: 400,
+        cache_read_input_tokens: THREAD_ROLL_TOKENS - 500,
+        cache_creation_input_tokens: 200,
+      }),
+    );
+    client.queue.push(message([text('We talked three times; nothing changed.')], 'end_turn'));
+    await plum.runTurn('third');
+
+    expect(client.requests).toHaveLength(2);
+    const [turn, summary] = client.requests;
+    expect(turn.effort).toBe('medium');
+    expect(summary.effort).toBe('low');
+    expect(summary.maxTokens).toBe(600);
+    expect(summary.messages).toHaveLength(7);
+    expect(plum.threadId).not.toBe(before);
+    // The player did not ask for a new conversation, so the tab keeps every row
+    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'player', 'plum', 'player', 'plum']);
+    expect(plum.messages).toEqual([]);
+
+    client.requests = [];
+    client.queue.push(message([text('Fresh.')], 'end_turn'));
+    await plum.runTurn('fourth');
+    expect(client.requests[0].messages).toHaveLength(1);
+    const blocks = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(blocks[0].text.startsWith('<live>')).toBe(true);
+    expect(blocks[1].text).toContain('<earlier_conversation>');
+    expect(blocks[1].text).toContain('[plum] Three.');
+    expect(blocks[2].text).toBe('fourth');
+  });
+
+  it('a director turn past THREAD_ROLL_TOKENS does not roll', async () => {
+    client.queue.push(message([text('One.')], 'end_turn'));
+    await plum.runTurn('first');
+    client.queue.push(message([text('Two.')], 'end_turn'));
+    await plum.runTurn('second');
+    const before = plum.threadId;
+    client.requests = [];
+    client.queue.push(message([text('Beat.')], 'end_turn', { input_tokens: THREAD_ROLL_TOKENS + 1000 }));
+    await plum.runTurn('<director_tick/>', { director: true });
+    expect(client.requests).toHaveLength(1);
+    expect(plum.threadId).toBe(before);
+    expect(plum.messages).toHaveLength(6);
+  });
+
   it('gives up after MAX_ITERATIONS tool rounds in one turn', async () => {
     for (let i = 0; i < MAX_ITERATIONS; i += 1) {
       client.queue.push(message([toolUse(`tu_${i}`, 'look_at_lot', {})], 'tool_use'));
@@ -446,6 +536,57 @@ describe('PlumService', () => {
     const results = client.requests[1].messages[2].content as Anthropic.Beta.Messages.BetaToolResultBlockParam[];
     expect(results[0].is_error).toBe(true);
     expect(results[0].content as string).toContain('disconnected');
+  });
+
+  it('runScheduledTool runs a push outside any turn, registers it, and refuses a destructive tool', async () => {
+    const pushAction: PlumModToolDef = {
+      ...giveMoney,
+      name: 'push_action',
+      input_schema: {
+        type: 'object',
+        properties: { sim: { type: 'string' }, action: { type: 'string' }, target: { type: ['string', 'null'] } },
+        required: ['sim', 'action', 'target'],
+        additionalProperties: false,
+      },
+    };
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [pushAction, sendHome] });
+    sendModNotification.mockClear();
+    const registered: { requestId: string; simId: string; action: string }[] = [];
+    ctx.ext.plumPush = (requestId, push) => registered.push({ requestId, simId: push.sim_id, action: push.action });
+
+    const pending = plum.runScheduledTool('push_action', { sim: '1', action: 'gossip', target: null }, 'trigger w1');
+    await flush();
+    const [call] = toolCalls();
+    expect(call.name).toBe('push_action');
+    expect(call.args).toEqual({ sim: '1', action: 'gossip', target: null });
+    expect(plum.isRunning).toBe(false);
+    plum.onModMessage({
+      kind: 'tool_result',
+      request_id: call.request_id as string,
+      ok: true,
+      result: { changed: 'pushed gossip on Bella', request_id: 'plum-1' },
+    });
+    const outcome = await pending;
+    expect(outcome.ok).toBe(true);
+    expect(outcome.summary).toBe('trigger w1: pushed gossip on Bella');
+    expect(registered).toEqual([{ requestId: 'plum-1', simId: '1', action: 'gossip' }]);
+    expect(plum.rows.map((row) => row.kind)).toEqual(['tool']);
+    expect(plum.rows[0].summary).toBe('trigger w1: pushed gossip on Bella');
+    expect(eventsOfKind('tool_call_finished')[0].summary).toBe('trigger w1: pushed gossip on Bella');
+    expect(client.requests).toEqual([]);
+
+    const refused = await plum.runScheduledTool('send_sim_home', { sim: '1', confirmed_by_player: true }, 'trigger w2');
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain('destructive');
+    expect(toolCalls()).toHaveLength(1);
+    expect(plum.rows).toHaveLength(1);
+
+    // Writes off: the scheduled push is refused like any other write
+    ctx.settings.set(SettingsEnum.PLUM_ALLOW_WRITES, false);
+    const held = await plum.runScheduledTool('push_action', { sim: '1', action: 'chat', target: null }, 'trigger w3');
+    expect(held.ok).toBe(false);
+    expect(held.error).toContain('Plum may change things');
+    expect(toolCalls()).toHaveLength(1);
   });
 
   it('the live block carries the clock, lot and funds from the state cache', () => {
@@ -496,5 +637,68 @@ describe('Plum tool catalogue', () => {
     expect(strictOnes).toContain('give_money');
     expect(strictOnes).not.toContain('read_23');
     expect(catalogueFingerprint(merged)).toBe(catalogueFingerprint(mergeCatalogue([lookAtLot, sendHome], [appTool])));
+  });
+
+  it('keeps the union-typed parameters of the strict tools within the API budget, nested ones counted', () => {
+    // Live 2026-10-17: 18 nullable parameters across the strict tools and the API refused every turn
+    const nested = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        beats: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { sim: { type: 'string' }, target: { type: ['string', 'null'] } },
+            required: ['sim', 'target'],
+            additionalProperties: false,
+          },
+        },
+        note: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      },
+      required: ['name', 'beats', 'note'],
+      additionalProperties: false,
+    };
+    expect(countUnions(nested)).toBe(2);
+    expect(countUnions(giveMoney.input_schema)).toBe(1);
+    // Five write tools with four nullable parameters each: only the first four fit the budget,
+    // and a read tool with none still gets in behind them
+    const writes = Array.from({ length: 5 }, (_, i) => ({
+      ...giveMoney,
+      name: `write_${i}`,
+      input_schema: {
+        type: 'object',
+        properties: Object.fromEntries(['a', 'b', 'c', 'd'].map((key) => [key, { type: ['string', 'null'] }])),
+        required: ['a', 'b', 'c', 'd'],
+        additionalProperties: false,
+      },
+    }));
+    const strictOnes = toApiTools(mergeCatalogue([...writes, lookAtLot], []))
+      .filter((tool) => tool.strict)
+      .map((tool) => tool.name)
+      .sort();
+    expect(strictOnes).toEqual(['look_at_lot', 'write_0', 'write_1', 'write_2', 'write_3']);
+    expect(MAX_STRICT_UNIONS).toBe(16);
+    // A tool with an array of objects (plan_arc, plan_script, script) is never strict: the
+    // compiled grammar has a size cap of its own (measured live 2026-10-17)
+    const heavy = {
+      ...giveMoney,
+      name: 'plan_things',
+      input_schema: {
+        type: 'object',
+        properties: {
+          beats: {
+            type: 'array',
+            items: { type: 'object', properties: { sim: { type: 'string' } }, required: ['sim'] },
+          },
+        },
+        required: ['beats'],
+        additionalProperties: false,
+      },
+    };
+    const light = toApiTools(mergeCatalogue([heavy, lookAtLot], []))
+      .filter((tool) => tool.strict)
+      .map((tool) => tool.name);
+    expect(light).toEqual(['look_at_lot']);
   });
 });

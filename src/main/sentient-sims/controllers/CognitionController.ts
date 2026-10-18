@@ -124,6 +124,8 @@ export class CognitionController {
       if (!event.sim_id || !event.outcome) {
         return res.status(400).json({ error: 'sim_id and outcome are required' });
       }
+      // Plum's wake-up triggers hear every outcome (sim_finishes says how the action went)
+      this.ctx.plum.wake.onOutcome({ ...event, sim_id: event.sim_id, outcome: event.outcome });
 
       // Grade BEFORE resolving: resolve() moves the dispatch into the dispatcher's
       // recently-closed ring, which is exactly what 'late' is read from.

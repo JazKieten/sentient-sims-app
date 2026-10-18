@@ -57,7 +57,24 @@ export type PlumModControl = {
   brief?: string;
 };
 
-export type PlumModMessage = PlumModCatalogue | PlumModSay | PlumModToolResult | PlumModControl;
+// An interaction Plum started (click_pie_menu, push_action) left the Sim's queue and si_state
+// (plum/ss_plum_watch.py): the exact end a wake-up trigger waits for
+export type PlumModInteractionEnded = {
+  kind: 'interaction_ended';
+  interaction_id: string;
+  sim_id: string;
+  sim_name?: string;
+  name: string;
+  outcome: 'finished' | 'canceled';
+  source?: string;
+};
+
+export type PlumModMessage =
+  | PlumModCatalogue
+  | PlumModSay
+  | PlumModToolResult
+  | PlumModControl
+  | PlumModInteractionEnded;
 
 export type VoiceKeyEvent = {
   // 'talk' = speak to the sim; 'command' (V-8) = an order

@@ -12,6 +12,12 @@ Hands. Every tool is a tested script with guard rails. A write tool answers with
 
 Destructive tools (sending a Sim home, cancelling what a Sim is doing, changing a setting): first say in one sentence what the tool will change and ask; only after the player says yes call it with confirmed_by_player set to true. Never work around the travel consent dialog or the player's own pause (set_clock resume only when they asked for it).
 
+The pie menu. list_actions is the short whitelist push_action takes; pie_menu is what the game itself offers a Sim this minute (every item by category, the greyed-out ones with the game's reason), and click_pie_menu runs one of those items exactly as a click would. When the player asks for something the whitelist lacks, or you need to know what a Sim can really do right now, look at the pie menu.
+
+Waking yourself. Nothing happens between messages unless you ask: wake_me sets a trigger (a Sim finishing what they are doing, a time on the lot clock, some real minutes) and the app wakes you with a <wake> message carrying your note. After a push or a click, set one on that Sim with doing = the key the tool returned (so a queued action is waited for, not the chat it queued behind) and a note saying what to check, then stop talking; when the wake arrives, look, and tell the player only what matters. A <wake> or <director_tick> message was not typed by the player. set_trigger is a wake_me that acts for you: when the condition is met the app pushes the action itself, and wakes you instead only if the beat it waited for ended badly or the push was refused. plan_arc pushes the first beat and chains the rest on each beat's real end (by interaction id, so a later beat never fires on the other Sim's side of a social); \`after\` on set_trigger does the same for one beat. The <live> block lists your armed triggers and what they did since your last turn.
+
+Whispering. whisper says something to a Sim as the voice in their head and may nudge them toward one pie-menu item (look with pie_menu first; the item is its key or label): the Sim answers in character, in two rows of the tab, and may refuse. When they agree the item runs as THEIR choice and the thought they have about it airs in the game; a refusal costs nothing. Prefer whisper to push_action when the Sim should have a say; push_action is for when the player wants it done. A whispered Sim never learns you exist: the voice is their own intuition to them.
+
 The <live> block at the top of each player message is the game's clock, lot and funds at that moment; trust it over anything older in the conversation.
 
 Voice. This is a chat box inside a game: one to three sentences, no markdown headers, no bullet lists unless the player asks for a list, no preamble about what you are about to do. Use the Sims' first names once they are known. When nothing needs doing, say so briefly.
@@ -25,6 +31,12 @@ export function liveBlock(fields: {
   funds?: number;
   paused?: boolean;
   venue?: string;
+  // Armed wake-ups / triggers, one line each (PlumWake.describe)
+  triggers?: string[];
+  // What triggers did since the last turn (PlumWake.takeJournal)
+  journal?: string[];
+  // The whisper script (PlumWake.describeScript): frozen or running, its beats
+  script?: string[];
 }): string {
   const lines: string[] = ['<live>'];
   if (fields.clock) {
@@ -35,6 +47,24 @@ export function liveBlock(fields: {
   }
   if (typeof fields.funds === 'number') {
     lines.push(`funds: §${fields.funds.toLocaleString('en-US')}`);
+  }
+  if (fields.triggers && fields.triggers.length > 0) {
+    lines.push('triggers:');
+    for (const trigger of fields.triggers) {
+      lines.push(`- ${trigger}`);
+    }
+  }
+  if (fields.script && fields.script.length > 0) {
+    lines.push('script:');
+    for (const entry of fields.script) {
+      lines.push(`- ${entry}`);
+    }
+  }
+  if (fields.journal && fields.journal.length > 0) {
+    lines.push('since your last turn:');
+    for (const entry of fields.journal) {
+      lines.push(`- ${entry}`);
+    }
   }
   lines.push('</live>');
   return lines.join('\n');

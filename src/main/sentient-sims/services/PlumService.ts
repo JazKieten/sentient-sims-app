@@ -22,8 +22,10 @@ import { sendModNotification, getModClockState } from '../websocketServer';
 import { ModWebsocketMessageType } from '../models/ModWebsocketMessage';
 import { PlumModMessage, PlumModToolResult } from '../models/ModLogWebsocketMessage';
 import { AnthropicPlumClient, describeModelError, PlumEffort, PlumModelClient } from './plum/PlumModelClient';
+import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/PlumWake';
+import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
-import { buildAppTools } from './plum/PlumAppTools';
+import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
 import {
   AppTool,
@@ -40,7 +42,9 @@ export const MAX_ITERATIONS = 12;
 export const DEFAULT_TOOL_TIMEOUT_MS = 20000;
 export const MAX_TOKENS = 4096;
 
-export type PlumRowKind = 'player' | 'plum' | 'tool' | 'director' | 'error';
+// whisper: Plum's line to a Sim (name = the Sim); reply: the Sim's answer (name, ok, summary
+// = agreed | declined | why the click did not take). PlumWhisper.ts adds both.
+export type PlumRowKind = 'player' | 'plum' | 'tool' | 'director' | 'error' | 'whisper' | 'reply';
 
 export type PlumRow = {
   row_id: string;
@@ -63,6 +67,19 @@ export type PlumTurnOptions = {
   effort?: PlumEffort;
   director?: boolean;
   maxPushes?: number;
+  // A wake-up trigger fired (PlumWake): nobody typed, so no player row and the
+  // ask-answer-act clock does not move
+  wake?: boolean;
+};
+
+// What running one tool came to: `summary` is the row's text (label included), `content`
+// what the model is told, `result` the tool's own answer on success
+export type PlumToolOutcome = {
+  ok: boolean;
+  summary: string;
+  content: string;
+  result?: unknown;
+  error?: string;
 };
 
 type PendingCall = {
@@ -82,9 +99,13 @@ type Thread = {
   // tail of the previous conversation, rendered as text (never replayed MessageParams: an
   // edited history invalidates preserved thinking, and a truncated transcript is an edit)
   seed?: string;
+  // The whole context of the last request (input + cache read + cache write), for the roll
+  contextTokens?: number;
 };
 
 export const HISTORY_ROWS = 30;
+// A chat thread past this many tokens of context rolls to a fresh one (summary note + seed)
+export const THREAD_ROLL_TOKENS = 60_000;
 export const SEED_ROWS = 20;
 export const SEED_NOTES = 40;
 export const SUMMARY_MIN_ROWS = 4;
@@ -93,6 +114,7 @@ export type PlumServiceOptions = {
   // Tests hand in a scripted client; production builds one per turn from the current key
   clientFactory?: (apiKey: string) => PlumModelClient;
   appTools?: AppTool[];
+  wakeDeps?: WakeDeps;
   now?: () => number;
 };
 
@@ -106,6 +128,12 @@ export class PlumService {
   private readonly repository: PlumRepository | undefined;
 
   private readonly now: () => number;
+
+  // Plum's own wake-up triggers (the wake_me tool)
+  readonly wake: PlumWakeService;
+
+  // Plum whispering to a Sim as the voice in their head (the whisper tool, script beats)
+  readonly whisper: PlumWhisperService;
 
   private modTools: ModToolDef[] = [];
 
@@ -129,12 +157,22 @@ export class PlumService {
   constructor(ctx: ApiContext, options: PlumServiceOptions = {}) {
     this.ctx = ctx;
     this.clientFactory = options.clientFactory ?? ((apiKey) => new AnthropicPlumClient(apiKey));
-    this.appTools = options.appTools ?? buildAppTools(ctx);
+    this.appTools = options.appTools ?? buildAppTools(ctx, () => this.wake);
     // A stub context in a test may have no repository; Plum then remembers nothing
     this.repository = 'plumRepository' in ctx ? ctx.plumRepository : undefined;
     this.now = options.now ?? (() => Date.now());
-    this.catalogue = mergeCatalogue([], this.appTools);
+    this.catalogue = mergeCatalogue([], this.offeredAppTools());
     this.thread = this.newThread();
+    this.wake = new PlumWakeService(ctx, this, { now: this.now, ...options.wakeDeps });
+    this.wake.attach();
+    this.whisper = new PlumWhisperService(ctx, this, { now: this.now });
+  }
+
+  // The app tools this build offers: a tool gated on a tier slot (onlyWith) is left out when
+  // the context has none. The slots are filled after this service is built, so the catalogue
+  // is rebuilt when the mod connects (onCatalogue), which is before any turn runs.
+  private offeredAppTools(): AppTool[] {
+    return this.appTools.filter((tool) => !tool.onlyWith || Boolean(this.ctx.ext[tool.onlyWith]));
   }
 
   // --- what the mod sends ---------------------------------------------------------------
@@ -153,6 +191,9 @@ export class PlumService {
       case 'control':
         this.onControl(message.action, message.brief);
         return;
+      case 'interaction_ended':
+        this.wake.onInteractionEnded(message);
+        return;
       default:
         log.warn(`[Plum] unknown mod message kind ${String((message as { kind?: unknown }).kind)}`);
     }
@@ -170,7 +211,7 @@ export class PlumService {
     this.modTools = tools;
     this.modTier = tier;
     this.modEnabled = enabled;
-    this.catalogue = mergeCatalogue(this.modTools, this.appTools);
+    this.catalogue = mergeCatalogue(this.modTools, this.offeredAppTools());
     const fingerprint = catalogueFingerprint(this.catalogue);
     if (fingerprint !== this.thread.fingerprint) {
       // Swapping tools under a transcript breaks the cache and confuses the model; a thread
@@ -266,6 +307,7 @@ export class PlumService {
     this.turnPushes = 0;
     try {
       await this.runTurnInner(text, options);
+      await this.rollIfLong(options);
     } finally {
       this.turnRunning = false;
       this.emitStatus('idle');
@@ -292,7 +334,7 @@ export class PlumService {
       return;
     }
     const client = this.clientFactory(apiKey);
-    if (!options.director) {
+    if (!options.director && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
@@ -302,6 +344,10 @@ export class PlumService {
       content.push({ type: 'text', text: this.thread.seed });
     }
     content.push({ type: 'text', text });
+    // Where this turn starts in the thread: a refusal rolls the thread back here, or the
+    // flagged text would ride every later request and the classifier would refuse them all
+    // (2026-10-17: one declined line left Plum mute until "New conversation").
+    const turnStart = this.thread.messages.length;
     this.thread.messages.push({ role: 'user', content });
     const tools = toApiTools(this.catalogue);
     const system: Anthropic.Beta.Messages.BetaTextBlockParam[] = [
@@ -326,14 +372,25 @@ export class PlumService {
         return;
       }
       const usage = response.usage;
+      const contextTokens =
+        usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+      this.thread.contextTokens = contextTokens;
       log.info(
         `[Plum] turn ${iteration + 1}: stop=${response.stop_reason} in=${usage.input_tokens} ` +
           `cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0} ` +
-          `out=${usage.output_tokens}`,
+          `out=${usage.output_tokens} ctx=${contextTokens}`,
       );
 
       if (response.stop_reason === 'refusal') {
-        this.emitError("Plum declined that one (Anthropic's safety classifier stopped the reply).");
+        const details = response.stop_details;
+        log.warn(`[Plum] refusal details: ${JSON.stringify(details ?? null)}`);
+        this.thread.messages.length = turnStart;
+        const category = details?.category ? ` [${details.category}]` : '';
+        const why = details?.explanation ? ` ${details.explanation}` : '';
+        this.emitError(
+          `Plum declined that one (Anthropic's safety classifier stopped the reply${category}).${why} ` +
+            'That line was dropped from the conversation; the next one starts clean.',
+        );
         return;
       }
       if (response.stop_reason === 'max_tokens') {
@@ -372,25 +429,57 @@ export class PlumService {
     this.thread.lastReplyAt = this.now();
   }
 
+  // The model asked for a tool: run it and build the tool_result block the loop answers with
   private async runToolUse(
     toolUse: Anthropic.Beta.Messages.BetaToolUseBlock,
     options: PlumTurnOptions = {},
   ): Promise<Anthropic.Beta.Messages.BetaToolResultBlockParam> {
     const args = (toolUse.input ?? {}) as Record<string, unknown>;
-    const entry = this.catalogue.find((candidate) => candidate.definition.name === toolUse.name);
+    const outcome = await this.runTool(toolUse.name, args, { maxPushes: options.maxPushes });
+    return {
+      type: 'tool_result' as const,
+      tool_use_id: toolUse.id,
+      content: outcome.content,
+      ...(outcome.ok ? {} : { is_error: true as const }),
+    };
+  }
+
+  // A trigger fired and acts on Plum's behalf (PlumWake): the same runner, the row labelled
+  // with the trigger, no per-turn push cap, and never a destructive tool, whatever the
+  // trigger stored (defence in depth: set_trigger only ever stores push_action)
+  async runScheduledTool(name: string, args: Record<string, unknown>, label: string): Promise<PlumToolOutcome> {
+    const entry = this.catalogue.find((candidate) => candidate.definition.name === name);
+    if (entry?.definition.risk === 'destructive') {
+      const message = `${name} refused: a trigger may not run a destructive tool`;
+      log.warn(`[Plum] ${label}: ${message}`);
+      return { ok: false, summary: message, error: message, content: message };
+    }
+    return this.runTool(name, args, { label });
+  }
+
+  // One tool, from the model loop or a trigger: the visible row (started / finished events,
+  // persisted), the write and destructive guards, the director's push cap, app-vs-mod
+  // dispatch, and the dispatcher registration after a push
+  private async runTool(
+    name: string,
+    args: Record<string, unknown>,
+    options: { maxPushes?: number; label?: string } = {},
+  ): Promise<PlumToolOutcome> {
+    const entry = this.catalogue.find((candidate) => candidate.definition.name === name);
+    const prefix = options.label ? `${options.label}: ` : '';
     const row = this.addRow({
       kind: 'tool',
       text: '',
-      name: toolUse.name,
-      summary: entry && entry.definition.risk === 'read' ? readSummary(toolUse.name, args) : toolUse.name,
+      name,
+      summary: prefix + (entry && entry.definition.risk === 'read' ? readSummary(name, args) : name),
       done: false,
     });
     this.emit({ kind: 'tool_call_started', thread_id: this.thread.id, row });
 
-    const finish = (ok: boolean, summary: string, detail: unknown, content: string) => {
+    const finish = (ok: boolean, summary: string, detail: unknown, content: string, result?: unknown) => {
       row.done = true;
       row.ok = ok;
-      row.summary = summary;
+      row.summary = prefix + summary;
       row.detail = trimDetail(detail);
       this.persistRowUpdate(row);
       this.emit({
@@ -398,38 +487,41 @@ export class PlumService {
         thread_id: this.thread.id,
         row_id: row.row_id,
         ok,
-        summary,
+        summary: row.summary,
         detail: row.detail,
       });
       return {
-        type: 'tool_result' as const,
-        tool_use_id: toolUse.id,
+        ok,
+        summary: row.summary,
         content,
-        ...(ok ? {} : { is_error: true as const }),
+        ...(ok ? { result } : { error: content }),
       };
     };
 
     if (!entry) {
-      return finish(false, `${toolUse.name} is not a tool`, null, `unknown tool ${toolUse.name}`);
+      return finish(false, `${name} is not a tool`, null, `unknown tool ${name}`);
     }
     const { risk } = entry.definition;
     if (risk !== 'read' && !this.ctx.settings.plumAllowWrites) {
-      const message = `${toolUse.name} refused: "Plum may change things" is off in the companion app's Settings.`;
+      const message = `${name} refused: "Plum may change things" is off in the companion app's Settings.`;
       return finish(false, message, null, message);
     }
     if (risk === 'destructive' && !this.destructiveAllowed()) {
       const message =
-        `${toolUse.name} refused by the app: a destructive tool runs only after you have asked the ` +
+        `${name} refused by the app: a destructive tool runs only after you have asked the ` +
         'player and they have answered yes in their own message. Ask first.';
-      return finish(false, `${toolUse.name} held: ask the player first`, null, message);
+      return finish(false, `${name} held: ask the player first`, null, message);
     }
     if (risk === 'destructive') {
       // The call counts as the act: the next one needs a fresh yes
       this.thread.lastReplyAt = this.now();
     }
-    if (toolUse.name === 'push_action' && options.maxPushes !== undefined && this.turnPushes >= options.maxPushes) {
+    // plan_arc pushes beat 1 itself (through runScheduledTool, which has no cap), so it is
+    // the turn's push too; a whisper and a script's first beat move a Sim the same way
+    const isPush = name === 'push_action' || name === 'plan_arc' || name === 'whisper' || name === 'plan_script';
+    if (isPush && options.maxPushes !== undefined && this.turnPushes >= options.maxPushes) {
       const message = 'one beat per tick: this push waits for the next tick (verify the last one first)';
-      return finish(false, 'push_action held: one beat per tick', null, message);
+      return finish(false, `${name} held: one beat per tick`, null, message);
     }
 
     let outcome: PlumModToolResult;
@@ -446,16 +538,27 @@ export class PlumService {
         };
       }
     } else {
-      outcome = await this.callMod(toolUse.name, args, entry.definition.timeout_ms || DEFAULT_TOOL_TIMEOUT_MS);
+      outcome = await this.callMod(name, args, entry.definition.timeout_ms || DEFAULT_TOOL_TIMEOUT_MS);
     }
 
     if (!outcome.ok) {
       const error = outcome.error ?? 'unknown error';
-      return finish(false, `${toolUse.name} failed: ${error}`, { error }, error);
+      return finish(false, `${name} failed: ${error}`, { error }, error);
     }
     const result = outcome.result ?? {};
-    if (toolUse.name === 'push_action') {
+    // The mod watches the interaction a push or click created for its exact end: a
+    // `doing` trigger on it waits for that, not for the state report's guess
+    const interactionId = (result as { interaction_id?: unknown }).interaction_id;
+    const actorSpec = typeof args.sim === 'string' ? args.sim : '';
+    const actorId = actorSpec ? resolveSimId(this.ctx, actorSpec) : undefined;
+    if (typeof interactionId === 'string' && actorId) {
+      const interactionName = (result as { interaction?: unknown }).interaction;
+      this.wake.noteWatched(actorId, interactionId, typeof interactionName === 'string' ? interactionName : '');
+    }
+    if (isPush && options.maxPushes !== undefined) {
       this.turnPushes += 1;
+    }
+    if (name === 'push_action') {
       // The autonomy tier grades the push's outcome like one of cognition's
       const requestId = (result as { request_id?: unknown }).request_id;
       if (typeof requestId === 'string') {
@@ -470,8 +573,9 @@ export class PlumService {
       typeof (result as { changed?: unknown }).changed === 'string'
         ? (result as { changed: string }).changed
         : undefined;
-    const summary = risk === 'read' ? readSummary(toolUse.name, args) : (changed ?? `ran ${toolUse.name}`);
-    return finish(true, summary, result, JSON.stringify(result));
+    // A read tool that still reports a `changed` line (wake_me) shows it like a write
+    const summary = changed ?? (risk === 'read' ? readSummary(name, args) : `ran ${name}`);
+    return finish(true, summary, result, JSON.stringify(result), result);
   }
 
   // Ask, answer, act: the player's latest line must be newer than Plum's last finished reply
@@ -515,12 +619,17 @@ export class PlumService {
       clockText = `${clock.hour}:${minute}${day}`;
     }
     const modClock = getModClockState();
+    // The armed triggers and what triggers did since the last turn: how Plum learns what
+    // its past self's triggers did, as text in the user turn (never an edited assistant one)
     return liveBlock({
       clock: clockText,
       paused: modClock ? modClock.paused : clock?.paused,
       lot: lot?.lot_name,
       venue: lot?.venue,
       funds: lot?.funds,
+      triggers: this.wake.list().map((trigger) => `${trigger.id} ${describeTrigger(trigger)}`),
+      script: this.wake.describeScript(),
+      journal: this.wake.takeJournal(),
     });
   }
 
@@ -540,6 +649,14 @@ export class PlumService {
     const row: PlumRow = { row_id: `row-${randomUUID()}`, ts: this.timeLabel(), ...fields };
     this.thread.rows.push(row);
     this.persistRow(row);
+    return row;
+  }
+
+  // A row another service adds to the conversation (a whisper and its reply): stored by
+  // kind like every row and sent to the tab as an event of that kind
+  addVisibleRow(fields: Omit<PlumRow, 'row_id' | 'ts'>): PlumRow {
+    const row = this.addRow(fields);
+    this.emit({ kind: row.kind, thread_id: this.thread.id, row });
     return row;
   }
 
@@ -630,23 +747,47 @@ export class PlumService {
     }
     if (rows.length > 0) {
       lines.push('<earlier_conversation>', 'The end of your previous conversation with the player, rendered as text:');
-      for (const row of rows) {
+      rows.forEach((row, index) => {
+        // A player line answered by an error row never got a reply, and when the error was a
+        // classifier refusal the line re-triggers it from the seed (2026-10-17: "Hi" on a fresh
+        // thread was refused because the seed carried the declined line); leave such lines out
+        if (row.kind === 'player' && rows[index + 1]?.kind === 'error') {
+          return;
+        }
         if (row.kind === 'tool') {
           lines.push(
             `[tool] ${row.name ?? ''}: ${row.summary ?? ''}${row.done && row.ok === false ? ' (failed)' : ''}`,
           );
         } else if (row.kind === 'player' || row.kind === 'plum' || row.kind === 'director') {
           lines.push(`[${row.kind}] ${row.text}`);
+        } else if (row.kind === 'whisper') {
+          lines.push(`[you, to ${row.name ?? 'a Sim'}] ${row.text}`);
+        } else if (row.kind === 'reply') {
+          lines.push(`[${row.name ?? 'the Sim'}] ${row.text}${row.summary ? ` (${row.summary})` : ''}`);
         }
-      }
+      });
       lines.push('</earlier_conversation>');
     }
     return lines.join('\n');
   }
 
+  // A long chat thread rolls on its own: still inside the turn (turnRunning holds, new lines
+  // queue), chat turns only - the director's arc lives on this thread and is out of scope
+  private async rollIfLong(options: PlumTurnOptions): Promise<void> {
+    if (options.director || (this.thread.contextTokens ?? 0) < THREAD_ROLL_TOKENS) {
+      return;
+    }
+    if (this.ctx.ext.director?.status().active === true) {
+      return;
+    }
+    log.info(`[Plum] the conversation passed ${THREAD_ROLL_TOKENS / 1000}k tokens; rolling to a fresh thread`);
+    await this.startNewThread({ keepRows: true });
+  }
+
   // New conversation: one cheap summary call writes a note for the future, then the next
-  // thread starts seeded with the notes and the tail of this one
-  async startNewThread(): Promise<void> {
+  // thread starts seeded with the notes and the tail of this one. keepRows: the player did
+  // not ask for a new conversation (the auto roll), so the tab keeps its rows
+  async startNewThread({ keepRows = false }: { keepRows?: boolean } = {}): Promise<void> {
     const ending = this.thread;
     if (ending.rows.filter((row) => row.kind === 'player' || row.kind === 'plum').length >= SUMMARY_MIN_ROWS) {
       await this.summarize(ending);
@@ -660,6 +801,9 @@ export class PlumService {
       }
     }
     this.thread = this.newThread(this.renderSeed(notes, ending.rows.slice(-SEED_ROWS)));
+    if (keepRows) {
+      this.thread.rows = ending.rows;
+    }
     this.emitHistory();
     this.emitStatus('idle');
   }
@@ -716,12 +860,15 @@ export class PlumService {
   }
 
   emitStatus(state: PlumStatusState, text?: string) {
+    const directorActive = this.ctx.ext.director?.status().active ?? false;
+    // While directing, the status line is the next armed trigger (the tab already shows text)
+    const line = text ?? (directorActive ? this.wake.status() : undefined);
     this.emit({
       kind: 'status',
       state,
-      ...(text ? { text } : {}),
+      ...(line ? { text: line } : {}),
       director_available: Boolean(this.ctx.ext.director),
-      director_active: this.ctx.ext.director?.status().active ?? false,
+      director_active: directorActive,
       enabled: { mod: this.modEnabled, app: this.ctx.settings.plumEnabled },
     });
   }

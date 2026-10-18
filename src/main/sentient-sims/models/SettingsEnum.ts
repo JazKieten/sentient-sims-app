@@ -138,6 +138,8 @@ export enum SettingsEnum {
   PLUM_MODEL = 'plumModel',
   PLUM_ALLOW_WRITES = 'plumAllowWrites',
   PLUM_DIRECTOR_MAX_TICKS_PER_HOUR = 'plumDirectorMaxTicksPerHour',
+  // The thought a Sim has when they agree to a whisper airs as a voiced (to self) line
+  PLUM_WHISPER_VOICED = 'plumWhisperVoiced',
 }
 
 export enum DeprecatedSettingsEnum {

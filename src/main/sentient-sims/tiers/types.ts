@@ -123,6 +123,9 @@ export interface DirectorSlot {
   start(brief?: string): void;
   stop(): void;
   status(): { active: boolean; arc?: string };
+  // A wake-up trigger of Plum's fired (PlumWake): the next tick carries `text` and runs now
+  // if it can. False when the director is not active.
+  wake(text: string): boolean;
 }
 
 // AUTONOMY: what Plum's cognition_status tool reads for one Sim: today's plan and the

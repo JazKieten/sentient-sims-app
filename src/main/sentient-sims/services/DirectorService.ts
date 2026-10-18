@@ -1,16 +1,24 @@
 // Plum's director mode: the improv-watch loop as a service (autonomy tier, listed in
 // tiers.json; core reaches it only through ctx.ext.director).
 //
-// Plum surveys the lot, casts the awake Sims as improv actors, plans a named arc of three
-// to seven beats from their traits, relationships and moods, then pushes ONE beat a tick
-// and adapts the script to what the AIs actually play; when an arc completes or collapses
-// it recaps and plans the next one, and never stops on its own. The ticks are turns on
-// the same conversation as the chat (PlumService.runTurn with director options), so the
-// player can talk to Plum mid-arc and sees the narration as director rows.
+// Plum surveys the lot, casts the awake Sims as improv actors, plans a named script of three
+// to seven beats from their traits, relationships and moods, and hands the whole script to
+// plan_script (PlumWake.planScript): every beat is a WHISPER, a line Plum says to one Sim as
+// the voice in their head plus the pie-menu item it hopes they pick (PlumWhisper.ts: the
+// Sim's own actor model answers in character and may refuse). The app whispers the first
+// beat, whispers each later beat itself when the one before it actually ends (by
+// interaction id), and wakes Plum only when a Sim refuses or an agreed click is refused (the
+// script FREEZES until Plum decides: script resume / replace_from / cancel), on a hard stop
+// (fire, death, a cast Sim gone, a stale report), or when the script completes; then Plum
+// recaps, plans the next one, and never stops on its own. plan_arc (pushes, no say) stays
+// for now. The turns are on the same conversation as the chat (PlumService.runTurn with
+// director options), so the player can talk to Plum mid-script and sees the narration as
+// director rows.
 //
 // Guard rails: no tick while the player's own pause stands or the state report is stale,
-// none while nothing changed since the last tick (report seq, newest memory, last graded
-// outcome), none while a fire or a death is on the lot, and never more than
+// none while triggers are armed (the arc runs itself; the 60 s interval only catches a
+// stalled arc), none while nothing changed since the last tick (report seq, newest memory,
+// last graded outcome), none while a fire or a death is on the lot, and never more than
 // plumDirectorMaxTicksPerHour ticks in a sliding hour.
 import log from 'electron-log';
 import { ApiContext } from './ApiContext';
@@ -55,6 +63,12 @@ export class DirectorService implements DirectorSlot {
 
   private ticking = false;
 
+  // A fired wake-up trigger (PlumWake) waiting for the next tick to carry it
+  private pendingWake: string | undefined;
+
+  // The last "triggers armed" hold logged, so the minute tick does not repeat it
+  private lastHold: string | undefined;
+
   constructor(ctx: ApiContext, deps: DirectorDeps = {}) {
     this.ctx = ctx;
     this.deps = deps;
@@ -90,6 +104,7 @@ export class DirectorService implements DirectorSlot {
     const clear = this.deps.clearInterval ?? clearInterval;
     clear(this.timer);
     this.timer = undefined;
+    this.pendingWake = undefined;
     log.info(`[Director] stopped after ${this.ticks} ticks`);
     this.plum.emitStatus('idle');
   }
@@ -101,6 +116,17 @@ export class DirectorService implements DirectorSlot {
       ticks: this.ticks,
       ...(this.suspended ? { suspended: this.suspended } : {}),
     };
+  }
+
+  // Plum set itself a wake-up and it fired: the next tick carries the wake and runs at once
+  // when nothing holds it (a held wake waits for the next interval, not for a changed digest)
+  wake(text: string): boolean {
+    if (!this.timer) {
+      return false;
+    }
+    this.pendingWake = this.pendingWake ? `${this.pendingWake}\n${text}` : text;
+    void this.tick();
+    return true;
   }
 
   // --- the tick ----------------------------------------------------------------------------
@@ -162,23 +188,38 @@ export class DirectorService implements DirectorSlot {
     if (reason) {
       if (reason !== this.suspended) {
         log.info(`[Director] holding: ${reason}`);
+        this.hardStop(reason);
       }
       this.suspended = reason;
       return;
     }
     this.suspended = undefined;
+    const wake = this.pendingWake;
+    // With triggers armed the arc runs itself (PlumWake pushes the beats); the director only
+    // runs from wakes. The interval then catches a stalled arc: nothing armed, digest moved.
+    const armed = this.plum.wake.list().length;
+    if (!wake && this.ticks > 0 && armed > 0) {
+      const hold = `holding: ${armed} trigger${armed === 1 ? '' : 's'} armed`;
+      if (hold !== this.lastHold) {
+        log.info(`[Director] ${hold}`);
+        this.lastHold = hold;
+      }
+      return;
+    }
+    this.lastHold = undefined;
     const digest = this.digest();
-    if (this.ticks > 0 && digest === this.lastDigest) {
+    if (!wake && this.ticks > 0 && digest === this.lastDigest) {
       return;
     }
     this.lastDigest = digest;
+    this.pendingWake = undefined;
     this.ticking = true;
     this.ticks += 1;
     this.tickTimes.push(this.now());
     const planning = this.ticks === 1 || this.arc === undefined;
     const rowsBefore = this.plum.rows.length;
     try {
-      await this.plum.runTurn(this.tickText(planning), {
+      await this.plum.runTurn(this.tickText(planning, wake), {
         director: true,
         effort: planning ? 'high' : 'medium',
         maxPushes: 1,
@@ -191,15 +232,34 @@ export class DirectorService implements DirectorSlot {
     }
   }
 
-  // The arc's name rides a line of this tick's narration: "ARC: <name>" (the newest wins)
+  // A hard stop (decision 6): an emergency on the lot or a stale report (zone load) freezes
+  // the whisper script without Plum's say, once per transition; the player's pause and the
+  // hourly cap only hold the tick
+  private hardStop(reason: string) {
+    if (!/emergency|stale/.test(reason)) {
+      return;
+    }
+    const { wake } = this.plum;
+    if (wake.hasScript() && !wake.isFrozen()) {
+      wake.freeze(reason);
+    }
+  }
+
+  // The script's name rides a line of this tick's narration, "ARC: <name>", or the summary
+  // of a plan_script / plan_arc call that went through (`SCRIPT "<name>": whispered beat 1
+  // ...`, `ARC "<name>": pushed beat 1 ...`); the newest wins
   private readArc(rowsBefore: number) {
     const { rows } = this.plum;
     for (let i = rows.length - 1; i >= rowsBefore; i -= 1) {
       const row = rows[i];
-      if (row.kind !== 'director') {
-        continue;
+      let match: RegExpExecArray | null = null;
+      if (row.kind === 'director') {
+        match = /^\s*ARC:\s*(.+)$/im.exec(row.text);
+      } else if (row.kind === 'tool' && row.name === 'plan_script' && row.ok) {
+        match = /SCRIPT "(.+?)":/.exec(row.summary ?? '');
+      } else if (row.kind === 'tool' && row.name === 'plan_arc' && row.ok) {
+        match = /ARC "(.+?)":/.exec(row.summary ?? '');
       }
-      const match = /^\s*ARC:\s*(.+)$/im.exec(row.text);
       if (match) {
         this.arc = match[1].trim().slice(0, 80);
         log.info(`[Director] arc: ${this.arc}`);
@@ -208,32 +268,50 @@ export class DirectorService implements DirectorSlot {
     }
   }
 
-  tickText(planning: boolean): string {
+  tickText(planning: boolean, wake?: string): string {
     const lines = [`<director_tick n="${this.ticks}">`];
+    if (wake) {
+      lines.push(wake);
+    }
     lines.push(
-      'You are directing an improv episode with the Sims as the actors: you plan a story and push beats, ' +
-        'they play them their own way, and the script bends to what they do.',
+      'You are directing an improv episode with the Sims as the actors: you plan a story and WHISPER beats. ' +
+        'Each beat is a line you say to one Sim as the voice in their head plus the pie-menu item you hope ' +
+        'they choose (pie_menu shows what they can do right now). They answer in character and may refuse; ' +
+        'the script bends to what they do.',
     );
     if (this.brief) {
       lines.push(`The player's brief: ${this.brief}`);
     }
     if (planning) {
       lines.push(
-        'Survey the lot (look_at_lot, then relationships for the awake Sims; sleeping Sims are set dressing). ' +
-          'Plan a named arc of three to seven beats, each one whitelisted action from one actor to one target ' +
-          '(list_actions has the keys). Start your reply with "ARC: <name>" on its own line, list the beats in ' +
-          'one short line each, then push the FIRST beat with push_action.',
+        'Survey the lot (look_at_lot, then relationships for the awake Sims; sleeping Sims are set dressing; ' +
+          'pie_menu for the actors you will use). Plan a named script of three to seven beats, each one line ' +
+          'to one Sim and one pie-menu item (key or label) with its target. Start your reply with ' +
+          '"ARC: <name>" on its own line, list the beats in one short line each, then call plan_script ONCE ' +
+          'with the beats in order: it whispers the first beat, whispers each later beat when the previous ' +
+          "one's interaction actually ends, and wakes you to recap.",
       );
     } else {
       lines.push(`Current arc: ${this.arc ?? 'none yet'}.`);
       lines.push(
         'Look at the lot and verify how the actors played the last beat (what they are doing, recent_memories ' +
-          'for the lines). Adapt the remaining beats to what actually happened, then push at most ONE beat with ' +
-          'push_action, or none if the last one is still playing out. If the arc is finished or has collapsed ' +
-          '(cast asleep or gone, premise overtaken), recap it in two sentences and plan the next one: start that ' +
-          'reply with "ARC: <name>".',
+          'for the lines; the <live> block says what your triggers did and shows the script). If a Sim refused ' +
+          'a beat the script is FROZEN and the wake carries their reply: read it, then decide with the script ' +
+          'tool (resume = go on from the next beat; replace_from = rewrite from a beat on; cancel = drop it). ' +
+          'If the script is finished or has collapsed (cast asleep or gone, premise overtaken), recap it in two ' +
+          'sentences and plan the next one with plan_script: start that reply with "ARC: <name>".',
+      );
+      lines.push(
+        'The <live> block is the truth about your triggers and your script: if it has no `triggers:` section, ' +
+          'none are set; if it has no `script:` section, no script is set. Narrate from `since your last turn:`, ' +
+          'not from memory of what you armed.',
       );
     }
+    lines.push(
+      'plan_script arms the whole chain. Then stop: the app whispers the beats, and a wake comes when a Sim ' +
+        'refuses, an agreed click is refused, something stops the show, or the script completes. Never ' +
+        'push_action while directing unless the player asked for that beat; whispers only.',
+    );
     lines.push(
       'Narrate in one to three sentences like a director watching dailies; quote a good line when there is one. ' +
         'Never cancel what a Sim is doing, never travel, never touch the clock or the settings while directing.',

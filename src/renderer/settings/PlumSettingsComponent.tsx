@@ -11,6 +11,7 @@ export default function PlumSettingsComponent() {
   const apiKey = useSetting(SettingsEnum.PLUM_API_KEY, '');
   const model = useSetting(SettingsEnum.PLUM_MODEL, defaultPlumModel);
   const allowWrites = useSetting(SettingsEnum.PLUM_ALLOW_WRITES, true);
+  const whisperVoiced = useSetting(SettingsEnum.PLUM_WHISPER_VOICED, true);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', marginBottom: 2, gap: 1 }}>
@@ -54,6 +55,21 @@ export default function PlumSettingsComponent() {
       />
       <FormHelperText>
         Off: Plum can only look (lot, Sims, memories) and refuses every tool that moves money, Sims, moods or settings.
+      </FormHelperText>
+      <FormControlLabel
+        label="Voice a Sim's thought when they go along with a whisper"
+        control={
+          <Checkbox
+            checked={whisperVoiced.value}
+            onChange={(change) => {
+              void whisperVoiced.setSetting(change.target.checked);
+            }}
+          />
+        }
+      />
+      <FormHelperText>
+        Plum can whisper to a Sim as a voice in their head; a Sim who agrees has a thought about it that shows in the
+        game. On, the thought is spoken in their voice; off, it is only shown.
       </FormHelperText>
     </Box>
   );

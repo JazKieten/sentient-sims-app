@@ -40,6 +40,122 @@ function tool(ctx: ApiContext, name: string) {
 }
 
 describe('Plum app-side tools', () => {
+  it('wake_me sets, describes and cancels wake-ups', async () => {
+    const ctx = mockApiContext({ tiers: [] });
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 1,
+      sims: [{ sim_id: BELLA, sim_name: 'Bella Goth', sims: [], objects: [], activity: { running: 'cook' } }],
+    });
+    const wakeMe = tool(ctx, 'wake_me');
+    const set = (await wakeMe.run({
+      when: 'sim_finishes',
+      sim: 'Bella',
+      at: null,
+      minutes: null,
+      note: 'check dinner',
+    })) as {
+      changed: string;
+      pending: number;
+    };
+    expect(set.changed).toBe('will wake when Bella Goth finishes "cook": check dinner');
+    expect(set.pending).toBe(1);
+    const timed = (await wakeMe.run({
+      when: 'game_time',
+      sim: null,
+      at: '18:30',
+      minutes: null,
+      note: 'dinner time',
+    })) as {
+      changed: string;
+    };
+    expect(timed.changed).toBe('will wake at 18:30: dinner time');
+    await expect(wakeMe.run({ when: 'game_time', sim: null, at: 'six', minutes: null, note: 'x' })).rejects.toThrow(
+      'HH:MM',
+    );
+    await expect(wakeMe.run({ when: 'real_minutes', sim: null, at: null, minutes: 0, note: 'x' })).rejects.toThrow(
+      'between 1 and',
+    );
+    await expect(
+      wakeMe.run({ when: 'sim_finishes', sim: 'Mortimer', at: null, minutes: null, note: 'x' }),
+    ).rejects.toThrow('no Sim called');
+    await expect(wakeMe.run({ when: 'real_minutes', sim: null, at: null, minutes: 5, note: '' })).rejects.toThrow(
+      'needs a note',
+    );
+    expect(ctx.plum.wake.list()).toHaveLength(2);
+    const cancelled = (await wakeMe.run({ when: 'cancel', sim: null, at: null, minutes: null, note: '' })) as {
+      changed: string;
+    };
+    expect(cancelled.changed).toBe('cancelled 2 wake-ups');
+    expect(ctx.plum.wake.list()).toHaveLength(0);
+  });
+
+  it('set_trigger validates its Sims and action, and describes the armed trigger', async () => {
+    const ctx = mockApiContext({ tiers: [] });
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 1,
+      sims: [
+        { sim_id: BELLA, sim_name: 'Bella Goth', sims: [], objects: [], activity: { running: 'cook' } },
+        { sim_id: DON, sim_name: 'Don Lothario', sims: [], objects: [] },
+      ],
+    });
+    const setTrigger = tool(ctx, 'set_trigger');
+    expect(setTrigger.definition.risk).toBe('write');
+    const base = { when: 'sim_finishes', sim: 'Bella', doing: 'insult', after: null, at: null, note: 'adapt the arc' };
+    const armed = (await setTrigger.run({
+      ...base,
+      then: 'push_action',
+      push_sim: 'Bella',
+      push_action: 'gossip',
+      push_target: 'Don',
+    })) as { changed: string; id: string; pending: number };
+    expect(armed.changed).toBe(
+      `armed ${armed.id}: when Bella Goth finishes "insult" (not started yet), then push gossip on Bella Goth (with Don Lothario)`,
+    );
+    expect(armed.pending).toBe(1);
+    const trigger = ctx.plum.wake.list()[0];
+    expect(trigger.then).toEqual({
+      do: 'push_action',
+      simId: BELLA,
+      simName: 'Bella Goth',
+      action: 'gossip',
+      targetId: DON,
+      targetName: 'Don Lothario',
+    });
+    const wake = (await setTrigger.run({
+      when: 'game_time',
+      sim: null,
+      doing: null,
+      after: null,
+      at: '21:00',
+      then: 'wake',
+      push_sim: null,
+      push_action: null,
+      push_target: null,
+      note: 'recap the arc',
+    })) as { changed: string };
+    expect(wake.changed).toContain('at 21:00: recap the arc');
+    expect(ctx.plum.wake.list()[1].then).toBeUndefined();
+
+    const noPush = { push_sim: null, push_action: null, push_target: null };
+    await expect(setTrigger.run({ ...base, then: 'push_action', ...noPush })).rejects.toThrow('needs `push_sim`');
+    await expect(
+      setTrigger.run({ ...base, then: 'push_action', push_sim: 'Mortimer', push_action: 'gossip', push_target: null }),
+    ).rejects.toThrow("no Sim called 'Mortimer'");
+    await expect(
+      setTrigger.run({ ...base, then: 'push_action', push_sim: 'Bella', push_action: 'gossip', push_target: 'Nobody' }),
+    ).rejects.toThrow("no Sim called 'Nobody'");
+    await expect(setTrigger.run({ ...base, sim: 'Mortimer', then: 'wake', ...noPush })).rejects.toThrow(
+      'no Sim called',
+    );
+    await expect(setTrigger.run({ ...base, then: 'wake', ...noPush, note: '' })).rejects.toThrow('needs a note');
+    await expect(setTrigger.run({ ...base, when: 'real_minutes', then: 'wake', ...noPush })).rejects.toThrow(
+      'sim_finishes or game_time',
+    );
+    expect(ctx.plum.wake.list()).toHaveLength(2);
+  });
+
   it('resolves a Sim by id, full name or first name from the state report, then the participants', () => {
     const ctx = mockApiContext({ tiers: [] });
     ctx.simStateCache.ingest(reportWith([BELLA, 'Bella Goth'], [DON, 'Don Lothario'], ['300', 'Bella Bachelor']));
@@ -102,16 +218,98 @@ describe('Plum app-side tools', () => {
     expect(status.plan.goals).toEqual([{ key: `goal for ${BELLA}` }]);
   });
 
-  it('every app tool is strict with every property required', () => {
+  it('set_trigger with `after` chains onto an armed push trigger', async () => {
     const ctx = mockApiContext({ tiers: [] });
-    for (const { definition } of buildAppTools(ctx)) {
-      const schema = definition.input_schema as {
-        properties: Record<string, unknown>;
-        required: string[];
-        additionalProperties: boolean;
-      };
-      expect(schema.additionalProperties).toBe(false);
-      expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
-    }
+    ctx.simStateCache.ingest(reportWith([BELLA, 'Bella Goth'], [DON, 'Don Lothario']));
+    const setTrigger = tool(ctx, 'set_trigger');
+    const common = { when: 'sim_finishes', at: null, then: 'push_action', push_target: null, note: 'adapt' };
+    const armed = (await setTrigger.run({
+      ...common,
+      sim: 'Bella',
+      doing: 'insult',
+      after: null,
+      push_sim: 'Bella',
+      push_action: 'gossip',
+    })) as { id: string };
+    // With `after` the Sim and doing come from the parent: sim and doing may be null
+    const chained = (await setTrigger.run({
+      ...common,
+      sim: null,
+      doing: null,
+      after: armed.id,
+      push_sim: 'Don',
+      push_action: 'gossip',
+    })) as { changed: string; id: string; pending: number };
+    expect(chained.changed).toBe(
+      `armed ${chained.id}: after ${armed.id}, when Bella Goth finishes the beat it pushes, then push gossip on Don Lothario`,
+    );
+    expect(chained.pending).toBe(2);
+    expect(ctx.plum.wake.list()[1]).toMatchObject({ after: armed.id, simId: BELLA, simName: 'Bella Goth' });
+    await expect(
+      setTrigger.run({ ...common, sim: null, doing: null, after: 'wnope', push_sim: 'Don', push_action: 'gossip' }),
+    ).rejects.toThrow('`after` names no armed push trigger (wnope)');
+    expect(ctx.plum.wake.list()).toHaveLength(2);
+  });
+
+  it('plan_arc resolves every Sim before pushing and refuses an unknown one with nothing armed', async () => {
+    const ctx = mockApiContext({ tiers: [] });
+    ctx.simStateCache.ingest(reportWith([BELLA, 'Bella Goth'], [DON, 'Don Lothario']));
+    const planArc = tool(ctx, 'plan_arc');
+    expect(planArc.definition.risk).toBe('write');
+    const { sendModNotification } = await import('main/sentient-sims/websocketServer');
+    vi.mocked(sendModNotification).mockClear();
+    const beats = [
+      { sim: 'Bella', action: 'insult', target: 'Don' },
+      { sim: 'Mortimer', action: 'gossip', target: null },
+    ];
+    await expect(planArc.run({ name: 'X', beats, recap_note: 'recap', beat_note: null })).rejects.toThrow(
+      "beat 2: no Sim called 'Mortimer'",
+    );
+    await expect(
+      planArc.run({
+        name: 'X',
+        beats: [{ sim: 'Bella', action: 'insult', target: 'Nobody' }],
+        recap_note: 'r',
+        beat_note: null,
+      }),
+    ).rejects.toThrow("beat 1: no Sim called 'Nobody'");
+    await expect(planArc.run({ name: '', beats: beats.slice(0, 1), recap_note: 'r', beat_note: null })).rejects.toThrow(
+      'needs a name',
+    );
+    await expect(planArc.run({ name: 'X', beats: [], recap_note: 'r', beat_note: null })).rejects.toThrow(
+      '1 to 7 beats, not 0',
+    );
+    await expect(planArc.run({ name: 'X', beats: beats.slice(0, 1), recap_note: '', beat_note: null })).rejects.toThrow(
+      'needs a recap_note',
+    );
+    // Nothing reached the game and nothing was armed
+    expect(sendModNotification).not.toHaveBeenCalled();
+    expect(ctx.plum.wake.list()).toHaveLength(0);
+  });
+
+  it('every app tool is strict with every property required, nested objects included', () => {
+    const ctx = mockApiContext({ tiers: [] });
+    type Schema = {
+      type?: unknown;
+      properties?: Record<string, Schema>;
+      required?: string[];
+      additionalProperties?: boolean;
+      items?: Schema;
+    };
+    const expectStrict = (schema: Schema) => {
+      if (schema.properties) {
+        expect(schema.additionalProperties).toBe(false);
+        expect([...(schema.required ?? [])].sort()).toEqual(Object.keys(schema.properties).sort());
+        Object.values(schema.properties).forEach(expectStrict);
+      }
+      if (schema.items) {
+        expectStrict(schema.items);
+      }
+    };
+    const names = buildAppTools(ctx).map(({ definition }) => {
+      expectStrict(definition.input_schema);
+      return definition.name;
+    });
+    expect(names).toContain('plan_arc');
   });
 });

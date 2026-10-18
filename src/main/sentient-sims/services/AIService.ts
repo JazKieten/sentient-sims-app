@@ -448,6 +448,11 @@ export function toPrimaryInteractionEvent<T extends SSEvent>(event: T): T {
   };
 }
 
+// "Bella Goth (to self)" -> "Bella Goth": the tag the mod strips from a monologue speaker
+export function stripToSelf(speaker: string): string {
+  return speaker.replace(/\s*\(to self\)\s*$/i, '');
+}
+
 export function formatPreviouslyInScene(memories: Array<{ role: string; content: string }>): string {
   return memories
     .map((memory, index) => {
@@ -2147,7 +2152,9 @@ ${factsBlock}
       // A long reply airs in sentence-sized chunks (util/airingChunks); the memory row and
       // the chat window keep the whole line
       const castLines = [...spokenQuestion, ...splitLinesForAiring(finalLines)].map((line) => {
-        const simId = simIdByName.get(line.speaker);
+        // A "(to self)" line (an ask answer, a whisper's thought) is the Sim's own: it carries
+        // their id so the balloon finds them even when a name is shared
+        const simId = simIdByName.get(line.speaker) ?? simIdByName.get(stripToSelf(line.speaker));
         return simId ? { ...line, simId } : line;
       });
       // The cast rides along for the appraisal at the scene's close: who was in it, and

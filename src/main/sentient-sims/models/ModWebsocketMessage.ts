@@ -216,7 +216,7 @@ export type ModPlumToolCall = ModWebsocketMessage & {
   timeout_ms: number;
 };
 
-// kind: assistant | player | tool_call_started | tool_call_finished | director | status |
+// kind: assistant | player | tool_call_started | tool_call_finished | director | status | whisper | reply |
 // history | error; the rest of the fields depend on the kind (PlumService emits them)
 export type ModPlumEvent = ModWebsocketMessage & {
   kind: string;

@@ -19,6 +19,9 @@ export type ModToolDef = {
 export type AppTool = {
   definition: ModToolDef;
   run(args: Record<string, unknown>): Promise<unknown>;
+  // Offered only when the context has this tier slot (the scripted whisper tools need the
+  // director): PlumService filters by it when it builds the catalogue
+  onlyWith?: 'director';
 };
 
 export type CatalogueEntry = {
@@ -44,17 +47,75 @@ export function mergeCatalogue(modTools: ModToolDef[], appTools: AppTool[]): Cat
 // The API allows at most this many strict tools in one request (measured live 2026-10-15:
 // "Too many strict tools (25). The maximum number of strict tools supported is 20").
 export const MAX_STRICT_TOOLS = 20;
+// And at most this many union-typed (nullable) parameters across the strict tools (measured
+// live 2026-10-17: "Schemas contains too many parameters with union types (18 ...). Reduce
+// the number of nullable or union-typed parameters (limit: 16 parameters with unions)").
+export const MAX_STRICT_UNIONS = 16;
+// And the compiled grammar has a size cap of its own (measured live 2026-10-17 with three
+// tools carrying arrays of objects: "The compiled grammar is too large ... Simplify your tool
+// schemas or reduce the number of strict tools"). A tool whose schema nests objects inside an
+// array (plan_arc, plan_script, script) is never strict; the app validates its arguments.
 const RISK_RANK: Record<PlumRisk, number> = { destructive: 0, write: 1, read: 2 };
 
-// Which tools get the schema guarantee when the catalogue is bigger than the cap: the ones
-// whose arguments move the game, destructive first. Deterministic for a given catalogue, so
-// the cache prefix never moves; the mod validates and coerces every call anyway.
+// How many parameters of a schema are union-typed (`type: [..]` or anyOf / oneOf), nested
+// objects and array items included
+export function countUnions(schema: unknown): number {
+  if (!schema || typeof schema !== 'object') {
+    return 0;
+  }
+  const node = schema as { type?: unknown; anyOf?: unknown; oneOf?: unknown; properties?: unknown; items?: unknown };
+  let count = Array.isArray(node.type) || Array.isArray(node.anyOf) || Array.isArray(node.oneOf) ? 1 : 0;
+  if (node.properties && typeof node.properties === 'object') {
+    for (const child of Object.values(node.properties as Record<string, unknown>)) {
+      count += countUnions(child);
+    }
+  }
+  if (node.items) {
+    count += countUnions(node.items);
+  }
+  return count;
+}
+
+// True when the schema has an array whose items are objects (the grammar-heavy shape)
+export function hasObjectArray(schema: unknown): boolean {
+  if (!schema || typeof schema !== 'object') {
+    return false;
+  }
+  const node = schema as { items?: { type?: unknown; properties?: unknown }; properties?: unknown };
+  if (node.items && (node.items.type === 'object' || node.items.properties)) {
+    return true;
+  }
+  if (node.properties && typeof node.properties === 'object') {
+    return Object.values(node.properties as Record<string, unknown>).some(hasObjectArray);
+  }
+  return false;
+}
+
+// Which tools get the schema guarantee when the catalogue is bigger than the caps: the ones
+// whose arguments move the game, destructive first, each taken while it still fits both
+// budgets. Deterministic for a given catalogue, so the cache prefix never moves; the mod
+// validates and coerces every call anyway.
 export function strictNames(catalogue: CatalogueEntry[]): Set<string> {
   const ranked = [...catalogue].sort(
     (a, b) =>
       RISK_RANK[a.definition.risk] - RISK_RANK[b.definition.risk] || a.definition.name.localeCompare(b.definition.name),
   );
-  return new Set(ranked.slice(0, MAX_STRICT_TOOLS).map((entry) => entry.definition.name));
+  const names = new Set<string>();
+  let unions = 0;
+  for (const entry of ranked) {
+    if (names.size >= MAX_STRICT_TOOLS) {
+      break;
+    }
+    if (hasObjectArray(entry.definition.input_schema)) {
+      continue;
+    }
+    const own = countUnions(entry.definition.input_schema);
+    if (unions + own <= MAX_STRICT_UNIONS) {
+      names.add(entry.definition.name);
+      unions += own;
+    }
+  }
+  return names;
 }
 
 export function toApiTools(catalogue: CatalogueEntry[]): Anthropic.Beta.Messages.BetaTool[] {
@@ -111,6 +172,12 @@ export function readSummary(name: string, args: Record<string, unknown>): string
       return `read ${sim ?? 'a Sim'}'s plan`;
     case 'recall':
       return "read Plum's notes";
+    case 'pie_menu':
+      return `looked at ${sim ?? 'a Sim'}'s pie menu`;
+    case 'wake_me':
+      return 'setting a wake-up';
+    case 'whisper':
+      return `whispering to ${sim ?? 'a Sim'}`;
     default:
       return `ran ${name}`;
   }

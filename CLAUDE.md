@@ -243,7 +243,20 @@ states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes (the a
 catalog tag lookup found no Style_* tags live, so `styles` was dropped until one works); mod builds
 from 2026-10-16 add `floor_furnishings` (names per level; util/lotFurnishings.roomFloors counts a level only with 2+
 real furnishing kinds, so a roof of vents is no story, and one story is never mentioned) and `venue_type`, the lot
-type set in Manage Worlds, which lotVenue prefers (Ward Park's active venue is venue_Generic). The writer goes floor
+type set in Manage Worlds, which lotVenue prefers (Ward Park's active venue is venue_Generic). Mod builds from
+2026-10-17 add `rooms` (level, the game's room id from build_buy.get_room_id, 0 outdoors and null when the lookup
+failed, tuning name -> count; capped at 40 rooms x 60 kinds, biggest first): util/lotRooms names each room from what
+is in it (a bed makes a bedroom whatever else is there; appliances a kitchen, with sofa + TV an open-plan kitchen and
+living room; lockers a locker room; a toilet a bathroom at home and a restroom at a venue; desk + computer a study;
+3+ bookshelves a library; machines a home gym / workout room), hides what the name already says (the bed, the stove,
+the toilet), merges a level's outdoor groups into "outside: ..." (labelled a pool anywhere, a patio or a garden only
+at a home, so a park gets no invented rooms), shows a room nothing defines as "a room with ..." only when it holds 2+
+kinds, and collapses same-name rooms ("two bedrooms, one with a desk"). lotFacts writes one line per room floor, or
+a single "Rooms:" line on a one-story lot with a named room; a lot with no named room keeps "Furnished with:" (old
+mod blocks without `rooms` render as before). Words are singular or plural by count, never a number ("an easel",
+"lockers"; a bare name list reads plural because it has no counts); dining chairs are structural. lotTraitName also
+strips a creator prefix and WickedWhims_ZoneModifier_LotTrait_Nudity_ (Casual Nudity), and `lot_challenges` print
+after the traits as "; lot challenges: Burglar Time". Tests: LotRooms, LotFurnishings, LotDescription. The writer goes floor
 by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
 no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
 them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does

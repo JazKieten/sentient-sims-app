@@ -251,7 +251,9 @@ living room; lockers a locker room; a toilet a bathroom at home and a restroom a
 3+ bookshelves a library; machines a home gym / workout room), hides what the name already says (the bed, the stove,
 the toilet), merges a level's outdoor groups into "outside: ..." (labelled a pool anywhere, a patio or a garden only
 at a home, so a park gets no invented rooms), shows a room nothing defines as "a room with ..." only when it holds 2+
-kinds, and collapses same-name rooms ("two bedrooms, one with a desk"). lotFacts writes one line per room floor, or
+kinds, collapses same-name rooms ("two bedrooms, one with a desk"), reads a floor's rooms kitchen and living room
+first and bathrooms last (ROOM_ORDER), and leaves a bare bathroom out at a home (the bedroom/bathroom counts say it).
+Paintings and sculptures are home decor (HOME_BASICS): never listed at a home, kept at a venue. lotFacts writes one line per room floor, or
 a single "Rooms:" line on a one-story lot with a named room; a lot with no named room keeps "Furnished with:" (old
 mod blocks without `rooms` render as before). Words are singular or plural by count, never a number ("an easel",
 "lockers"; a bare name list reads plural because it has no counts); dining chairs are structural. lotTraitName also

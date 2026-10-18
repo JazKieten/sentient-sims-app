@@ -98,6 +98,10 @@ export class SimStateCache {
     return this.lotBlocks.get(String(lotId))?.lot;
   }
 
+  getLotBlocks(): LotBlock[] {
+    return Array.from(this.lotBlocks.values(), ({ lot }) => lot);
+  }
+
   isPaused(): boolean {
     return Boolean(this.latestReport?.paused || this.latestReport?.lot?.clock?.paused);
   }

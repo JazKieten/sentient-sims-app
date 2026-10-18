@@ -1,7 +1,8 @@
 // The DEV tier's entry module (release 4.5): the measurement and debugging surface that
 // ships in neither player build. Memory traces (the Memories window's pipeline view), the
 // bench routes, the AI exchange reader, the trait/mood mapping export, the directed-scene
-// tester route, the Ctrl+Shift+D debug toggle and the 25146 log socket for the log viewer.
+// tester route, the Lot Words panel's routes, the Ctrl+Shift+D debug toggle and the 25146
+// log socket for the log viewer.
 // Listed in tiers.json, so both player builds delete it and their generated index.ts never
 // names it. Dev builds always carry stream and autonomy too, so this tier may read them.
 import type { Express, Request, Response } from 'express';
@@ -18,6 +19,7 @@ import { startRendererLogSocket } from '../rendererLogSocket';
 import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { sendChatGeneration } from '../util/notifyRenderer';
 import { CatchErrors } from '../controllers/decorators/CatchError';
+import { LotWordsService } from '../services/LotWordsService';
 
 export interface DevServices {
   memoryTraceRepository: MemoryTraceRepository;
@@ -26,6 +28,7 @@ export interface DevServices {
   mappingController: MappingController;
   bench: BenchController;
   devRoutes: DevRoutes;
+  lotWords: LotWordsService;
 }
 
 const services = new WeakMap<ApiContext, DevServices>();
@@ -38,7 +41,7 @@ export function devOf(ctx: ApiContext): DevServices {
   return found;
 }
 
-// The two dev handlers that used to sit on core controllers
+// Dev-only handlers that need the context
 class DevRoutes {
   private readonly ctx: ApiContext;
 
@@ -76,12 +79,25 @@ class DevRoutes {
       return res.json({ error: err instanceof Error ? err.message : String(err) });
     }
   };
+
+  getLotWords = (_req: Request, res: Response) => {
+    res.json({ rows: devOf(this.ctx).lotWords.rows() });
+  };
+
+  @CatchErrors()
+  saveLotWords = (req: Request, res: Response) => {
+    const body = req.body as { words?: unknown };
+    const words = devOf(this.ctx).lotWords.save(body.words);
+    res.json({ words, rows: devOf(this.ctx).lotWords.rows() });
+  };
 }
 
 function construct(ctx: ApiContext) {
   const memoryTraceRepository = new MemoryTraceRepository(ctx.db);
   const memoryTrace = new MemoryTraceService(ctx.aiExchangeLog, memoryTraceRepository);
   const mapping = new MappingService();
+  const lotWords = new LotWordsService(ctx);
+  lotWords.load();
   services.set(ctx, {
     memoryTraceRepository,
     memoryTrace,
@@ -89,6 +105,7 @@ function construct(ctx: ApiContext) {
     mappingController: new MappingController(mapping),
     bench: new BenchController(ctx),
     devRoutes: new DevRoutes(ctx),
+    lotWords,
   });
   ctx.ext.trace = {
     recordPending: (contents, trace) => {
@@ -118,6 +135,8 @@ function routes(app: Express, ctx: ApiContext) {
   app.get('/moods/unmapped', mappingController.getUnmappedMoods);
   app.get('/memories/:memoryId/trace', devRoutes.getMemoryTrace);
   app.post('/ai/v2/event/directed-scene', devRoutes.directedSceneEvent);
+  app.get('/lot-words', devRoutes.getLotWords);
+  app.put('/lot-words', devRoutes.saveLotWords);
 }
 
 export const devTier: TierRegistration = {

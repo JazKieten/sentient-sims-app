@@ -282,7 +282,10 @@ cardtrait), none of the chats, as on 2026-10-16. Tests: LotTraitWords, LotRooms,
 by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
 no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
 them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does
-not; names no rule knows are logged as "furnishings with no plain words") and names the place by
+not; names no rule knows are logged as "furnishings with no plain words", and the dev build's Lot Words panel under the
+Locations editor lists them for every lot visited this run: services/LotWordsService, GET/PUT /lot-words, the player's
+words saved to Mods/sentient-sims/lot-words.json win over FURNISHING_WORDS by exact name, and "Copy for Claude" hands
+them over to fold into the table) and names the place by
 descriptions/lotNeighborhoods.ts (lot id -> neighborhood + world, generated from the sheet's Neighborhood column),
 else the reported world (also the Locations page's Neighborhood column; LocationEntity.neighborhood). Lot types
 read as Manage Worlds names them (util/lotDescription VENUES + VENUE_PATTERNS: Café, National Park for

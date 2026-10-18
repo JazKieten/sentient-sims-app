@@ -1,6 +1,6 @@
 // The DEV tier's renderer entry (release 4.5): the debug pages (scenario tester, AI log,
 // offline memory, log viewer, traits), the Memories window's prompt view, the max response
-// length row and the Patreon debug card. Listed in tiers.json, so both player builds
+// length row, the Patreon debug card and the Locations page's Lot Words panel. Listed in tiers.json, so both player builds
 // delete it and their generated index.tsx never names it.
 import type { RendererTier } from './types';
 import ChatPage from '../ChatPage';
@@ -12,6 +12,7 @@ import { ChatGenerationProvider } from '../providers/ChatGenerationProvider';
 import { MemoryTraceDialog } from '../components/MemoryTraceDialog';
 import { AiMaxResponseLengthSettingsComponent } from '../settings/AiMaxResponseLengthSettingsComponent';
 import PatreonDebug from '../components/PatreonDebug';
+import LotWordsCard from '../components/LotWordsCard';
 
 export const devRendererTier: RendererTier = {
   name: 'dev',
@@ -31,5 +32,6 @@ export const devRendererTier: RendererTier = {
   settingsRows: [{ id: 'ai-max-response-length', Component: AiMaxResponseLengthSettingsComponent, after: 'end' }],
   providers: [ChatGenerationProvider],
   debugCards: [PatreonDebug],
+  locationsCards: [LotWordsCard],
   MemoryTraceDialog,
 };

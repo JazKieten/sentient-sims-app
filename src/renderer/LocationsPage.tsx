@@ -37,6 +37,7 @@ import { useWebsocket } from './providers/WebsocketProvider';
 import { useAuth } from './providers/AuthProvider';
 import { useSnackBar } from './providers/SnackBarProvider';
 import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
+import { rendererTiers } from './tiers/merge';
 
 type SelectedLocation = {
   location: LocationEntity;
@@ -604,6 +605,10 @@ export default function LocationsPage() {
         </CardContent>
       </Card>
       {editLocationBox}
+      {rendererTiers.locationsCards.map((LocationsCard, index) => (
+        // eslint-disable-next-line @eslint-react/no-array-index-key
+        <LocationsCard key={index} />
+      ))}
       <Dialog
         open={namesFromSave.length > 0}
         onClose={() => {

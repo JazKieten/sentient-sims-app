@@ -236,8 +236,9 @@ Residence placeholder); 409 until the lot has been reported this app run (SimSta
 reported lot block by lot id). The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
 `bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts; the game's names, zoneModifier_lotTrait_FreshAir is
 Bracing Breezes, and they only ARRIVE from mod builds of 2026-10-17: before that the mod asked for a resource type
-that does not exist; lot challenges such as Heist Havoc ride the same list and are repeated under `lot_challenges`,
-lotTraitName strips the zoneModifier_ prefix) and, from 2026-10-16,
+that does not exist; lot challenges such as Heist Havoc ride the same list and are repeated under `lot_challenges`;
+util/lotTraitWords reads every one as the Build mode panel names it, with one clause in the lot's own terms, see
+below) and, from 2026-10-16,
 `world_name`, `street`, `furnishings` (every object tuning name on the lot), `floors` and `music` (stereo station
 states) from ss_lot_state.furnishing_facts, cached per zone for 5 minutes (the app reads no decor style: the mod's
 catalog tag lookup found no Style_* tags live, so `styles` was dropped until one works); mod builds
@@ -256,9 +257,18 @@ first and bathrooms last (ROOM_ORDER), and leaves a bare bathroom out at a home 
 Paintings and sculptures are home decor (HOME_BASICS): never listed at a home, kept at a venue. lotFacts writes one line per room floor, or
 a single "Rooms:" line on a one-story lot with a named room; a lot with no named room keeps "Furnished with:" (old
 mod blocks without `rooms` render as before). Words are singular or plural by count, never a number ("an easel",
-"lockers"; a bare name list reads plural because it has no counts); dining chairs are structural. lotTraitName also
-strips a creator prefix and WickedWhims_ZoneModifier_LotTrait_Nudity_ (Casual Nudity), and `lot_challenges` print
-after the traits as "; lot challenges: Burglar Time". Tests: LotRooms, LotFurnishings, LotDescription. The writer goes floor
+"lockers"; a bare name list reads plural because it has no counts); dining chairs are structural. Lot traits
+(2026-10-18): util/lotTraitWords maps the tuning name (prefixes, creator, WickedWhims plumbing and pro/con/PetWorld
+category words stripped, traitKey) to the panel name and a short clause (FreshAir = "Bracing Breezes (oodles of
+fresh air, bracing for exercise)", BurglarTime = Heist Havoc, CelebrityHangOut_LowFame = Up-and-Coming Hotspot,
+zoneModifiers_lotTrait_CelebrityHomeLotTrait = Celebrity Home, con_Haunted = the Haunted apartment but
+lotTrait_Haunted = the Spooky challenge; names from the Sims wiki "Lot traits and challenges" page, 2026-10-18, the
+game's own string tables are a binary format the app does not read); a name the table lacks falls back to the tuning
+words (Casual Nudity). The facts line is `Lot traits: Name (clause), ...; lot challenges: Heist Havoc (clause)`, a
+challenge told by the mod's `lot_challenges` OR the table, and the clause says what the place is like, never a
+mechanic (the prompt lets a trait colour the last sentence lightly and forbids explaining a game rule). Harness
+src/__tests__/LotTraitExperiment.test.ts (gated on LOT_TRAIT_EXPERIMENT=dry|live, not in tiers.json): 15 lots x
+none / names / names with clause, blind judge. Tests: LotTraitWords, LotRooms, LotFurnishings, LotDescription. The writer goes floor
 by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
 no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
 them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does

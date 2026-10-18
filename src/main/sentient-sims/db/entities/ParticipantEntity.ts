@@ -5,4 +5,6 @@ export type ParticipantEntity = {
   // 1 when the app wrote the description itself, so it may be cleared and rewritten when
   // the sim changes. Never set for a description a person typed (Phase 3.1 fix B).
   description_generated?: number;
+  // IPA for the sim's name, see migration 021
+  pronunciation?: string | null;
 };

@@ -1,6 +1,6 @@
 // Renderer half of the build tiers (release 4.5). Core pages ask the merged tier list
 // (merge.ts over the generated index.tsx) for anything a stripped build may not have:
-// routes, nav buttons, settings tabs and rows, providers, debug cards. A tier's renderer
+// routes, nav buttons, settings tabs and rows, providers, debug and Locations page cards. A tier's renderer
 // entry (stream.tsx, autonomy.tsx, dev.tsx) is deleted with the rest of the tier.
 import type { ComponentType, ReactNode } from 'react';
 import type { RouteObject } from 'react-router-dom';
@@ -36,6 +36,8 @@ export interface RendererTier {
   // AI action types only this tier generates; the provider-override table lists them
   overrideActionTypes?: AIActionType[];
   debugCards?: ComponentType[];
+  // Cards under the Locations page's editor
+  locationsCards?: ComponentType[];
   voiceCommandRow?: ComponentType<VoiceCommandRowProps>;
   // The Memories window's "View Prompt" (dev)
   MemoryTraceDialog?: ComponentType<MemoryTraceDialogProps>;

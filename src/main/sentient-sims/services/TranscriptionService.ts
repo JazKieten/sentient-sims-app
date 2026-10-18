@@ -5,7 +5,8 @@ import { ApiContext } from './ApiContext';
 import { AIHealthCheckResponse } from '../models/AIHealthCheckResponse';
 import { ApiType } from '../models/ApiType';
 import { openaiDefaultEndpoint } from '../constants';
-import { buildTranscriptionPrompt } from '../util/nameCorrection';
+import { buildTranscriptionPrompt, keyterms, NameGroups, nameTerms, SIMS_WORLDS } from '../util/sttVocabulary';
+import { elevenLabsHealthCheck, elevenLabsTranscribe } from '../clients/ElevenLabsSTTRequest';
 
 export class TranscriptionError extends Error {
   constructor(message: string) {
@@ -28,11 +29,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// Speech-to-text over any OpenAI-compatible /audio/transcriptions endpoint (OpenAI,
-// Groq, local faster-whisper/speaches). Deliberately separate from the generation
-// providers: the STT endpoint/key/model are an independent settings axis, so this owns
-// its own client instead of borrowing OpenAIService's LLM-configured one. Sentient
-// Sims AI is the exception, since it speaks its own JSON request and login token.
+// Speech-to-text behind one `transcribe()`. Three providers: the Sentient Sims AI
+// server (its own JSON request and login token; the server picks the model), any
+// OpenAI-compatible /audio/transcriptions endpoint (OpenAI, Groq, local
+// faster-whisper/speaches; its own endpoint/key/model settings axis, so this owns its
+// own client instead of borrowing OpenAIService's), and ElevenLabs Scribe, which reuses
+// the ElevenLabs key from the Voices settings and is the one that takes the names in
+// play as keyterms rather than a free-text hint.
 export class TranscriptionService {
   private readonly ctx: ApiContext;
 
@@ -77,16 +80,19 @@ export class TranscriptionService {
     return this.client;
   }
 
-  // V-7: the names in play, tightest scope first (on-lot sims, then everyone the
-  // household knows, then the current location), as a soft transcription bias
-  namePrompt(): string | undefined {
+  // The names in play, tightest scope first. NEAR: the sims on the lot, everyone they
+  // see, everyone the household knows. FAR: every participant the save has met and the
+  // current location. Deliberately WIDE: the player pauses the game to talk, and a
+  // paused report carries no sims, so a scene-scoped pool went empty at exactly the
+  // moment it was needed (live 08-27).
+  nameVocabulary(): { near: NameGroups; far: NameGroups } {
     try {
       const report = this.ctx.simStateCache.getReport();
       const onLot = (report?.sims ?? []).map((entry) => entry.sim_name ?? '').filter(Boolean);
-      const known = (report?.known_sims ?? []).map((sim) => sim.name ?? '').filter(Boolean);
       const perceived = (report?.sims ?? [])
         .flatMap((entry) => entry.sims.map((sim) => sim.name ?? ''))
         .filter(Boolean);
+      const known = (report?.known_sims ?? []).map((sim) => sim.name ?? '').filter(Boolean);
       let participants: string[] = [];
       try {
         participants = this.ctx.participantRepository.getAllParticipants().map((participant) => participant.name ?? '');
@@ -103,21 +109,43 @@ export class TranscriptionService {
       } catch {
         locations = [];
       }
-      return buildTranscriptionPrompt([onLot, perceived, known, participants, locations]);
+      return { near: [onLot, perceived, known], far: [participants, locations] };
     } catch {
-      return undefined;
+      return { near: [], far: [] };
     }
   }
 
-  async transcribe(
-    audio: ArrayBuffer,
-    mimeType = 'audio/webm',
-    options: { namePrompt?: boolean } = {},
-  ): Promise<string> {
+  async transcribe(audio: ArrayBuffer, mimeType = 'audio/webm'): Promise<string> {
     const language = this.ctx.settings.voiceInputLanguage;
-    const prompt = options.namePrompt === false ? undefined : this.namePrompt();
+    const provider = this.ctx.settings.voiceInputProvider;
+    const vocabulary = this.nameVocabulary();
 
-    if (this.ctx.settings.voiceInputProvider === ApiType.SentientSimsAI) {
+    if (provider === ApiType.ElevenLabs) {
+      const apiKey = this.ctx.settings.elevenLabsKey;
+      if (!apiKey) {
+        throw new TranscriptionError('ElevenLabs API key is not set. Add it under Voices in Settings.');
+      }
+      try {
+        const text = await elevenLabsTranscribe({
+          endpoint: this.ctx.settings.elevenLabsEndpoint,
+          apiKey,
+          audio: Buffer.from(audio),
+          mimeType,
+          languageCode: language || undefined,
+          // The game's worlds ride between the sims in play and the wider pool: Scribe
+          // spells "Del Sol Valley" as it hears it otherwise, and a sim remembers the place
+          keyterms: keyterms(nameTerms(vocabulary.near), SIMS_WORLDS, nameTerms(vocabulary.far)),
+        });
+        return text.trim();
+      } catch (error) {
+        log.error('Voice transcription failed:', error);
+        throw new TranscriptionError(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    const prompt = buildTranscriptionPrompt([...vocabulary.near, ...vocabulary.far]);
+
+    if (provider === ApiType.SentientSimsAI) {
       const format = mimeType.split(';')[0].split('/')[1] ?? 'webm';
       try {
         const text = await this.ctx.sentientSimsTranscription.transcribe(Buffer.from(audio), format, language, prompt);
@@ -148,8 +176,24 @@ export class TranscriptionService {
   }
 
   async healthCheck(): Promise<AIHealthCheckResponse> {
-    if (this.ctx.settings.voiceInputProvider === ApiType.SentientSimsAI) {
+    const provider = this.ctx.settings.voiceInputProvider;
+    if (provider === ApiType.SentientSimsAI) {
       return this.ctx.sentientSimsTranscription.healthCheck();
+    }
+
+    if (provider === ApiType.ElevenLabs) {
+      const apiKey = this.ctx.settings.elevenLabsKey;
+      if (!apiKey) {
+        return { error: 'not working, ElevenLabs API key is not set' };
+      }
+      try {
+        await elevenLabsHealthCheck(this.ctx.settings.elevenLabsEndpoint, apiKey);
+        return { status: 'OK' };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.error('Error testing ElevenLabs transcription:', error);
+        return { error: `not working, ${message}` };
+      }
     }
 
     // No cheap transcription ping exists; a models listing works on OpenAI, Groq,

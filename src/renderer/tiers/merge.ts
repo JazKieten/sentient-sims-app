@@ -20,6 +20,7 @@ export type MergedRendererTiers = {
   providers: TierProvider[];
   overrideActionTypes: AIActionType[];
   debugCards: ComponentType[];
+  locationsCards: ComponentType[];
   voiceCommandRow?: ComponentType<VoiceCommandRowProps>;
   MemoryTraceDialog?: ComponentType<MemoryTraceDialogProps>;
 };
@@ -33,6 +34,7 @@ export function mergeRendererTiers(tiers: RendererTier[]): MergedRendererTiers {
     providers: tiers.flatMap((t) => t.providers ?? []),
     overrideActionTypes: tiers.flatMap((t) => t.overrideActionTypes ?? []),
     debugCards: tiers.flatMap((t) => t.debugCards ?? []),
+    locationsCards: tiers.flatMap((t) => t.locationsCards ?? []),
     voiceCommandRow: tiers.find((t) => t.voiceCommandRow)?.voiceCommandRow,
     MemoryTraceDialog: tiers.find((t) => t.MemoryTraceDialog)?.MemoryTraceDialog,
   };

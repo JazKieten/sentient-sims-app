@@ -52,6 +52,9 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/locations/modified', ctx.controller.locations.getModifiedLocations);
   expressApp.get('/locations/:locationId', ctx.controller.locations.getLocation);
   expressApp.post('/locations', ctx.controller.locations.updateLocation);
+  expressApp.post('/locations/:locationId/describe', ctx.controller.locations.describeLocation);
+  expressApp.post('/locations/online', ctx.controller.locations.publishLocation);
+  expressApp.delete('/locations/online/:locationId', ctx.controller.locations.unpublishLocation);
   expressApp.delete('/locations/:locationId', ctx.controller.locations.deleteLocation);
 
   expressApp.get('/paintings', ctx.controller.paintings.getPaintingsManifest);
@@ -117,6 +120,7 @@ export function runApi(ctx: ApiContext) {
   expressApp.get('/sims/:id/facts', ctx.controller.simFacts.getFacts);
   expressApp.get('/sims/:id/facts/path/:otherId', ctx.controller.simFacts.getFactPath);
   expressApp.post('/sims/:id/facts', ctx.controller.simFacts.addFact);
+  expressApp.put('/sims/:id/facts/:factId', ctx.controller.simFacts.editFact);
   expressApp.delete('/sims/:id/facts/:factId', ctx.controller.simFacts.retireFact);
   expressApp.post('/cognition/sleep-boundary', ctx.controller.simState.postSleepBoundary);
 

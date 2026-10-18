@@ -220,6 +220,88 @@ describe('playTTSLines', () => {
     expect(seqs[2]).toBeGreaterThan(seqs[1]);
   });
 
+  it('delivers a line in the speaker mood on by default, and not for a bookkeeping mood', () => {
+    const sadRicky = makeSim({ ...ricky, moods: ['Mood_Sad'] });
+    const fineBella = makeSim({ ...bella, moods: ['Mood_Fine'] });
+    playTTSLines(
+      [
+        { speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' },
+        { speaker: 'Bella Goth', text: 'Maybe next weekend.' },
+      ],
+      [sadRicky, fineBella],
+      { voiceType: VoiceType.ElevenLabs },
+    );
+
+    const lines = sentVoiceLines();
+    expect(lines[0].deliveryNote).toEqual('quietly sad');
+    expect(lines[1].deliveryNote).toBeUndefined();
+  });
+
+  it('keeps a delivery note the line arrived with over the mood', () => {
+    const sadRicky = makeSim({ ...ricky, moods: ['Mood_Sad'] });
+    playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Fine.', deliveryNote: 'sarcastic' }], [sadRicky], {
+      voiceType: VoiceType.ElevenLabs,
+    });
+
+    expect(sentVoiceLines()[0].deliveryNote).toEqual('sarcastic');
+  });
+
+  it('attaches no mood when the switch is off', () => {
+    const sadRicky = makeSim({ ...ricky, moods: ['Mood_Sad'] });
+    playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' }], [sadRicky], {
+      voiceType: VoiceType.ElevenLabs,
+      moodTags: false,
+    });
+
+    expect(sentVoiceLines()[0].deliveryNote).toBeUndefined();
+  });
+
+  it('reads a stored pronunciation in place of the name while the subtitle keeps the name', () => {
+    playTTSLines(
+      [
+        { speaker: 'Bella Goth', text: "Ricky, have you seen Ricky Rickerson's boat? Rickyson hasn't." },
+        { speaker: 'Ricky Rickerson', text: 'Maybe next weekend, Bella.' },
+      ],
+      [ricky, bella],
+      { voiceType: VoiceType.ElevenLabs, pronunciations: [{ name: 'Ricky Rickerson', ipa: 'ˈrɪki ˈrɪkərsən' }] },
+    );
+
+    const lines = sentVoiceLines();
+    expect(lines[0].text).toEqual("Ricky, have you seen Ricky Rickerson's boat? Rickyson hasn't.");
+    expect(lines[0].ttsText).toEqual("/ˈrɪki ˈrɪkərsən/, have you seen /ˈrɪki ˈrɪkərsən/'s boat? Rickyson hasn't.");
+    // Bella has no pronunciation stored, so Ricky's line reads as written
+    expect(lines[1].ttsText).toBeUndefined();
+  });
+
+  it('reads the pronunciation of a sim who is talked about but not in the scene', () => {
+    // Live 2026-10-12: Anker's reply to the player mentioned Halley, who was not in his
+    // scene, and her name read hay-lee because only the cast's pronunciations were used
+    playTTSLines(
+      [{ speaker: 'Ricky Rickerson', text: 'So what do I think about Halley? Halley is lovely.' }],
+      [ricky],
+      {
+        voiceType: VoiceType.ElevenLabs,
+        pronunciations: [{ name: 'Halley Calloway', ipa: 'ˈhæl.i' }],
+      },
+    );
+
+    const lines = sentVoiceLines();
+    expect(lines[0].text).toEqual('So what do I think about Halley? Halley is lovely.');
+    expect(lines[0].ttsText).toEqual('So what do I think about /ˈhæl.i/? /ˈhæl.i/ is lovely.');
+  });
+
+  it('applies pronunciations to an uncast line as well', () => {
+    playTTSLines([{ speaker: 'Narrator', text: 'Halley walks in.' }], undefined, {
+      pronunciations: [{ name: 'Halley Calloway', ipa: 'ˈhæl.i' }],
+    });
+    expect(sentVoiceLines()[0].ttsText).toEqual('/ˈhæl.i/ walks in.');
+  });
+
+  it('leaves lines alone when no pronunciations are supplied', () => {
+    playTTSLines([{ speaker: 'Bella Goth', text: 'Ricky!' }], [ricky, bella], { voiceType: VoiceType.ElevenLabs });
+    expect(sentVoiceLines()[0].ttsText).toBeUndefined();
+  });
+
   it('prefers a pinned kokoro blend over the automatic cast', () => {
     playTTSLines([{ speaker: 'Ricky Rickerson', text: 'Been fishing here for years.' }], [ricky], {
       voiceType: VoiceType.Kokoro,

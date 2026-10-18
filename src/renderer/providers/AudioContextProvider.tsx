@@ -251,6 +251,13 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
         const scene = sceneQueueRef.current.shift();
         if (!scene) continue;
         currentSceneRef.current = scene;
+        // The scene behind this one can have its first line's audio ready by the time
+        // its turn comes, instead of the ~1-3 s first-byte wait at every scene start
+        const next = sceneQueueRef.current.at(0);
+        const nextFirstLine = next?.lines.find((line) => line.text.trim());
+        if (nextFirstLine && aiSettings.ttsEnabled) {
+          tts?.prefetch?.(nextFirstLine);
+        }
         try {
           await speakDialogueLines(scene);
         } finally {
@@ -266,7 +273,7 @@ export function AudioContextProvider({ children }: AudioContextProviderProps) {
     } finally {
       drainingRef.current = false;
     }
-  }, [speakDialogueLines]);
+  }, [speakDialogueLines, aiSettings.ttsEnabled, tts]);
 
   useEffect(() => {
     const removeListener = window.electron.onVoice(

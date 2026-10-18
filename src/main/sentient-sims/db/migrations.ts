@@ -390,13 +390,26 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         PRIMARY KEY ( sim_id, absolute_day )
       );
     `,
+    // How a sim's name is said (IPA), typed in the Sims tab. Eleven v4 reads an inline
+    // phonetic spelling, so the voice stops guessing at invented names; the subtitle keeps
+    // the written name. NULL means "read it as spelled".
+    // Shipped as 021 on our fork before 021/022 above took their numbers; see RENAMED_MIGRATIONS.
+    '023-participant-pronunciation': (db: Database) => {
+      db.prepare('ALTER TABLE participant ADD COLUMN pronunciation TEXT').run();
+    },
+    // Which location descriptions the app wrote itself: 1 yields to a shared default, 0 or
+    // NULL is the player's own and always wins. 024 so it cannot collide with a fork's 023.
+    '024-location-description-generated': (db: Database) => {
+      db.prepare('ALTER TABLE location ADD COLUMN description_generated INTEGER').run();
+    },
     // Plum (Claude in the game) remembers across sessions, per save: the conversation rows
     // the tab showed (plum_message, role = the row kind, content_json = the row) and the
     // notes Plum keeps for itself (plum_note: remember/recall and the end-of-thread
     // summaries). No foreign keys and no memory column: the mod parses memory rows into a
     // fixed-field class (migration 011), so Plum's state stays beside it.
-    // A function: the string form is one prepared statement, and this is three
-    '023-create-plum': (db: Database) => {
+    // A function: the string form is one prepared statement, and this is three.
+    // 025: it shipped as 023 on v5 before Jasmine's 023/024 above took their numbers.
+    '025-create-plum': (db: Database) => {
       db.exec(`
       CREATE TABLE plum_message (
         id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
@@ -445,6 +458,8 @@ const getAppliedMigrations = (db: Database): string[] => {
 export const RENAMED_MIGRATIONS: Record<string, string> = {
   '014-add-memory-index-owner': '021-add-memory-index-owner',
   '015-create-daily-plan': '022-create-daily-plan',
+  '021-participant-pronunciation': '023-participant-pronunciation',
+  '023-create-plum': '025-create-plum',
 };
 
 const relabelRenamedMigrations = (db: Database) => {

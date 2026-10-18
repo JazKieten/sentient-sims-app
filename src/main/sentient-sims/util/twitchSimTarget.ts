@@ -1,12 +1,27 @@
 // Twitch !ask sim targeting: "!ask lillie how are you" aims the question at Lillie even
 // when she is not the active sim. Pure functions — the resolver fuzzy-matches the leading
-// word(s) of the question against the live household roster (reusing the voice feature's
-// phonetic matching, so "lilly" hits Lillie), and the builders fabricate the one-sim chat
-// event that rides AIService.runDirectedGeneration's solo player-voice branch.
+// word(s) of the question against the live household roster (a loose phonetic match, so a
+// viewer's typed "lilly" hits Lillie), and the builders fabricate the one-sim chat event
+// that rides AIService.runDirectedGeneration's solo player-voice branch.
 import { SSEventType, ChatInteractionEvent } from '../models/InteractionEvents';
 import { SentientSim } from '../models/SentientSim';
 import { SimAge } from '../models/SimAge';
-import { levenshtein, phonetic } from './nameCorrection';
+import { levenshtein } from './nameCorrection';
+
+// Loose phonetic normalization for typed names: doubled letters collapse, y/ie -> i,
+// ph -> f, ck -> k, silent-w wr -> r, so "lilly"/"Lillie" and "meika"/"Mika" compare close.
+// Unlike the voice feature's phonetic() there is no silent-final-e rule: it made "how" one
+// edit from Hope (TwitchChat.test.ts).
+function phonetic(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/wr/g, 'r')
+    .replace(/ph/g, 'f')
+    .replace(/ck/g, 'k')
+    .replace(/ie\b/g, 'i')
+    .replace(/y/g, 'i')
+    .replace(/(.)\1+/g, '$1');
+}
 
 export type SimTargetCandidate = {
   simId: string;

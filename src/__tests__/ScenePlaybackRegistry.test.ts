@@ -66,6 +66,42 @@ describe('ScenePlaybackRegistry', () => {
     expect(registry.isStopped(SCENE)).toBe(true);
   });
 
+  it('ends every conversation a departed sim was in', () => {
+    const { registry, notifyStop } = harness;
+    registry.roundQueued('scene-a', ['1', '2'], 1, lines('Hello.'));
+    registry.roundQueued('scene-b', ['1', '2'], 1, lines('Hello again.'));
+    registry.roundQueued('scene-c', ['1', '3'], 1, lines('Hello Dirk.'));
+
+    expect(registry.stopForSim('2', 'left_lot')).toBe(2);
+
+    expect(notifyStop).toHaveBeenCalledWith({ sceneId: 'scene-a', mode: 'hard' });
+    expect(notifyStop).toHaveBeenCalledWith({ sceneId: 'scene-b', mode: 'hard' });
+    expect(registry.isStopped('scene-c')).toBe(false);
+  });
+
+  it('drops a scene waiting to air once a judge says the game moved on', () => {
+    const { registry, notifyStop, onSceneClosed } = harness;
+    registry.roundQueued('heard', ['1', '2'], 1, lines('Hello.'), undefined, undefined, undefined, 1_000);
+    registry.lineShown('heard');
+    registry.roundQueued('waiting', ['1', '2'], 1, lines('Hello again.'), undefined, undefined, undefined, 2_000);
+    registry.roundQueued('unknown', ['1', '2'], 1, lines('From the chat window.'));
+
+    const judge = vi.fn((scene: { sceneId: string; eventAt?: number }) =>
+      scene.eventAt !== undefined ? 'Augustus has moved on' : undefined,
+    );
+    expect(registry.stopPending(judge)).toBe(1);
+
+    // Only the scene nobody has heard yet, and only one with an event to judge
+    expect(judge).toHaveBeenCalledWith({ sceneId: 'waiting', participantSimIds: ['1', '2'], eventAt: 2_000 });
+    expect(judge).toHaveBeenCalledWith({ sceneId: 'unknown', participantSimIds: ['1', '2'], eventAt: undefined });
+    expect(judge).not.toHaveBeenCalledWith(expect.objectContaining({ sceneId: 'heard' }));
+    expect(notifyStop).toHaveBeenCalledWith({ sceneId: 'waiting', mode: 'hard' });
+    expect(registry.isStopped('heard')).toBe(false);
+    expect(onSceneClosed).toHaveBeenCalledWith(
+      expect.objectContaining({ sceneId: 'waiting', stopReason: 'superseded' }),
+    );
+  });
+
   it('stops only once however many times it is told', () => {
     const { registry, notifyStop, notifySceneEnded } = harness;
     registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.'));

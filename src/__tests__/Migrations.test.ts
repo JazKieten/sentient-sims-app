@@ -76,5 +76,11 @@ describe('migrate', () => {
     expect(
       db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'daily_plan'").get(),
     ).toBeTruthy();
+    // 021-participant-pronunciation -> 023: the column is there exactly once
+    const participantColumns = (db.prepare('PRAGMA table_info(participant)').all() as { name: string }[]).map(
+      (column) => column.name,
+    );
+    expect(participantColumns.filter((name) => name === 'pronunciation')).toHaveLength(1);
+    expect(names.filter((name) => name === '023-participant-pronunciation')).toHaveLength(1);
   });
 });

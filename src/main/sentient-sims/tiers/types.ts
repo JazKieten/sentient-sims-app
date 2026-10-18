@@ -56,7 +56,8 @@ export interface TierRegistration {
 export type AskActionPlayback = {
   priority?: boolean;
   deferPlayback?: boolean;
-  onPlaybackReady?: (play: () => void) => void;
+  // play returns whether it aired (an answer to the player always does)
+  onPlaybackReady?: (play: (claimedAt?: number) => boolean) => void;
 };
 
 // AUTONOMY: a solo player line that asks the sim to DO something. Undefined on any miss,

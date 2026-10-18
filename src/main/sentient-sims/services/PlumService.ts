@@ -735,7 +735,7 @@ export class PlumService {
     this.emitStatus(this.turnRunning ? 'thinking' : 'idle');
   }
 
-  renderSeed(notes: PlumNote[], rows: PlumRow[]): string {
+  renderSeed(notes: PlumNote[], rows: readonly PlumRow[]): string {
     const lines: string[] = [];
     if (notes.length > 0) {
       lines.push('<plum_notes>', 'Notes you kept for yourself in earlier sessions of this save (newest last):');

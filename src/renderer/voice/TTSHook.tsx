@@ -34,6 +34,10 @@ export interface TTSHook {
     onLineRevealUpdate?: (line: DialogueLine, reveal: Pick<LineReveal, 'charMs' | 'wordMs' | 'partial'>) => void,
   ) => Promise<void>;
   stop: () => void;
+  // Start fetching a line's audio ahead of time (the first line of the next queued
+  // scene) so it plays the moment its scene starts. One line is remembered; a line that
+  // is never spoken is forgotten after a minute.
+  prefetch?: (line: DialogueLine) => void;
   isPlaying: boolean;
   clearQueue?: () => void;
   isProcessing?: boolean;

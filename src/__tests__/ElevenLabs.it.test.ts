@@ -117,6 +117,61 @@ describe('ElevenLabsIT', () => {
     expect(audio.type).toContain('audio');
   });
 
+  // v4 Turbo on the same HTTP dialogue endpoint, with the real voice settings values
+  it.skipIf(!apiKey)('generates audio for a v4 turbo dialogue line', async () => {
+    const audio = await speakDialogue(
+      '[cheerful] Been fishing here for years.',
+      defaultElevenLabsTTSSettings.voice,
+      ElevenLabsSpeechModel.ELEVEN_V4_TURBO,
+      'How long have you been coming here?',
+    );
+    expect(audio.size).toBeGreaterThan(0);
+    expect(audio.type).toContain('audio');
+  });
+
+  // The API accepts previous_request_ids on both endpoints: the second request of a
+  // stitched chain names the first by its request-id header
+  it.skipIf(!apiKey)('accepts previous_request_ids on the dialogue endpoint', async () => {
+    const first = buildElevenLabsDialogueRequest({
+      text: 'Been fishing here for years.',
+      voiceId: defaultElevenLabsTTSSettings.voice,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: apiKey as string,
+      settings: { ...defaultElevenLabsTTSSettings, model: ElevenLabsSpeechModel.ELEVEN_V4 },
+    });
+    const firstResponse = await fetch(first.url, {
+      method: 'POST',
+      headers: first.headers,
+      body: JSON.stringify(first.body),
+    });
+    expect(firstResponse.ok).toBe(true);
+    const requestId = firstResponse.headers.get('request-id');
+    expect(requestId).toBeTruthy();
+    await firstResponse.blob();
+
+    // Built exactly as the renderer builds a stitched chunk: the line before rides along as
+    // previousText too. The builder must send only the ids; both together is a 400.
+    const second = buildElevenLabsDialogueRequest({
+      text: 'Never caught a thing, mind you.',
+      voiceId: defaultElevenLabsTTSSettings.voice,
+      endpoint: defaultElevenLabsEndpoint,
+      apiKey: apiKey as string,
+      settings: { ...defaultElevenLabsTTSSettings, model: ElevenLabsSpeechModel.ELEVEN_V4 },
+      previousText: 'Been fishing here for years.',
+      nextText: 'Not once.',
+      previousRequestIds: [requestId as string],
+    });
+    expect('previous_text' in second.body).toBe(false);
+    expect(second.body.previous_request_ids).toEqual([requestId]);
+    const secondResponse = await fetch(second.url, {
+      method: 'POST',
+      headers: second.headers,
+      body: JSON.stringify(second.body),
+    });
+    expect(secondResponse.ok).toBe(true);
+    expect((await secondResponse.blob()).size).toBeGreaterThan(0);
+  });
+
   it.skipIf(!apiKey)('generates audio with the voice cast for a sim', async () => {
     const sim: SentientSim = {
       careers: [],

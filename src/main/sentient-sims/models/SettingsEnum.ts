@@ -74,7 +74,7 @@ export enum SettingsEnum {
   // Voice input: hold-to-talk mic capture transcribed via an OpenAI-compatible
   // /audio/transcriptions endpoint, injected into the game as the active sim speaking
   VOICE_INPUT_ENABLED = 'voiceInputEnabled',
-  VOICE_INPUT_PROVIDER = 'voiceInputProvider', // sentientsimsai | openai (any compatible endpoint)
+  VOICE_INPUT_PROVIDER = 'voiceInputProvider', // sentientsimsai | openai (any compatible endpoint) | elevenlabs (Scribe)
   VOICE_INPUT_ENDPOINT = 'voiceInputEndpoint',
   VOICE_INPUT_KEY = 'voiceInputKey',
   VOICE_INPUT_MODEL = 'voiceInputModel',
@@ -99,6 +99,10 @@ export enum SettingsEnum {
   OUTCOME_INSTANT_SUCCESS_MS = 'outcomeInstantSuccessMs',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // A directed scene is dropped, not aired late, once its game event is older than this:
+  // the sims have moved on by then (stream 2026-10-11: fans at a VIP rope stacked up
+  // scenes that aired minutes after the game had paired the celebrity with someone else)
+  SCENE_EVENT_MAX_AGE_MS = 'sceneEventMaxAgeMs',
   // Player-facing replies (chat window, voice, conscience, Twitch): the actor's token
   // budget for a reply to the player, how long a conversation thread stays open between
   // the player's lines, and whether a reply may turn straight into an action
@@ -108,6 +112,9 @@ export enum SettingsEnum {
   // The scorer's action verdict a reply must reach before it may act (its own bar, above
   // the tick's: a chat is not an invitation to go do chores)
   CONVERSATION_ACTION_SCORE_THRESHOLD = 'conversationActionScoreThreshold',
+  // Pets, babies and infants (the sims the player cannot control) take speaking turns.
+  // Off: they still think, as a private monologue row, but never say a line aloud
+  NON_CONTROLLABLE_SIMS_SPEAK = 'nonControllableSimsSpeak',
   // V-6: write a first description for undescribed sims/lots instead of the stock default
   GENERATED_DEFAULT_DESCRIPTIONS = 'generatedDefaultDescriptions',
   GAME_APP_PATH = 'gameAppPath',

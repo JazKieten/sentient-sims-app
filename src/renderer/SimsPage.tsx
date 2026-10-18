@@ -1,4 +1,4 @@
-import { Button, Card, CardActions, CardContent } from '@mui/material';
+import { Button, Card, CardActions, CardContent, TextField } from '@mui/material';
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { SimFactsDialog } from './components/SimFactsDialog';
 import log from 'electron-log';
@@ -18,6 +18,7 @@ import { useOnDatabaseLoaded } from './hooks/useOnDatabaseLoaded';
 import { useActiveVoiceType } from './hooks/useActiveVoiceType';
 import { useWebsocket } from './providers/WebsocketProvider';
 import { SentientSimsAppClient } from 'main/sentient-sims/clients/SentientSimsAppClient';
+import { TIER } from './tiers/index';
 
 type SelectedSim = {
   sim: ParticipantDTO;
@@ -198,6 +199,18 @@ export default function SimsPage() {
     }));
   }, []);
 
+  const handlePronunciationEdit = useCallback((event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setEditedSim((previousSim) => ({
+      index: Number(previousSim?.index),
+      sim: {
+        ...previousSim?.sim,
+        id: previousSim?.sim.id || '',
+        name: previousSim?.sim.name || '',
+        pronunciation: event.target.value,
+      },
+    }));
+  }, []);
+
   const handleVoiceEdit = useCallback(
     (voice: SimVoiceSelection) => {
       if (!activeVoiceType) return;
@@ -292,6 +305,18 @@ export default function SimsPage() {
               onChange={handleVoiceEdit}
             />
           )}
+          {activeVoiceType === VoiceType.ElevenLabs && (
+            <TextField
+              label="Name pronunciation (IPA, Eleven v4)"
+              variant="outlined"
+              size="small"
+              fullWidth
+              sx={{ marginBottom: 2 }}
+              value={editedSim.sim.pronunciation ?? ''}
+              onChange={handlePronunciationEdit}
+              helperText="How the voice says this sim's name, e.g. ˈzɔːrvæθ. Leave empty to read it as spelled. Eleven v4 only."
+            />
+          )}
 
           <MemoryEditInput
             label="Description"
@@ -326,6 +351,8 @@ export default function SimsPage() {
                 initialState={{
                   pagination: { paginationModel: { page: 0, pageSize: -1 } },
                   sorting: { sortModel: [{ field: 'name', sort: 'asc' }] },
+                  // The game id is a developer's number; a player can still show the column
+                  columns: { columnVisibilityModel: { id: TIER === 'dev' } },
                 }}
                 slots={{
                   footer: BlankDataGridFooterComponent,

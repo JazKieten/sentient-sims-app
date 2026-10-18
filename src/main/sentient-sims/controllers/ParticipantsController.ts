@@ -14,6 +14,8 @@ function errorMessage(err: unknown): string {
 type UpdateParticipantBody = {
   description?: string;
   name?: string;
+  // Only the Sims tab sends this; absent means unchanged, '' clears
+  pronunciation?: string;
   voiceType?: string;
   voiceId?: string;
   voiceName?: string;
@@ -69,6 +71,7 @@ export class ParticipantsController {
         id: participantId,
         description,
         name,
+        ...('pronunciation' in body ? { pronunciation: body.pronunciation ?? '' } : {}),
       };
 
       this.ctx.participantRepository.updateParticipant(participant);

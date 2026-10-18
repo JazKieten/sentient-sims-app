@@ -101,6 +101,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       ctx.simStateCache.reset();
       // Plum's pending tool calls can never be answered now
       ctx.plum.onModDisconnected();
+      ctx.sceneFreshness.reset();
       notifyWebsocketStatus({
         type: 'mod',
         status: false,
@@ -139,7 +140,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       }
 
       if (parsedData.scene_control) {
-        onSceneControl(ctx.scenePlayback, parsedData.scene_control);
+        onSceneControl(ctx.scenePlayback, ctx.sceneFreshness, parsedData.scene_control);
         return;
       }
 

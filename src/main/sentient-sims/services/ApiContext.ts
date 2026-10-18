@@ -26,6 +26,7 @@ import { PlumService } from './PlumService';
 import { PlumRepository } from '../db/PlumRepository';
 import { InteractionRepository } from '../db/InteractionRepository';
 import { LocationRepository } from '../db/LocationRepository';
+import { OnlineLocationRepository } from '../db/OnlineLocationRepository';
 import { MemoryIndexRepository } from '../db/MemoryIndexRepository';
 import { MemoryRepository } from '../db/MemoryRepository';
 import { PaintingRepository } from '../db/PaintingRepository';
@@ -38,6 +39,7 @@ import { OpenAITokenCounter } from '../tokens/OpenAITokenCounter';
 import { TokenCounter } from '../tokens/TokenCounter';
 import { DefaultDescriptionService } from './DefaultDescriptionService';
 import { SimStateCache } from './SimStateCache';
+import { SceneFreshness } from './SceneFreshness';
 import { AIService } from './AIService';
 import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
@@ -274,6 +276,7 @@ export class ApiContext {
   private readonly _plum: PlumService;
 
   private readonly _plumRepository: PlumRepository;
+  private readonly _sceneFreshness: SceneFreshness;
   private readonly _openAIEmbeddingService: OpenAIEmbeddingService;
   private readonly _sentientSimsEmbeddingService: SentientSimsEmbeddingService;
   private readonly _geminiEmbeddingService: GeminiEmbeddingService;
@@ -295,6 +298,7 @@ export class ApiContext {
 
   // --- Repositories ---
   private readonly _locationRepository: LocationRepository;
+  private readonly _onlineLocationRepository: OnlineLocationRepository;
   private readonly _memoryRepository: MemoryRepository;
   private readonly _memoryIndexRepository: MemoryIndexRepository;
   private readonly _paintingRepository: PaintingRepository;
@@ -371,7 +375,8 @@ export class ApiContext {
     this._imageProviderConfigService = new ImageProviderConfigService(this);
     this._embeddingProviderConfigService = new EmbeddingProviderConfigService(this);
 
-    this._locationRepository = new LocationRepository(this._db);
+    this._onlineLocationRepository = new OnlineLocationRepository(this);
+    this._locationRepository = new LocationRepository(this._db, this._onlineLocationRepository);
     this._memoryRepository = new MemoryRepository(this._db);
     this._memoryIndexRepository = new MemoryIndexRepository(this._db);
     this._paintingRepository = new PaintingRepository(this._db);
@@ -424,6 +429,14 @@ export class ApiContext {
     this._simStateCache = new SimStateCache();
     // Plum, Claude in the game: the model loop over the mod's tools (core; director is a tier slot)
     this._plum = new PlumService(this);
+    // Whether a scene still describes the world when it is about to generate or air
+    this._sceneFreshness = new SceneFreshness({
+      maxAgeMs: () => this._settings.sceneEventMaxAgeMs,
+      stopPending: (judge) => this._scenePlaybackRegistry.stopPending(judge),
+    });
+    this._simStateCache.onReport((report) => {
+      this._sceneFreshness.onStateReport(report);
+    });
     this._openAIEmbeddingService = new OpenAIEmbeddingService(this);
     this._sentientSimsEmbeddingService = new SentientSimsEmbeddingService(this);
     this._geminiEmbeddingService = new GeminiEmbeddingService(this);
@@ -453,6 +466,11 @@ export class ApiContext {
         // No database loaded, or unknown ids - the renderer falls back to 'sim <id>'
         return {};
       }
+    });
+    // Which reported sims are pets: the state report is the only channel that says
+    // species, and the facts block needs it to call the family dog a dog
+    this._simStateCache.onReport((report) => {
+      this._semanticMemoryService.recordSpeciesFromReport(report);
     });
     this._memoryRepository.setGameDayProvider(() => {
       try {
@@ -576,6 +594,10 @@ export class ApiContext {
     return this._plumRepository;
   }
 
+  get sceneFreshness(): SceneFreshness {
+    return this._sceneFreshness;
+  }
+
   // Evaluated per access so changing the embedding provider (or setting a key/token at
   // runtime) takes effect immediately.
   get embedding(): EmbeddingService {
@@ -635,6 +657,10 @@ export class ApiContext {
 
   get locationRepository(): LocationRepository {
     return this._locationRepository;
+  }
+
+  get onlineLocationRepository(): OnlineLocationRepository {
+    return this._onlineLocationRepository;
   }
 
   get memoryRepository(): MemoryRepository {

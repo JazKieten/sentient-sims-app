@@ -5,6 +5,7 @@ import SpaceBetweenDiv from './components/SpaceBetweenDiv';
 import { useDebugMode } from './providers/DebugModeProvider';
 import { SendLogModal } from './components/SendLogModal';
 import { hasTierRoute } from './tiers/merge';
+import { useSnackBar } from './providers/SnackBarProvider';
 
 // DEV: the log viewer page
 const hasLogViewer = hasTierRoute('/logs');
@@ -13,9 +14,17 @@ export function SendLogButton() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const debugMode = useDebugMode();
+  const { showMessage } = useSnackBar();
 
   const handleClick = () => {
     setOpen(true);
+  };
+
+  const openLogFolder = async () => {
+    const error = await window.electron.openLogFolder();
+    if (error) {
+      showMessage(`Could not open the log folder: ${error}`, 'error');
+    }
   };
 
   return (
@@ -43,6 +52,18 @@ export function SendLogButton() {
                 Logs
               </Button>
             ) : null}
+            <Tooltip title="Open the folder with the app's log file (main.log)">
+              <Button
+                color="secondary"
+                variant="outlined"
+                sx={{ marginRight: 1 }}
+                onClick={() => {
+                  void openLogFolder();
+                }}
+              >
+                Open Log Folder
+              </Button>
+            </Tooltip>
             <Tooltip title="View Sims 4 Last Exceptions if they exist">
               <Button
                 color="secondary"

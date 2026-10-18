@@ -39,7 +39,8 @@ describe('interaction prefetch routes', () => {
     const prefetch = vi
       .spyOn(ctx.generationQueue, 'prefetch')
       .mockResolvedValue({ status: 'queued', pre_action_text: 'Alex waves' });
-    const play = vi.fn();
+    // play reports whether the scene aired; the claim route returns NOOP on false
+    const play = vi.fn(() => true);
     const claim = vi.spyOn(ctx.generationQueue, 'claim').mockResolvedValue({
       result: { status: InteractionEventStatus.GENERATED, text: 'Alex: Hi.' },
       play,

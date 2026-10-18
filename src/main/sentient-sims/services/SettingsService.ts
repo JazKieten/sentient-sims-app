@@ -44,6 +44,7 @@ import {
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
   defaultPlumModel,
+  defaultSceneEventMaxAgeMs,
 } from '../constants';
 import { TwitchStoredAuth } from '../models/TwitchStoredAuth';
 import { redactSettingValue } from '../util/redactSetting';
@@ -340,6 +341,10 @@ export function defaultStore(cwd?: string) {
         type: 'number',
         default: 3,
       },
+      [SettingsEnum.SCENE_EVENT_MAX_AGE_MS.toString()]: {
+        type: 'number',
+        default: 60000,
+      },
       [SettingsEnum.PLAYER_REPLY_MAX_TOKENS.toString()]: {
         type: 'number',
         // A full answer with its reasons is a paragraph, not a line: 400 tokens is
@@ -357,6 +362,10 @@ export function defaultStore(cwd?: string) {
         // A reply to the player may turn into an action ("you should go paint" gets the
         // answer AND, once the reply has aired, the walk to the easel) instead of arming a
         // desire for the next cognition tick
+        default: true,
+      },
+      [SettingsEnum.NON_CONTROLLABLE_SIMS_SPEAK.toString()]: {
+        type: 'boolean',
         default: true,
       },
       [SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD.toString()]: {
@@ -1333,6 +1342,13 @@ export class SettingsService {
     return Math.min(5, Math.max(1, Number.isFinite(raw) ? raw : 3));
   }
 
+  // How old a game event may be before its scene is dropped instead of aired. Clamped so a
+  // typo can neither drop every scene (generation alone takes 10-20 s) nor disable the gate.
+  get sceneEventMaxAgeMs(): number {
+    const raw = Number(this.get(SettingsEnum.SCENE_EVENT_MAX_AGE_MS));
+    return Math.min(300_000, Math.max(10_000, Number.isFinite(raw) ? raw : defaultSceneEventMaxAgeMs));
+  }
+
   // Player-facing replies: the actor's token budget when answering the player. Clamped so
   // a typo cannot cut a reply below a sentence or run past the reply's share of the window.
   get playerReplyMaxTokens(): number {
@@ -1349,13 +1365,23 @@ export class SettingsService {
     return this.get(SettingsEnum.CONVERSATION_ACTIONS_ENABLED) !== false;
   }
 
+  get nonControllableSimsSpeak(): boolean {
+    return this.get(SettingsEnum.NON_CONTROLLABLE_SIMS_SPEAK) !== false;
+  }
+
   get conversationActionScoreThreshold(): number {
     const raw = Number(this.get(SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD));
     return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
   }
 
-  get voiceInputProvider(): ApiType.OpenAI | ApiType.SentientSimsAI {
-    return this.get(SettingsEnum.VOICE_INPUT_PROVIDER) === ApiType.OpenAI ? ApiType.OpenAI : ApiType.SentientSimsAI;
+  // Anything unknown is the Sentient Sims AI server, so an older build's stored value
+  // never leaves a player without transcription
+  get voiceInputProvider(): ApiType.OpenAI | ApiType.SentientSimsAI | ApiType.ElevenLabs {
+    const stored = this.get(SettingsEnum.VOICE_INPUT_PROVIDER);
+    if (stored === ApiType.OpenAI || stored === ApiType.ElevenLabs) {
+      return stored;
+    }
+    return ApiType.SentientSimsAI;
   }
 
   get voiceInputEndpoint(): string {

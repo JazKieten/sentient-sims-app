@@ -17,10 +17,16 @@ import { ClockState } from '../models/ModLogWebsocketMessage';
 import { OnlineMappingType } from '../models/MappingSource';
 import { getAllBrowserWindows } from './browserWindows';
 import { DialogueLine, parseDialogueLines } from '../formatter/PromptFormatter';
-import { castVoicesForLines } from '../formatter/VoiceCasting';
+import {
+  applyPronunciations,
+  attachMoodDeliveryNotes,
+  castVoicesForLines,
+  NamePronunciation,
+} from '../formatter/VoiceCasting';
 import { SentientSim } from '../models/SentientSim';
 import { VoiceType } from '../models/VoiceType';
 import { consumePacedScene } from './pacedScenes';
+import { plainProviderError } from './providerErrorWords';
 
 function notifyAllWindows(message: string, ...args: unknown[]) {
   getAllBrowserWindows().forEach((wnd) => {
@@ -31,17 +37,22 @@ function notifyAllWindows(message: string, ...args: unknown[]) {
 }
 
 // O-6: dead-pipeline health signal. The renderer shows a badge; the game gets ONE
-// non-pausing toast (message, never error — an error notification pauses the clock)
+// non-pausing toast (message, never error — an error notification pauses the clock). Both
+// say what the error means; the provider's own text goes to main.log.
 export function notifyProviderHealth(health: { down: boolean; failures: number; lastError?: string }) {
-  notifyAllWindows('provider-health', health);
+  const plain = health.lastError ? plainProviderError(health.lastError).plain : undefined;
+  if (health.lastError) {
+    log.warn(`[ProviderHealth] ${health.failures} failures in a row, last: ${health.lastError}`);
+  }
+  notifyAllWindows('provider-health', { ...health, lastError: plain });
   if (health.down) {
     sendModNotification({
       type: ModWebsocketMessageType.NOTIFICATION,
       notification: {
         title: 'Sentient Sims',
-        message: `The AI provider has failed ${health.failures} times in a row${
-          health.lastError ? ` (${health.lastError})` : ''
-        }. Sims will keep playing on their own until it recovers.`,
+        message: `The AI provider has failed ${health.failures} times in a row.${
+          plain ? ` ${plain}` : ''
+        } Sims will keep playing on their own until it recovers.`,
         message_type: ModWebsocketNotificationType.MESSAGE,
       },
     });
@@ -158,6 +169,13 @@ export type PlayTTSVoiceOptions = {
   voiceType?: VoiceType;
   // Voice ids the user pinned to specific sims, keyed by sim id
   voiceOverrides?: Map<string, string>;
+  // Deliver each line in the speaker's current mood (an audio tag on v3/v4). Undefined
+  // means on; the ElevenLabs settings tab has the switch.
+  moodTags?: boolean;
+  // Every stored name pronunciation (not just the cast's), supplied only when the voicing
+  // model reads inline phonetics (Eleven v4); the voice reads these, the subtitle keeps
+  // the names
+  pronunciations?: NamePronunciation[];
 };
 
 // Monotonic dispatch counter: the renderer orders queued scenes by it, so a scene
@@ -182,6 +200,24 @@ export function playTTSLines(
   let castLines = lines;
   if (sims && sims.length > 0 && options?.voiceType) {
     castLines = castVoicesForLines(lines, sims, options.voiceType, options.voiceOverrides);
+    if (options.moodTags !== false) {
+      castLines = attachMoodDeliveryNotes(castLines, sims);
+      castLines
+        .filter((line) => line.deliveryNote)
+        .forEach((line) => {
+          log.debug(`[TTS] ${line.speaker} delivery: [${line.deliveryNote}]`);
+        });
+    }
+  }
+  // Outside the cast block: a narrator or an uncast line says names too
+  if (options?.pronunciations && options.pronunciations.length > 0) {
+    const before = castLines;
+    castLines = applyPronunciations(castLines, options.pronunciations);
+    castLines.forEach((line, i) => {
+      if (line.ttsText && line.ttsText !== (before[i].ttsText ?? before[i].text)) {
+        log.info(`[TTS] ${line.speaker} reads: ${line.ttsText}`);
+      }
+    });
   }
   notifyAllWindows('on-voice', castLines, {
     seq: ++voiceDispatchSeq,

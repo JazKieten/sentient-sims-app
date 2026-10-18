@@ -1,6 +1,8 @@
 import log from 'electron-log';
+import { isSilenceHallucination } from '../util/sttVocabulary';
 import { correctNames, correctPlaces } from '../util/nameCorrection';
 import { isPlaceholderName } from '../util/simAliases';
+import { ApiType } from '../models/ApiType';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
 import { SettingsEnum } from '../models/SettingsEnum';
@@ -154,18 +156,26 @@ export class VoiceInputService {
         return '';
       }
       const raw = await this.ctx.transcription.transcribe(audio, mimeType);
-      if (!raw) {
+      // What the model writes for silence ("Subs by www.zeoranger.co.uk", "Thank you for
+      // watching") was never said, and must not be addressed to a sim
+      if (isSilenceHallucination(raw)) {
+        if (raw) {
+          log.info(`Voice input heard silence as "${raw}"; dropped`);
+        }
         sendPlayerVoiceStatusToMod('error', 'Heard nothing');
         return '';
       }
-      // V-7 post-pass: snap misheard worlds ("Dale Sol Valley") and near-miss names to
-      // the game's spelling. The settings Test button goes through transcribe()
-      // directly and stays raw on purpose.
-      const text = correctNames(correctPlaces(raw), this.knownNames(), this.onLotNames());
+      const provider = this.ctx.settings.voiceInputProvider;
+      // V-7 post-pass for the Whisper-style providers: snap misheard worlds ("Dale Sol
+      // Valley") and near-miss names to the game's spelling. Scribe was told the spellings
+      // as keyterms and gets them right at the source, so its transcript is sent as heard.
+      // The settings Test button goes through transcribe() directly and stays raw.
+      const text =
+        provider === ApiType.ElevenLabs ? raw : correctNames(correctPlaces(raw), this.knownNames(), this.onLotNames());
       if (text !== raw) {
         log.info(`Voice input transcript corrected: "${raw}" -> "${text}"`);
       }
-      log.info(`Voice input transcript${this.captureMode === 'command' ? ' (command)' : ''}: ${text}`);
+      log.info(`Voice input transcript (${provider}${this.captureMode === 'command' ? ', command' : ''}): ${text}`);
       notifyAllWindows('voice-transcript', text);
       if (this.captureMode === 'command') {
         // V-8: an order, not talk — mapped to an offered action and dispatched; the

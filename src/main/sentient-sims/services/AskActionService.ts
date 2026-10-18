@@ -2,6 +2,7 @@ import log from 'electron-log';
 import { StageId } from '../pipeline/stages';
 import { ApiContext } from './ApiContext';
 import type { AutonomyServices } from '../tiers/autonomy';
+import type { AskActionPlayback } from '../tiers/types';
 import { AIActionType, actionTypeForEvent } from '../models/AIActionType';
 import { CognitionIntent, offeredActions, validateIntent } from '../models/CognitionIntent';
 import { InteractionEventResult, InteractionEventStatus, LLMExchange } from '../models/InteractionEventResult';
@@ -61,7 +62,7 @@ export class AskActionService {
   async tryAskedAction(
     event: SSEvent,
     options: DirectedGenerationOptions,
-    playbackOptions: { priority?: boolean; deferPlayback?: boolean; onPlaybackReady?: (play: () => void) => void } = {},
+    playbackOptions: AskActionPlayback = {},
   ): Promise<InteractionEventResult | undefined> {
     const playerLine = options.playerLine;
     if (!this.ctx.settings.askActionsEnabled || !playerLine || event.sentient_sims.length !== 1) {
@@ -359,7 +360,7 @@ Will you do it?`;
   private deliver(
     event: SSEvent,
     options: DirectedGenerationOptions,
-    playbackOptions: { priority?: boolean; deferPlayback?: boolean; onPlaybackReady?: (play: () => void) => void },
+    playbackOptions: AskActionPlayback,
     playerLine: { speaker: string; text: string },
     sim: SentientSim,
     decision: AskDecision,
@@ -433,6 +434,7 @@ Will you do it?`;
           priority: playbackOptions.priority,
         },
       );
+      return true;
     };
     if (playbackOptions.deferPlayback) {
       playbackOptions.onPlaybackReady?.(play);

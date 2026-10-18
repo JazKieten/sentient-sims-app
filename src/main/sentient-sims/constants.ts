@@ -111,6 +111,11 @@ export function sceneLineReadingHoldMs(text: string): number {
 // starting new AI calls past this point so a classic single-call fallback still fits.
 export const directedSceneBudgetMs = 50_000;
 
+// A scene whose game event is older than this when it would start generating or airing
+// is stale: the game has moved on. Round 1 only; later rounds are judged by what the game
+// has done since (SceneFreshness).
+export const defaultSceneEventMaxAgeMs = 60_000;
+
 export const rendererWebsocketPort = 25146;
 export const modWebsocketPort = 25145;
 export const appApiPort = 25148;

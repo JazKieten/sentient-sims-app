@@ -1,5 +1,8 @@
 import * as fs from 'fs';
 import { LocationEntity } from 'main/sentient-sims/db/entities/LocationEntity';
+import { LocationRepository } from 'main/sentient-sims/db/LocationRepository';
+import { OnlineLocation } from 'main/sentient-sims/db/OnlineLocationRepository';
+import { defaultLotDescription } from 'main/sentient-sims/descriptions/locationDescriptions';
 import { mockApiContext } from './util';
 
 function locationsAreEqual(a: LocationEntity, b: LocationEntity): boolean {
@@ -27,6 +30,15 @@ describe('LocationRepository', () => {
     });
     expect(defaultResult.is_generic).toBeFalsy();
     expect(defaultResult.name).toEqual('The Futures Past');
+  });
+
+  it('places a shipped lot in its neighborhood and leaves an unknown lot unplaced', () => {
+    const ctx = mockApiContext();
+    fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+    ctx.db.loadDatabase({ sessionId: '1237633', saveId: '2' });
+
+    expect(ctx.locationRepository.getLocation({ id: 254110336 }).neighborhood).toEqual('Mirage Canyon, Oasis Springs');
+    expect(ctx.locationRepository.getLocation({ id: 11111 }).neighborhood).toBeUndefined();
   });
 
   it('CRUD', () => {
@@ -67,5 +79,125 @@ describe('LocationRepository', () => {
       id: locationId,
     });
     expect(defaultResult.name).toEqual('The Futures Past');
+  });
+
+  describe('defaults', () => {
+    // Rattlesnake Juice ships a built-in description; 1593901060 (JF&S Clothiers) has none
+    const RATTLESNAKE = 254075440;
+    const CLOTHIERS = 1593901060;
+
+    function repository(saveId: string, online: Record<string, OnlineLocation> = {}) {
+      const ctx = mockApiContext();
+      fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+      ctx.db.loadDatabase({ sessionId: `loc-${saveId}`, saveId });
+      const shared = new Map(Object.entries(online));
+      return new LocationRepository(ctx.db, { peek: () => shared });
+    }
+
+    const sharedClothiers: OnlineLocation = {
+      id: CLOTHIERS,
+      name: 'JF&S Clothiers',
+      lot_type: 'Shop',
+      description: 'A narrow tailor shop lined with bolts of cloth.',
+    };
+
+    it('resolves the save, then the shared default, then the built-in, then the stock text', () => {
+      const repo = repository('20', { [CLOTHIERS]: sharedClothiers });
+
+      expect(repo.getLocation({ id: CLOTHIERS })).toMatchObject({ source: 'online', lot_type: 'Shop' });
+      expect(repo.getLocation({ id: RATTLESNAKE })).toMatchObject({ source: 'built-in', lot_type: 'Bar' });
+      expect(repo.getLocation({ id: 4242 })).toMatchObject({ source: 'stock', is_generic: true });
+
+      repo.updateLocation({ id: CLOTHIERS, name: 'JF&S Clothiers', lot_type: 'Shop', description: 'My own words.' });
+      const own = repo.getLocation({ id: CLOTHIERS });
+      expect(own).toMatchObject({ source: 'save', description: 'My own words.' });
+      expect(own.default?.description).toEqual(sharedClothiers.description);
+
+      // Restore to Default
+      repo.deleteLocation({ id: CLOTHIERS });
+      expect(repo.getLocation({ id: CLOTHIERS }).description).toEqual(sharedClothiers.description);
+    });
+
+    it('a shared default beats the built-in one', () => {
+      const shared = { ...sharedClothiers, id: RATTLESNAKE, name: 'Rattlesnake Juice', lot_type: 'Bar' };
+      const repo = repository('21', { [RATTLESNAKE]: shared });
+      expect(repo.getLocation({ id: RATTLESNAKE })).toMatchObject({
+        source: 'online',
+        description: shared.description,
+      });
+    });
+
+    it('treats a stored row still on the stock text as no row', () => {
+      const repo = repository('22', { [CLOTHIERS]: sharedClothiers });
+      repo.updateLocation({
+        id: CLOTHIERS,
+        name: 'JF&S Clothiers',
+        lot_type: 'Residence',
+        description: defaultLotDescription,
+      });
+      expect(repo.getLocation({ id: CLOTHIERS })).toMatchObject({ source: 'online', lot_type: 'Shop' });
+
+      repo.updateLocation({
+        id: 4243,
+        name: 'Laguna del Abrazo',
+        lot_type: 'Residence',
+        description: defaultLotDescription,
+      });
+      expect(repo.getLocation({ id: 4243 })).toMatchObject({
+        source: 'stock',
+        is_generic: true,
+        name: 'Laguna del Abrazo',
+      });
+    });
+
+    it('a generated description yields to a default; the player editing it makes it theirs', () => {
+      // Newcrest ships empty, so no built-in describes it
+      const FERN_PARK = 3137142788;
+      const shared = new Map<string, OnlineLocation>();
+      const ctx = mockApiContext();
+      fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
+      ctx.db.loadDatabase({ sessionId: 'loc-23', saveId: '23' });
+      const repo = new LocationRepository(ctx.db, { peek: () => shared });
+      expect(
+        repo.setDescriptionIfGeneric(repo.getLocation({ id: FERN_PARK }), 'An AI guess.', 'Fern Park', 'Residential'),
+      ).toBeTruthy();
+      expect(repo.getLocation({ id: FERN_PARK })).toMatchObject({ source: 'generated', lot_type: 'Residential' });
+
+      // The shared default lands later: it replaces the guess without anyone pressing anything
+      shared.set(String(FERN_PARK), { ...sharedClothiers, id: FERN_PARK });
+      const later = repo;
+      expect(later.getLocation({ id: FERN_PARK })).toMatchObject({ source: 'online' });
+
+      later.updateLocation({
+        id: FERN_PARK,
+        name: 'Fern Park',
+        lot_type: 'Residential',
+        description: 'An AI guess, edited.',
+      });
+      expect(later.getLocation({ id: FERN_PARK })).toMatchObject({ source: 'save' });
+    });
+
+    it('never generates over a default or a description a person wrote', () => {
+      const repo = repository('24', { [CLOTHIERS]: sharedClothiers });
+      expect(repo.setDescriptionIfGeneric(repo.getLocation({ id: CLOTHIERS }), 'An AI guess.')).toBeFalsy();
+      expect(repo.setDescriptionIfGeneric(repo.getLocation({ id: RATTLESNAKE }), 'An AI guess.')).toBeFalsy();
+
+      repo.updateLocation({ id: 4244, name: 'Den', lot_type: 'Hideout', description: 'Typed by hand.' });
+      expect(repo.setDescriptionIfGeneric(repo.getLocation({ id: 4244 }), 'An AI guess.')).toBeFalsy();
+    });
+
+    it('keeps a lot type a person chose', () => {
+      const repo = repository('25');
+      repo.updateLocation({ id: 4245, name: 'Den', lot_type: 'Hideout', description: '' });
+      repo.setDescriptionIfGeneric(repo.getLocation({ id: 4245 }), 'An AI guess.', undefined, 'Residence');
+      expect(repo.getLocation({ id: 4245 }).lot_type).toEqual('Hideout');
+    });
+
+    it('lists every source once, with the built-in names kept', () => {
+      const repo = repository('26', { [CLOTHIERS]: sharedClothiers });
+      const all = repo.getAllLocations();
+      expect(all.filter((location) => location.id === CLOTHIERS)).toHaveLength(1);
+      expect(all.find((location) => location.id === 3996254301)?.name).toEqual('The Inked Inlet');
+    });
   });
 });

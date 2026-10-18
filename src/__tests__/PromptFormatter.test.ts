@@ -347,6 +347,16 @@ describe('Output', () => {
       expect(lines[2].voiceId).toBeUndefined();
     });
 
+    it('casts the same voice whatever mood the sim is in', () => {
+      const line = [{ speaker: 'Ricky Rickerson', text: 'Same voice all day.' }];
+      const calm = castVoicesForLines(line, [{ ...sims[0], moods: [] }], VoiceType.ElevenLabs);
+      const angry = castVoicesForLines(line, [{ ...sims[0], moods: ['Mood_Angry'] }], VoiceType.ElevenLabs);
+      const flirty = castVoicesForLines(line, [{ ...sims[0], moods: ['Mood_Flirty'] }], VoiceType.ElevenLabs);
+      expect(calm[0].voiceId).toBeDefined();
+      expect(angry[0].voiceId).toEqual(calm[0].voiceId);
+      expect(flirty[0].voiceId).toEqual(calm[0].voiceId);
+    });
+
     it('prefers a user pinned voice over the automatic cast', () => {
       const lines = castVoicesForLines(
         [

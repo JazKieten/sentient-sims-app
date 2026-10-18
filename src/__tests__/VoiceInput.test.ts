@@ -61,7 +61,7 @@ import { VoiceInputService } from 'main/sentient-sims/services/VoiceInputService
 
 import { defaultVoiceInputHotkeyFor } from 'main/sentient-sims/constants';
 
-import { voiceHotkeyLabel, voiceHotkeyPresets } from 'main/sentient-sims/models/VoiceHotkeyPresets';
+import { voiceHotkeyFromKey, voiceHotkeyLabel, voiceHotkeyPresets } from 'main/sentient-sims/models/VoiceHotkeyPresets';
 
 import { SentientSimsAIService } from 'main/sentient-sims/services/SentientSimsAIService';
 
@@ -148,6 +148,18 @@ describe('VoiceHotkeyService', () => {
 });
 
 describe('voice hotkey presets', () => {
+  it('spells a captured key the way the overlay parses it', () => {
+    const key = (code: string, mods: Partial<Parameters<typeof voiceHotkeyFromKey>[0]> = {}) =>
+      voiceHotkeyFromKey({ code, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
+    expect(key('KeyV', { altKey: true })).toBe('Alt+V');
+    expect(key('Digit7', { ctrlKey: true, shiftKey: true })).toBe('Ctrl+Shift+7');
+    expect(key('F7')).toBe('F7');
+    expect(key('Numpad0')).toBe('Numpad0');
+    expect(key('Space', { ctrlKey: true, altKey: true })).toBe('Ctrl+Alt+Space');
+    expect(key('ControlLeft', { ctrlKey: true })).toBeUndefined();
+    expect(key('MediaPlayPause')).toBeUndefined();
+  });
+
   it('defaults to a chord macOS leaves alone on a Mac', () => {
     expect(defaultVoiceInputHotkeyFor(true)).toBe('Alt+V');
     expect(defaultVoiceInputHotkeyFor(false)).toBe('Ctrl+Space');
@@ -456,12 +468,15 @@ class FakeHotkeyService extends VoiceHotkeyService {
 
 // voiceCommand: false is a build without the autonomy tier, which has nobody to carry an
 // order out (ApiContext.ext.voiceCommand stays empty)
-function voiceInputContext(options?: { enabled?: boolean; voiceCommand?: boolean }) {
+function voiceInputContext(options?: { enabled?: boolean; voiceCommand?: boolean; names?: string[] }) {
   const { settingsService } = mockEnvironment();
   settingsService.set(SettingsEnum.VOICE_INPUT_ENABLED, options?.enabled ?? true);
   const transcribe = vi.fn();
   const ext = options?.voiceCommand === false ? {} : { voiceCommand: { handleCommand: vi.fn() } };
-  const ctx = { settings: settingsService, transcription: { transcribe }, ext } as unknown as ApiContext;
+  const simStateCache = {
+    getReport: () => ({ sims: (options?.names ?? []).map((name) => ({ sim_name: name, sims: [] })) }),
+  };
+  const ctx = { settings: settingsService, transcription: { transcribe }, ext, simStateCache } as unknown as ApiContext;
   const hotkey = new FakeHotkeyService();
   const service = new VoiceInputService(ctx, hotkey);
   service.initialize();
@@ -648,5 +663,137 @@ describe('VoiceInputService', () => {
     service.shutdown();
 
     expect(notifyMocks.sendPlayerVoiceStatusToMod).not.toHaveBeenCalledWith('cancelled');
+  });
+
+  it('drops what the model writes for silence instead of addressing a sim with it', async () => {
+    const { service, transcribe } = voiceInputContext();
+    transcribe.mockResolvedValue('Subs by www.zeoranger.co.uk');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('');
+    expect(notifyMocks.sendPlayerVoiceStatusToMod).toHaveBeenCalledWith('error', 'Heard nothing');
+    expect(notifyMocks.sendPlayerVoiceMessageToMod).not.toHaveBeenCalled();
+  });
+
+  it('snaps near-miss names for the Whisper-style providers', async () => {
+    const { service, transcribe } = voiceInputContext({ names: ['Wren Calloway'] });
+    transcribe.mockResolvedValue('Hi, Ren, how are you?');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('Hi, Wren, how are you?');
+    expect(notifyMocks.sendPlayerVoiceMessageToMod).toHaveBeenCalledWith('Hi, Wren, how are you?');
+  });
+
+  it('sends a Scribe transcript as heard: the keyterms already carried the spellings', async () => {
+    const { service, transcribe, settingsService } = voiceInputContext({ names: ['Wren Calloway'] });
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+    transcribe.mockResolvedValue('Hi, Ren, how are you?');
+
+    const text = await service.handleAudio(bigAudio());
+
+    expect(text).toBe('Hi, Ren, how are you?');
+  });
+});
+
+function scribeContext(onLotNames: string[] = [], knownNames: string[] = []) {
+  const { settingsService } = mockEnvironment();
+  settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+  settingsService.elevenLabsKey = 'xi-test-key';
+  const ctx = {
+    settings: settingsService,
+    simStateCache: {
+      getReport: () => ({
+        sims: onLotNames.map((name) => ({ sim_name: name, sims: [] })),
+        known_sims: knownNames.map((name) => ({ name })),
+      }),
+    },
+    participantRepository: { getAllParticipants: () => [] },
+    locationRepository: { getAllLocations: () => [] },
+  } as unknown as ApiContext;
+  return { settingsService, service: new TranscriptionService(ctx) };
+}
+
+describe('TranscriptionService on ElevenLabs Scribe', () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    openaiMocks.create.mockReset();
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts the audio to speech-to-text with the names in play as keyterms', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ text: '  Anker, how are you?  ' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const { settingsService, service } = scribeContext(['Anker Solheim'], ['Halley Calloway']);
+    settingsService.set(SettingsEnum.VOICE_INPUT_LANGUAGE, 'English');
+
+    const text = await service.transcribe(new Uint8Array([1, 2, 3, 4]).buffer, 'audio/webm;codecs=opus');
+
+    expect(text).toBe('Anker, how are you?');
+    expect(openaiMocks.create).not.toHaveBeenCalled();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.elevenlabs.io/v1/speech-to-text');
+    expect((init?.headers as Record<string, string>)['xi-api-key']).toBe('xi-test-key');
+    const body = init?.body as FormData;
+    expect(body.get('model_id')).toBe('scribe_v2');
+    expect(body.get('language_code')).toBe('en');
+    const terms = body.getAll('keyterms');
+    expect(terms.slice(0, 4)).toEqual(['Anker Solheim', 'Anker', 'Halley Calloway', 'Halley']);
+    expect(terms).toContain('Del Sol Valley');
+    expect(terms.length).toBeLessThanOrEqual(100);
+  });
+
+  it('refuses without an ElevenLabs key instead of calling the API', async () => {
+    const { settingsService, service } = scribeContext();
+    settingsService.elevenLabsKey = '';
+
+    await expect(service.transcribe(new ArrayBuffer(16))).rejects.toThrow(TranscriptionError);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await service.healthCheck()).toEqual({ error: 'not working, ElevenLabs API key is not set' });
+  });
+
+  it('wraps an API failure in TranscriptionError with its message', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }), {
+        status: 401,
+      }),
+    );
+    const { service } = scribeContext();
+
+    const failure = service.transcribe(new ArrayBuffer(16));
+
+    await expect(failure).rejects.toThrow(TranscriptionError);
+    await expect(failure).rejects.toThrow('Invalid API key');
+  });
+
+  it('health-checks with the key against /user', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+    const { service } = scribeContext();
+
+    expect(await service.healthCheck()).toEqual({ status: 'OK' });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.elevenlabs.io/v1/user');
+  });
+});
+
+describe('voice input provider setting', () => {
+  it('accepts ElevenLabs and falls back to Sentient Sims AI for anything else', () => {
+    const { settingsService } = mockEnvironment();
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.ElevenLabs);
+    expect(settingsService.voiceInputProvider).toBe(ApiType.ElevenLabs);
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.OpenAI);
+    expect(settingsService.voiceInputProvider).toBe(ApiType.OpenAI);
+    settingsService.set(SettingsEnum.VOICE_INPUT_PROVIDER, 'kokoro');
+    expect(settingsService.voiceInputProvider).toBe(ApiType.SentientSimsAI);
   });
 });

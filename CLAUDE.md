@@ -231,9 +231,16 @@ util/lotDescription.placeDescriptionProblems (1-4 sentences, "Mt." is not a sent
 no-people scrub; edit the file directly (the lot sheet it was first generated from is retired).
 "Auto-Generate Description" on the Locations page: POST /locations/:id/describe (LocationsController.describeLocation
 -> DefaultDescriptionService.describeLocation, the same facts and writer as the fire-and-forget fallback) returns
-{description, facts, lotType} for the editor and stores nothing (the page fills Lot Type when it is empty or the
-Residence placeholder); 409 until the lot has been reported this app run (SimStateCache.getLotBlock keeps every
-reported lot block by lot id). The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
+{description, versions, facts, lotType} for the editor and stores nothing (the page fills Lot Type when it is empty or
+the Residence placeholder); 409 until the lot has been reported this app run (SimStateCache.getLotBlock keeps every
+reported lot block by lot id). Since 2026-10-18 a press writes THREE drafts in parallel, each through the gate, and
+`versions` holds them in util/lotDescription.orderDrafts order (first-try passes before retries, then the card closest
+to four sentences; description is versions[0]); a "Draft 1 of 3" stepper under the editor's Description field swaps
+them and asks before dropping an edit. There is NO ranking call: checked in LotTraitExperiment's rank mode (14 lots,
+3 judged drafts each): llama-3.3-70b ranking with the card rules matched a sonnet-4.5 blind judge's top 36% / 50%
+depending on the order shown vs 43% for the first draft, took position B 19 of 27 times, and the judge agreed with its
+own other-order pick on only 50% of lots - the drafts are near-equal, so the player chooses. The fallback writer still
+asks for one draft. The mod's lot block carries the zone record's `description` (EA blurb), `bedrooms`,
 `bathrooms`, `lot_traits` (ss_lot_state.zone_record_facts; the game's names, zoneModifier_lotTrait_FreshAir is
 Bracing Breezes, and they only ARRIVE from mod builds of 2026-10-17: before that the mod asked for a resource type
 that does not exist; lot challenges such as Heist Havoc ride the same list and are repeated under `lot_challenges`;

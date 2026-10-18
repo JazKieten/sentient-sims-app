@@ -18,7 +18,7 @@ import ChairOutlinedIcon from '@mui/icons-material/ChairOutlined';
 import { useCallback, useEffect, useState } from 'react';
 import log from 'electron-log';
 import { appApiUrl } from 'main/sentient-sims/constants';
-import type { LotWordRow } from 'main/sentient-sims/services/LotWordsService';
+import type { CheckedLot, LotWordRow } from 'main/sentient-sims/services/LotWordsService';
 import type { PlayerFurnishingWords } from 'main/sentient-sims/util/lotFurnishings';
 import AppCard from '../AppCard';
 import { useSnackBar } from '../providers/SnackBarProvider';
@@ -42,10 +42,12 @@ function wordsOf(drafts: Record<string, Draft>): PlayerFurnishingWords {
   return words;
 }
 
-async function loadRows(): Promise<LotWordRow[] | undefined> {
+type LotWords = { rows: LotWordRow[]; lots: CheckedLot[] };
+
+async function loadRows(): Promise<LotWords | undefined> {
   try {
     const response = await fetch(`${appApiUrl}/lot-words`);
-    return ((await response.json()) as { rows: LotWordRow[] }).rows;
+    return (await response.json()) as LotWords;
   } catch (err) {
     log.error('Could not load lot words', err);
     return undefined;
@@ -55,12 +57,14 @@ async function loadRows(): Promise<LotWordRow[] | undefined> {
 export default function LotWordsCard() {
   const { showMessage } = useSnackBar();
   const [rows, setRows] = useState<LotWordRow[]>([]);
+  const [lots, setLots] = useState<CheckedLot[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [saving, setSaving] = useState(false);
 
-  const show = useCallback((fresh: LotWordRow[]) => {
-    setRows(fresh);
-    setDrafts(Object.fromEntries(fresh.map((row) => [row.name, draftOf(row)])));
+  const show = useCallback((fresh: LotWords) => {
+    setRows(fresh.rows);
+    setLots(fresh.lots);
+    setDrafts(Object.fromEntries(fresh.rows.map((row) => [row.name, draftOf(row)])));
   }, []);
 
   const refresh = useCallback(() => {
@@ -86,11 +90,11 @@ export default function LotWordsCard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ words: wordsOf(drafts) }),
       });
-      const body = (await response.json()) as { rows?: LotWordRow[]; error?: string };
-      if (!response.ok || !body.rows) {
+      const body = (await response.json()) as Partial<LotWords> & { error?: string };
+      if (!response.ok || !body.rows || !body.lots) {
         throw new Error(body.error ?? `HTTP ${response.status}`);
       }
-      show(body.rows);
+      show({ rows: body.rows, lots: body.lots });
       showMessage('Lot words saved', 'success');
     } catch (err) {
       showMessage(`Could not save lot words: ${err instanceof Error ? err.message : String(err)}`, 'error');
@@ -101,9 +105,9 @@ export default function LotWordsCard() {
 
   const copyForClaude = async () => {
     const words = wordsOf(drafts);
-    const lots = Object.fromEntries(rows.map((row) => [row.name, row.lots]));
+    const seenOn = Object.fromEntries(rows.map((row) => [row.name, row.lots]));
     const handover = Object.fromEntries(
-      Object.entries(words).map(([name, word]) => [name, { words: word, lots: lots[name] ?? [] }]),
+      Object.entries(words).map(([name, word]) => [name, { words: word, lots: seenOn[name] ?? [] }]),
     );
     await navigator.clipboard.writeText(JSON.stringify(handover, null, 2));
     showMessage(`Copied ${Object.keys(handover).length} lot words`, 'success');
@@ -125,7 +129,11 @@ export default function LotWordsCard() {
             <TableRow>
               <TableCell>Game name</TableCell>
               <TableCell>Seen on</TableCell>
-              <TableCell>One</TableCell>
+              <TableCell>
+                <Tooltip title="As it reads in a sentence, with a or an">
+                  <span>One</span>
+                </Tooltip>
+              </TableCell>
               <TableCell>More than one</TableCell>
               <TableCell padding="checkbox">
                 <Tooltip title="Say nothing about it, like walls and lamps">
@@ -181,6 +189,18 @@ export default function LotWordsCard() {
           </TableBody>
         </Table>
       )}
+      {lots.length > 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+          Checked this run:{' '}
+          {lots
+            .map((lot) =>
+              lot.missing === 0
+                ? `${lot.name} (every item has words)`
+                : `${lot.name} (${lot.missing} ${lot.missing === 1 ? 'item needs' : 'items need'} words)`,
+            )
+            .join(', ')}
+        </Typography>
+      ) : null}
       <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
         <Button
           variant="contained"

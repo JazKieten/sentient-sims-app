@@ -55,6 +55,20 @@ describe('/lot-words', () => {
     ]);
   });
 
+  it('says which lots were checked and how many of their items have no words', async () => {
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 2,
+      lot: { zone_id: 8, lot_id: '1', lot_name: 'Studio PBP', venue: 'venue_lounge', furnishings: ['object_violin'] },
+      sims: [],
+    } as unknown as SimStateReport);
+    const response = await fetch(`${apiUrl}/lot-words`);
+    expect(((await response.json()) as { lots: unknown }).lots).toEqual([
+      { name: 'Pectoral Fitness', missing: 2 },
+      { name: 'Studio PBP', missing: 0 },
+    ]);
+  });
+
   it('saves trimmed words, drops a row with none, and the facts use them', async () => {
     const response = await fetch(`${apiUrl}/lot-words`, {
       method: 'PUT',

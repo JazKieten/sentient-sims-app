@@ -19,9 +19,16 @@ import {
 /** One row of the panel: a tuning name, its saved words (absent when unmapped), the lots it is on. */
 export type LotWordRow = { name: string; word?: FurnishingWord | null; lots: string[] };
 
+/** A lot visited this run and how many of its furnishings have no words. */
+export type CheckedLot = { name: string; missing: number };
+
 function namesOn(lot: LotBlock): string[] {
   const inRooms = (lot.rooms ?? []).flatMap((room) => Object.keys(room.kinds));
   return Array.from(new Set([...lotFurnishingNames(lot), ...inRooms]));
+}
+
+function lotLabel(lot: LotBlock): string {
+  return lot.lot_name || `lot ${lot.lot_id ?? '?'}`;
 }
 
 // Trimmed; a word with no singular is dropped, a missing plural repeats the singular
@@ -82,13 +89,24 @@ export class LotWordsService {
     return this.words;
   }
 
+  /** Every lot visited this run, A to Z, so a lot with nothing missing still shows it was checked. */
+  checkedLots(): CheckedLot[] {
+    return this.ctx.simStateCache
+      .getLotBlocks()
+      .map((lot) => ({
+        name: lotLabel(lot),
+        missing: furnishingWords(namesOn(lot), { isHome: false }).unmapped.length,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Unmapped names first, then saved ones, each A to Z. */
   rows(): LotWordRow[] {
     const lotsByName = new Map<string, Set<string>>();
     const unmapped = new Set<string>();
     this.ctx.simStateCache.getLotBlocks().forEach((lot) => {
       const names = namesOn(lot);
-      const label = lot.lot_name || `lot ${lot.lot_id ?? '?'}`;
+      const label = lotLabel(lot);
       names.forEach((name) => {
         lotsByName.set(name, (lotsByName.get(name) ?? new Set()).add(label));
       });

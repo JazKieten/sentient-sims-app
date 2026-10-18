@@ -81,14 +81,16 @@ class DevRoutes {
   };
 
   getLotWords = (_req: Request, res: Response) => {
-    res.json({ rows: devOf(this.ctx).lotWords.rows() });
+    const { lotWords } = devOf(this.ctx);
+    res.json({ rows: lotWords.rows(), lots: lotWords.checkedLots() });
   };
 
   @CatchErrors()
   saveLotWords = (req: Request, res: Response) => {
     const body = req.body as { words?: unknown };
-    const words = devOf(this.ctx).lotWords.save(body.words);
-    res.json({ words, rows: devOf(this.ctx).lotWords.rows() });
+    const { lotWords } = devOf(this.ctx);
+    const words = lotWords.save(body.words);
+    res.json({ words, rows: lotWords.rows(), lots: lotWords.checkedLots() });
   };
 }
 

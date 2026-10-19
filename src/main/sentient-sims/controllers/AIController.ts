@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import log from 'electron-log';
 import { InteractionEvents, SSEventType } from '../models/InteractionEvents';
 import { sendChatGeneration } from '../util/notifyRenderer';
+import { rememberSims } from '../util/knownSims';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { InteractionEventStatus } from '../models/InteractionEventResult';
 import { BuffEventRequest, BuffDescriptionRequest, ClassificationRequest } from '../models/OpenAIRequestBuilder';
@@ -62,7 +63,11 @@ export class AIController {
     // behind other scenes, and it is dropped rather than aired once the game has moved on
     const isGameEvent = event.event_type === SSEventType.INTERACTION || event.event_type === SSEventType.CONTINUE;
     const eventAt = Date.now();
+
     // (an older mod may post an event without a cast; Array.isArray keeps that alive)
+    if (Array.isArray(event.sentient_sims)) {
+      rememberSims(event.sentient_sims);
+    }
     if (isGameEvent && Array.isArray(event.sentient_sims)) {
       this.ctx.sceneFreshness.recordEvent(
         event.sentient_sims.map((sim) => ({ simId: sim.sim_id, name: sim.name })),

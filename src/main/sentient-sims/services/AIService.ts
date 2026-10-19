@@ -30,6 +30,7 @@ import {
 } from '../util/notifyRenderer';
 import { VoiceType, voiceTypeForTTS } from '../models/VoiceType';
 import { markScenePaced } from '../util/pacedScenes';
+import { knownSim } from '../util/knownSims';
 import { applySimAliasNames } from '../util/simAliases';
 import { canSpeak } from '../util/speechCapability';
 import { SceneAbortedError } from '../exceptions/SceneAbortedError';
@@ -500,6 +501,24 @@ export function toPrimaryInteractionEvent<T extends SSEvent>(event: T): T {
 // "Bella Goth (to self)" -> "Bella Goth": the tag the mod strips from a monologue speaker
 export function stripToSelf(speaker: string): string {
   return speaker.replace(/\s*\(to self\)\s*$/i, '');
+}
+
+// The cast plus the speaker of every line that names a sim the cast lacks (a whisper's
+// thought arrives with no cast at all), so the line takes that sim's voice, not the default
+export function withKnownSpeakers(lines: DialogueLine[], sims?: SentientSim[]): SentientSim[] | undefined {
+  const cast = [...(sims ?? [])];
+  lines.forEach((line) => {
+    if (!line.simId || cast.some((sim) => sim.sim_id === line.simId)) {
+      return;
+    }
+    const sim = knownSim(line.simId);
+    if (sim) {
+      cast.push(sim);
+    } else {
+      log.warn(`[TTS] ${line.speaker} (sim ${line.simId}) has not been seen in a game event: default voice`);
+    }
+  });
+  return cast.length > 0 ? cast : sims;
 }
 
 export function formatPreviouslyInScene(memories: Array<{ role: string; content: string }>): string {
@@ -3051,7 +3070,8 @@ Write me a buff description based on the conversation so that ${buffRequest.name
       participantSimIds?: string[];
     },
   ) {
-    playTTSLines(lines, sims, { ...options, ...this.voiceCastingOptions(sims) });
+    const cast = withKnownSpeakers(lines, sims);
+    playTTSLines(lines, cast, { ...options, ...this.voiceCastingOptions(cast) });
   }
 
   // Which provider's voices to cast per sim, plus the voices the user pinned to these

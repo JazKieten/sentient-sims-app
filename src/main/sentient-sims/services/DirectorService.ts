@@ -24,12 +24,20 @@ import log from 'electron-log';
 import { ApiContext } from './ApiContext';
 import { ActionOutcomeRepository } from '../db/ActionOutcomeRepository';
 import { getModClockState } from '../websocketServer';
+import type { SimStateEntry } from '../models/SimStateReport';
+import { isAsleep } from './CognitionService';
 import type { DirectorSlot } from '../tiers/types';
 import type { PlumService } from './PlumService';
 
 export const TICK_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const EMERGENCY = /fire|death|grim|reaper|burn/i;
+// A director turn the API refused (400: a bad tool schema, a rejected parameter) is re-sent
+// unchanged every minute otherwise (2026-10-17 15:53-15:55); hold this long, logged once
+export const API_REFUSAL_BACKOFF_MS = 10 * 60_000;
+// With the whole cast asleep and nothing armed, one game_time wake at this hour (the report
+// carries no sleep_until) instead of a planning turn a minute to say "everyone is down"
+export const CAST_WAKE_AT = '06:30';
 
 export type DirectorDeps = {
   outcomes?: Pick<ActionOutcomeRepository, 'isLoaded' | 'list'>;
@@ -69,6 +77,14 @@ export class DirectorService implements DirectorSlot {
   // The last "triggers armed" hold logged, so the minute tick does not repeat it
   private lastHold: string | undefined;
 
+  // An API 400 on a director turn holds the tick until this time (skipReason names it)
+  private backoffUntil: number | undefined;
+
+  private backoffReason: string | undefined;
+
+  // The game_time wake this service armed itself for a sleeping cast
+  private sleepWakeId: string | undefined;
+
   constructor(ctx: ApiContext, deps: DirectorDeps = {}) {
     this.ctx = ctx;
     this.deps = deps;
@@ -87,6 +103,8 @@ export class DirectorService implements DirectorSlot {
     this.ticks = 0;
     this.lastDigest = undefined;
     this.suspended = undefined;
+    this.backoffUntil = undefined;
+    this.sleepWakeId = undefined;
     const schedule = this.deps.setInterval ?? setInterval;
     this.timer = schedule(() => {
       void this.tick();
@@ -152,6 +170,9 @@ export class DirectorService implements DirectorSlot {
     if (actionKeys.includes('call_firefighter') || situations.some((name) => EMERGENCY.test(name))) {
       return 'an emergency on the lot (fire or death)';
     }
+    if (this.backoffUntil !== undefined && this.now() < this.backoffUntil) {
+      return `last turn was refused by the API (${this.backoffReason ?? 'bad request'})`;
+    }
     const windowStart = this.now() - HOUR_MS;
     this.tickTimes = this.tickTimes.filter((at) => at > windowStart);
     if (this.tickTimes.length >= this.ctx.settings.plumDirectorMaxTicksPerHour) {
@@ -160,8 +181,20 @@ export class DirectorService implements DirectorSlot {
     return undefined;
   }
 
+  // The household Sims the report carries (an NPC riding the report is set dressing)
+  private householdSims(): SimStateEntry[] {
+    const sims = this.ctx.simStateCache.getReport()?.sims ?? [];
+    return sims.filter((sim) => sim.is_household !== false);
+  }
+
+  // What the tick compares to decide whether anything happened: each household Sim's sleep,
+  // running interaction and mood, the newest memory and the newest graded outcome. Never the
+  // report's seq, which bumps every 5 s and made the unchanged-digest hold dead (2026-10-17:
+  // a full planning turn a minute with the whole cast asleep).
   digest(): string {
-    const report = this.ctx.simStateCache.getReport();
+    const sims = this.householdSims()
+      .map((sim) => `${sim.sim_id}|${isAsleep(sim) ? 1 : 0}|${sim.activity?.running ?? ''}|${sim.self?.mood ?? ''}`)
+      .join(',');
     let memoryId = '';
     try {
       const memories = this.ctx.memoryRepository.getMemories();
@@ -177,7 +210,38 @@ export class DirectorService implements DirectorSlot {
     } catch {
       outcomeId = '';
     }
-    return `${report?.seq ?? ''}|${memoryId}|${outcomeId}`;
+    return `${sims}#${memoryId}#${outcomeId}`;
+  }
+
+  // The whole cast is asleep and nothing of theirs is live: arm ONE game_time wake for the
+  // morning and hold until it fires (the wake runs the tick past every hold). Undefined when
+  // somebody is up, when another trigger is live, or when the report has no household.
+  private sleepHold(): string | undefined {
+    const cast = this.householdSims();
+    if (cast.length === 0 || !cast.every((sim) => isAsleep(sim))) {
+      return undefined;
+    }
+    const live = this.plum.wake.list({ live: true });
+    const ours = live.find((trigger) => trigger.id === this.sleepWakeId);
+    if (live.length > (ours ? 1 : 0)) {
+      return undefined;
+    }
+    let at = CAST_WAKE_AT;
+    if (ours) {
+      at = `${String(ours.hour ?? 0).padStart(2, '0')}:${String(ours.minute ?? 0).padStart(2, '0')}`;
+    } else {
+      try {
+        const trigger = this.plum.wake.set({
+          kind: 'game_time',
+          at,
+          note: 'The household is waking up: look at the lot and plan the next script.',
+        });
+        this.sleepWakeId = trigger.id;
+      } catch (error) {
+        log.warn('[Director] could not arm the morning wake', error);
+      }
+    }
+    return `holding: cast asleep until ${at}`;
   }
 
   async tick(): Promise<void> {
@@ -197,9 +261,18 @@ export class DirectorService implements DirectorSlot {
     const wake = this.pendingWake;
     // With triggers armed the arc runs itself (PlumWake pushes the beats); the director only
     // runs from wakes. The interval then catches a stalled arc: nothing armed, digest moved.
-    const armed = this.plum.wake.list().length;
-    if (!wake && this.ticks > 0 && armed > 0) {
-      const hold = `holding: ${armed} trigger${armed === 1 ? '' : 's'} armed`;
+    // Only triggers that can fire count (a frozen script's inert beats held the director for
+    // five minutes at a time on 2026-10-17); a sleeping cast with nothing live is one
+    // morning wake and a hold, not a turn a minute.
+    let hold: string | undefined;
+    if (!wake) {
+      hold = this.sleepHold();
+      const armed = this.plum.wake.list({ live: true }).length;
+      if (!hold && this.ticks > 0 && armed > 0) {
+        hold = `holding: ${armed} trigger${armed === 1 ? '' : 's'} armed`;
+      }
+    }
+    if (hold) {
       if (hold !== this.lastHold) {
         log.info(`[Director] ${hold}`);
         this.lastHold = hold;
@@ -219,12 +292,19 @@ export class DirectorService implements DirectorSlot {
     const planning = this.ticks === 1 || this.arc === undefined;
     const rowsBefore = this.plum.rows.length;
     try {
-      await this.plum.runTurn(this.tickText(planning, wake), {
+      const result = await this.plum.runTurn(this.tickText(planning, wake), {
         director: true,
         effort: planning ? 'high' : 'medium',
         maxPushes: 1,
       });
       this.readArc(rowsBefore);
+      if (result.error?.status === 400) {
+        this.backoffUntil = this.now() + API_REFUSAL_BACKOFF_MS;
+        this.backoffReason = result.error.message;
+        log.warn(
+          `[Director] the API refused the turn; holding ${API_REFUSAL_BACKOFF_MS / 60_000} min: ${result.error.message}`,
+        );
+      }
     } catch (error) {
       log.warn('[Director] tick failed', error);
     } finally {

@@ -55,7 +55,8 @@
     "src/__tests__/FormatPerception.test.ts",
     "src/__tests__/CognitionRoutes.test.ts",
     "src/__tests__/FactsInPrompts.test.ts",
-    "src/__tests__/DirectorService.test.ts"
+    "src/__tests__/DirectorService.test.ts",
+    "src/__tests__/PlumWhisper.test.ts"
   ],
   "dev": [
     "src/main/sentient-sims/tiers/dev.ts",

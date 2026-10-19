@@ -25,6 +25,7 @@ import { AnthropicPlumClient, describeModelError, PlumEffort, PlumModelClient } 
 import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/PlumWake';
 import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
+import { costOf, formatDollars } from './plum/plumPricing';
 import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
 import {
@@ -70,6 +71,18 @@ export type PlumTurnOptions = {
   // A wake-up trigger fired (PlumWake): nobody typed, so no player row and the
   // ask-answer-act clock does not move
   wake?: boolean;
+  // The wake belongs to a script or an arc (a trigger with `then` or `script`, set with the
+  // director off): it runs on the director's model and rolls at the director's threshold,
+  // like a director tick. A wake_me the player asked for in chat stays a chat turn.
+  script?: boolean;
+};
+
+// The kind a `[Plum] turn` log line names (scripts/plum-cost.py groups by it)
+export type PlumTurnKind = 'chat' | 'director' | 'wake';
+
+// How a turn ended, for the caller that needs to know (DirectorService backs off an API 400)
+export type PlumTurnResult = {
+  error?: { status?: number; message: string };
 };
 
 // What running one tool came to: `summary` is the row's text (label included), `content`
@@ -104,8 +117,18 @@ type Thread = {
 };
 
 export const HISTORY_ROWS = 30;
-// A chat thread past this many tokens of context rolls to a fresh one (summary note + seed)
+// A chat thread past this many tokens of context rolls to a fresh one (summary note + seed).
+// A chat roll saves cents a turn and costs Plum the exact things the player said, so chat
+// keeps 60k (Scott 2026-10-18).
 export const THREAD_ROLL_TOKENS = 60_000;
+// A director tick or a script wake rolls the thread sooner: two thirds of a director call is
+// re-reading the thread, and since 2026-10-17 the <live> block is the truth for triggers,
+// journal and script, so the roll loses nothing the arc needs (the summary note carries the
+// arc name, the cast and what landed). Measured 2026-10-17: 25k -> 150k over an evening with
+// no roll, $6.28/h on Opus; at 30k the mean context is ~20k and Opus is ~$0.80/h.
+export const DIRECTOR_ROLL_TOKENS = 30_000;
+// The tab's "$x.xx this hour" while directing sums the calls of this sliding window
+const COST_WINDOW_MS = 3_600_000;
 export const SEED_ROWS = 20;
 export const SEED_NOTES = 40;
 export const SUMMARY_MIN_ROWS = 4;
@@ -153,6 +176,9 @@ export class PlumService {
 
   // push_action calls so far in the running turn (the director's one-beat rule)
   private turnPushes = 0;
+
+  // Every model call's price, for "$x.xx this hour" (pruned to the window on read)
+  private usageLog: { at: number; cost: number }[] = [];
 
   constructor(ctx: ApiContext, options: PlumServiceOptions = {}) {
     this.ctx = ctx;
@@ -298,16 +324,34 @@ export class PlumService {
     return this.thread.messages;
   }
 
-  async runTurn(text: string, options: PlumTurnOptions = {}): Promise<void> {
+  // Which model and roll threshold a turn uses: a director tick and a script's wake are the
+  // director's; everything else is chat
+  private isDirectorTurn(options: PlumTurnOptions): boolean {
+    return Boolean(options.director || options.script);
+  }
+
+  private modelFor(options: PlumTurnOptions): string {
+    return this.isDirectorTurn(options) ? this.ctx.settings.plumDirectorModel : this.ctx.settings.plumModel;
+  }
+
+  private static kindOf(options: PlumTurnOptions): PlumTurnKind {
+    if (options.director) {
+      return 'director';
+    }
+    return options.wake ? 'wake' : 'chat';
+  }
+
+  async runTurn(text: string, options: PlumTurnOptions = {}): Promise<PlumTurnResult> {
     if (this.turnRunning) {
       this.queuedLines.push({ text, options });
-      return;
+      return {};
     }
     this.turnRunning = true;
     this.turnPushes = 0;
     try {
-      await this.runTurnInner(text, options);
+      const result = await this.runTurnInner(text, options);
       await this.rollIfLong(options);
+      return result;
     } finally {
       this.turnRunning = false;
       this.emitStatus('idle');
@@ -318,22 +362,24 @@ export class PlumService {
     }
   }
 
-  private async runTurnInner(text: string, options: PlumTurnOptions): Promise<void> {
+  private async runTurnInner(text: string, options: PlumTurnOptions): Promise<PlumTurnResult> {
     const settings = this.ctx.settings;
     if (!settings.plumEnabled) {
       this.emitError("Plum is turned off in the companion app's Settings.");
-      return;
+      return {};
     }
     if (!this.modEnabled) {
       this.emitError('Plum is turned off in the Sentient Sims mod settings.');
-      return;
+      return {};
     }
     const apiKey = settings.plumApiKey;
     if (!apiKey) {
       this.emitError("Plum needs an Anthropic API key: add one under Plum in the companion app's Settings.");
-      return;
+      return {};
     }
     const client = this.clientFactory(apiKey);
+    const model = this.modelFor(options);
+    const kind = PlumService.kindOf(options);
     if (!options.director && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
@@ -359,7 +405,7 @@ export class PlumService {
       let response: Anthropic.Beta.Messages.BetaMessage;
       try {
         response = await client.create({
-          model: settings.plumModel,
+          model,
           system,
           tools,
           messages: this.thread.messages,
@@ -368,17 +414,22 @@ export class PlumService {
         });
       } catch (error) {
         log.error('[Plum] model call failed', error);
-        this.emitError(describeModelError(error));
-        return;
+        const message = describeModelError(error);
+        this.emitError(message);
+        const status = (error as { status?: unknown }).status;
+        return { error: { ...(typeof status === 'number' ? { status } : {}), message } };
       }
       const usage = response.usage;
       const contextTokens =
         usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
       this.thread.contextTokens = contextTokens;
+      this.recordUsage(model, usage);
+      // The meter (scripts/plum-cost.py) reads these; `detached` is false until director turns
+      // leave the chat thread (roadmap C1)
       log.info(
         `[Plum] turn ${iteration + 1}: stop=${response.stop_reason} in=${usage.input_tokens} ` +
           `cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0} ` +
-          `out=${usage.output_tokens} ctx=${contextTokens}`,
+          `out=${usage.output_tokens} ctx=${contextTokens} kind=${kind} model=${model} detached=false`,
       );
 
       if (response.stop_reason === 'refusal') {
@@ -391,12 +442,12 @@ export class PlumService {
           `Plum declined that one (Anthropic's safety classifier stopped the reply${category}).${why} ` +
             'That line was dropped from the conversation; the next one starts clean.',
         );
-        return;
+        return {};
       }
       if (response.stop_reason === 'max_tokens') {
         // Never run tools on an input that may be cut off
         this.emitError('Plum ran out of room mid-reply; try asking in smaller steps.');
-        return;
+        return {};
       }
 
       // Stored verbatim: an edited history invalidates preserved thinking
@@ -414,7 +465,7 @@ export class PlumService {
       );
       if (response.stop_reason !== 'tool_use' || toolUses.length === 0) {
         this.thread.lastReplyAt = this.now();
-        return;
+        return {};
       }
 
       this.emitStatus('tool');
@@ -427,6 +478,22 @@ export class PlumService {
     }
     this.emitError(`Plum stopped after ${MAX_ITERATIONS} tool calls in one turn; ask again to continue.`);
     this.thread.lastReplyAt = this.now();
+    return {};
+  }
+
+  // --- the meter ---------------------------------------------------------------------------
+
+  private recordUsage(model: string, usage: Anthropic.Beta.Messages.BetaUsage) {
+    const at = this.now();
+    this.usageLog.push({ at, cost: costOf(model, usage) });
+    const cutoff = at - COST_WINDOW_MS;
+    this.usageLog = this.usageLog.filter((entry) => entry.at > cutoff);
+  }
+
+  // Dollars spent on model calls in the last hour (every kind of turn, summary calls included)
+  costThisHour(): number {
+    const cutoff = this.now() - COST_WINDOW_MS;
+    return this.usageLog.filter((entry) => entry.at > cutoff).reduce((sum, entry) => sum + entry.cost, 0);
   }
 
   // The model asked for a tool: run it and build the tool_result block the loop answers with
@@ -771,26 +838,33 @@ export class PlumService {
     return lines.join('\n');
   }
 
-  // A long chat thread rolls on its own: still inside the turn (turnRunning holds, new lines
-  // queue), chat turns only - the director's arc lives on this thread and is out of scope
+  // A long thread rolls on its own, still inside the turn (turnRunning holds, new lines
+  // queue). A director tick or a script wake rolls at DIRECTOR_ROLL_TOKENS, chat at
+  // THREAD_ROLL_TOKENS; the director's arc survives the roll because the <live> block, not
+  // the transcript, is the truth about its triggers, journal and script.
   private async rollIfLong(options: PlumTurnOptions): Promise<void> {
-    if (options.director || (this.thread.contextTokens ?? 0) < THREAD_ROLL_TOKENS) {
+    const director = this.isDirectorTurn(options);
+    const limit = director ? DIRECTOR_ROLL_TOKENS : THREAD_ROLL_TOKENS;
+    if ((this.thread.contextTokens ?? 0) < limit) {
       return;
     }
-    if (this.ctx.ext.director?.status().active === true) {
-      return;
-    }
-    log.info(`[Plum] the conversation passed ${THREAD_ROLL_TOKENS / 1000}k tokens; rolling to a fresh thread`);
-    await this.startNewThread({ keepRows: true });
+    log.info(
+      `[Plum] the ${director ? 'director' : 'conversation'} passed ${limit / 1000}k tokens; rolling to a fresh thread`,
+    );
+    await this.startNewThread({ keepRows: true, model: this.modelFor(options) });
   }
 
   // New conversation: one cheap summary call writes a note for the future, then the next
   // thread starts seeded with the notes and the tail of this one. keepRows: the player did
-  // not ask for a new conversation (the auto roll), so the tab keeps its rows
-  async startNewThread({ keepRows = false }: { keepRows?: boolean } = {}): Promise<void> {
+  // not ask for a new conversation (the auto roll), so the tab keeps its rows. model: the
+  // summary runs on the model of the turn that rolled (the director's for a director roll)
+  async startNewThread({ keepRows = false, model }: { keepRows?: boolean; model?: string } = {}): Promise<void> {
     const ending = this.thread;
-    if (ending.rows.filter((row) => row.kind === 'player' || row.kind === 'plum').length >= SUMMARY_MIN_ROWS) {
-      await this.summarize(ending);
+    const spoken = ending.rows.filter(
+      (row) => row.kind === 'player' || row.kind === 'plum' || row.kind === 'director',
+    ).length;
+    if (spoken >= SUMMARY_MIN_ROWS) {
+      await this.summarize(ending, model ?? this.ctx.settings.plumModel);
     }
     let notes: PlumNote[] = [];
     if (this.repository?.isLoaded()) {
@@ -808,7 +882,30 @@ export class PlumService {
     this.emitStatus('idle');
   }
 
-  private async summarize(thread: Thread): Promise<void> {
+  // The note the roll writes. With triggers armed or a director running, the note also has to
+  // carry the arc: the <live> block will list the triggers for the next thread, but WHY each
+  // was set is the one thing only this transcript knows.
+  summaryPrompt(): string {
+    const lines = [
+      'The player is starting a new conversation. In at most four sentences, write a note to your ' +
+        'future self about this one: what the player wanted, what you changed in the game, anything you ' +
+        'promised or should follow up on, and anything about the household worth remembering.',
+    ];
+    const armed = this.wake.list();
+    const directing = this.ctx.ext.director?.status().active === true;
+    if (armed.length > 0 || directing) {
+      lines.push(
+        `You are ${directing ? 'directing' : 'running triggers'}: add up to four more sentences naming the arc ` +
+          '(its name, premise and cast), which beats landed and how the Sims played them, and every wake-up ' +
+          `trigger you have armed${armed.length > 0 ? ` (${armed.map((trigger) => trigger.id).join(', ')})` : ''} ` +
+          'with WHY you set it. The next conversation sees the armed triggers in its <live> block but not your reasons.',
+      );
+    }
+    lines.push('Plain text, no tools.');
+    return lines.join(' ');
+  }
+
+  private async summarize(thread: Thread, model: string): Promise<void> {
     const apiKey = this.ctx.settings.plumApiKey;
     if (!apiKey || !this.ctx.settings.plumEnabled || thread.messages.length === 0) {
       return;
@@ -820,22 +917,14 @@ export class PlumService {
     try {
       this.emitStatus('thinking', 'Plum is writing a note to its future self');
       const response = await client.create({
-        model: this.ctx.settings.plumModel,
+        model,
         system,
         tools: toApiTools(this.catalogue),
-        messages: [
-          ...thread.messages,
-          {
-            role: 'user',
-            content:
-              'The player is starting a new conversation. In at most four sentences, write a note to your ' +
-              'future self about this one: what the player wanted, what you changed in the game, anything you ' +
-              'promised or should follow up on, and anything about the household worth remembering. Plain text, no tools.',
-          },
-        ],
+        messages: [...thread.messages, { role: 'user', content: this.summaryPrompt() }],
         maxTokens: 600,
         effort: 'low',
       });
+      this.recordUsage(model, response.usage);
       const text = response.content
         .filter((block): block is Anthropic.Beta.Messages.BetaTextBlock => block.type === 'text')
         .map((block) => block.text.trim())
@@ -861,8 +950,15 @@ export class PlumService {
 
   emitStatus(state: PlumStatusState, text?: string) {
     const directorActive = this.ctx.ext.director?.status().active ?? false;
-    // While directing, the status line is the next armed trigger (the tab already shows text)
-    const line = text ?? (directorActive ? this.wake.status() : undefined);
+    // While directing, the status line is the next armed trigger plus the hour's spend (the
+    // tab already shows text; no DLL change)
+    let line = text;
+    if (line === undefined && directorActive) {
+      const parts = [this.wake.status(), `${formatDollars(this.costThisHour())} this hour`].filter(
+        (part): part is string => Boolean(part),
+      );
+      line = parts.join(' | ');
+    }
     this.emit({
       kind: 'status',
       state,

@@ -146,6 +146,9 @@ export enum SettingsEnum {
   PLUM_ENABLED = 'plumEnabled',
   PLUM_API_KEY = 'plumApiKey',
   PLUM_MODEL = 'plumModel',
+  // The model for director ticks and script wakes; '' = the same as plumModel. Haiku is the
+  // switch for an unattended run (30x cheaper than Opus, bench 2026-10-17)
+  PLUM_DIRECTOR_MODEL = 'plumDirectorModel',
   PLUM_ALLOW_WRITES = 'plumAllowWrites',
   PLUM_DIRECTOR_MAX_TICKS_PER_HOUR = 'plumDirectorMaxTicksPerHour',
   // The thought a Sim has when they agree to a whisper airs as a voiced (to self) line

@@ -85,6 +85,9 @@ export type WakeTrigger = {
   // chat it queued behind. `started` flips once a report shows the Sim doing it.
   doing?: string;
   started?: boolean;
+  // When this trigger began waiting for `doing` to start (set, resolved from a parent's push,
+  // or thawed): past DOING_START_GRACE_MS with no start it fires "never started"
+  waitingSince?: number;
   // Chain by reference: this trigger waits for the interaction that trigger `after`'s push
   // creates. While set, the trigger is INERT (no report, end or outcome can fire it);
   // resolveDependents() clears it and fills doing / doingId / requestId from the push result.
@@ -186,6 +189,11 @@ export const MAX_WATCHED = 32;
 const CLICK_TIMEOUT_MS = 20_000;
 // A real_minutes trigger that acts, due while the script is frozen, looks again this often
 const FROZEN_RETRY_MS = 60_000;
+// A `doing` the Sim has not started this long after the trigger began waiting (real time) is
+// never going to: the push was queued behind something that ate it, or the click died in the
+// game. Fires as a bad end ("never started") so Plum re-plans instead of waiting forever
+// (2026-10-17: a "(not started yet)" counter_MakeFood wait outlived the evening).
+export const DOING_START_GRACE_MS = 90_000;
 
 export class PlumWakeService {
   private readonly ctx: ApiContext;
@@ -231,8 +239,28 @@ export class PlumWakeService {
     return this.deps.now ? this.deps.now() : Date.now();
   }
 
-  list(): readonly WakeTrigger[] {
-    return this.triggers;
+  // Every trigger, or with `live` only the ones that can fire now: not waiting on another
+  // trigger's push (`after`) and not a script beat held by a freeze. The director counts the
+  // live ones as "armed": a frozen script with nothing live is a wake, not a hold.
+  list(options: { live?: boolean } = {}): readonly WakeTrigger[] {
+    if (!options.live) {
+      return this.triggers;
+    }
+    return this.triggers.filter((trigger) => this.canFire(trigger));
+  }
+
+  private canFire(trigger: WakeTrigger): boolean {
+    return !trigger.after && !(this.frozen !== undefined && Boolean(trigger.then));
+  }
+
+  // Both time stamps move when frozen time is given back (resume / replace_from)
+  private shiftTimes(span: number) {
+    for (const trigger of this.triggers) {
+      trigger.setAt += span;
+      if (trigger.waitingSince !== undefined) {
+        trigger.waitingSince += span;
+      }
+    }
   }
 
   // The journal since the last call, emptied
@@ -333,6 +361,7 @@ export class PlumWakeService {
         if (args.doing?.trim()) {
           trigger.doing = args.doing.trim();
           trigger.started = sameInteraction(trigger.baseline, trigger.doing);
+          trigger.waitingSince = this.now();
         }
         break;
       }
@@ -460,6 +489,7 @@ export class PlumWakeService {
     }
     trigger.baseline = this.ctx.simStateCache.getSim(actSimId)?.activity?.running ?? null;
     trigger.started = sameInteraction(trigger.baseline, trigger.doing);
+    trigger.waitingSince = this.now();
     log.info(
       `[PlumWake] ${trigger.id} now waits for ${trigger.simName}'s "${trigger.doing}" (${trigger.doingId ?? 'by name'})`,
     );
@@ -490,6 +520,7 @@ export class PlumWakeService {
     delete trigger.doingId;
     delete trigger.requestId;
     delete trigger.fromWhisper;
+    delete trigger.waitingSince;
     trigger.simId = simId;
     trigger.simName = simName;
     trigger.baseline = this.ctx.simStateCache.getSim(simId)?.activity?.running ?? null;
@@ -655,10 +686,7 @@ export class PlumWakeService {
       return 'the script was not frozen';
     }
     this.frozen = undefined;
-    const span = this.now() - frozen.at;
-    for (const trigger of this.triggers) {
-      trigger.setAt += span;
-    }
+    this.shiftTimes(this.now() - frozen.at);
     const rebased: string[] = [];
     for (const id of frozen.nextIds) {
       const trigger = this.triggers.find((candidate) => candidate.id === id);
@@ -819,10 +847,7 @@ export class PlumWakeService {
     const frozen = this.frozen;
     this.frozen = undefined;
     if (frozen) {
-      const span = this.now() - frozen.at;
-      for (const trigger of this.triggers) {
-        trigger.setAt += span;
-      }
+      this.shiftTimes(this.now() - frozen.at);
       this.journal.push(`script rewritten from beat ${from}`);
     }
     const anchor = this.triggers.find((trigger) => trigger.script === name && trigger.beat === from - 1);
@@ -931,6 +956,12 @@ export class PlumWakeService {
             trigger.started = true;
           } else if (trigger.started && !isMixer(running)) {
             this.fire(trigger, `${trigger.simName} finished "${trigger.doing}", ${is}`);
+          } else if (!trigger.started && this.now() - (trigger.waitingSince ?? trigger.setAt) >= DOING_START_GRACE_MS) {
+            // Never began: a bad end, so a script beat freezes and an arc wakes Plum
+            const seconds = Math.round(DOING_START_GRACE_MS / 1000);
+            this.fire(trigger, `${trigger.simName} never started "${trigger.doing}" in ${seconds} s, ${is}`, {
+              outcome: 'never started',
+            });
           }
           continue;
         }
@@ -1278,7 +1309,10 @@ export class PlumWakeService {
         if (this.plum.isRunning) {
           return;
         }
-        void this.plum.runTurn(next.text, { wake: true });
+        // A script's or an arc's wake with the director off is still the director's business:
+        // its model and its roll threshold (PlumService.isDirectorTurn)
+        const script = Boolean(next.trigger.script || next.trigger.then);
+        void this.plum.runTurn(next.text, { wake: true, ...(script ? { script: true } : {}) });
       }
       this.fired.shift();
     }

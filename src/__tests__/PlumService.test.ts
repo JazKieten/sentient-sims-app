@@ -13,7 +13,12 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ModWebsocketMessageType } from 'main/sentient-sims/models/ModWebsocketMessage';
 import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { MAX_ITERATIONS, PlumService, THREAD_ROLL_TOKENS } from 'main/sentient-sims/services/PlumService';
+import {
+  DIRECTOR_ROLL_TOKENS,
+  MAX_ITERATIONS,
+  PlumService,
+  THREAD_ROLL_TOKENS,
+} from 'main/sentient-sims/services/PlumService';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
 import {
   catalogueFingerprint,
@@ -497,18 +502,67 @@ describe('PlumService', () => {
     expect(blocks[2].text).toBe('fourth');
   });
 
-  it('a director turn past THREAD_ROLL_TOKENS does not roll', async () => {
+  it('a director turn runs on plumDirectorModel and rolls at DIRECTOR_ROLL_TOKENS; the note names the armed triggers', async () => {
+    ctx.settings.set(SettingsEnum.PLUM_DIRECTOR_MODEL, 'claude-haiku-5-5');
     client.queue.push(message([text('One.')], 'end_turn'));
     await plum.runTurn('first');
     client.queue.push(message([text('Two.')], 'end_turn'));
     await plum.runTurn('second');
+    expect(client.requests.every((request) => request.model === 'claude-opus-5-5')).toBe(true);
+    const trigger = plum.wake.set({ kind: 'game_time', at: '07:00', note: 'the morning beat' });
     const before = plum.threadId;
     client.requests = [];
-    client.queue.push(message([text('Beat.')], 'end_turn', { input_tokens: THREAD_ROLL_TOKENS + 1000 }));
+    // Under the chat threshold but over the director's: a director tick rolls, a chat turn would not
+    client.queue.push(message([text('Beat.')], 'end_turn', { input_tokens: DIRECTOR_ROLL_TOKENS + 1000 }));
+    client.queue.push(message([text('Arc "Dinner", Bella cooking; w1 waits for 07:00 to open act two.')], 'end_turn'));
     await plum.runTurn('<director_tick/>', { director: true });
+
+    expect(client.requests).toHaveLength(2);
+    const [turn, summary] = client.requests;
+    expect(turn.model).toBe('claude-haiku-5-5');
+    expect(summary.model).toBe('claude-haiku-5-5');
+    expect(summary.effort).toBe('low');
+    const prompt = summary.messages[summary.messages.length - 1].content as string;
+    expect(prompt).toContain(trigger.id);
+    expect(prompt).toContain('WHY you set it');
+    expect(plum.threadId).not.toBe(before);
+    expect(plum.messages).toEqual([]);
+    // The trigger survives the roll: it lives in PlumWake, not the transcript
+    expect(plum.wake.list().map((armed) => armed.id)).toEqual([trigger.id]);
+    // The director rows are kept for the tab
+    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'player', 'plum', 'director']);
+
+    // A chat turn at the same context does not roll (chat keeps THREAD_ROLL_TOKENS)
+    client.requests = [];
+    client.queue.push(message([text('Still here.')], 'end_turn', { input_tokens: DIRECTOR_ROLL_TOKENS + 1000 }));
+    await plum.runTurn('hello again');
     expect(client.requests).toHaveLength(1);
-    expect(plum.threadId).toBe(before);
-    expect(plum.messages).toHaveLength(6);
+    expect(client.requests[0].model).toBe('claude-opus-5-5');
+  });
+
+  it('a script wake runs on the director model; a plain wake is a chat turn', async () => {
+    ctx.settings.set(SettingsEnum.PLUM_DIRECTOR_MODEL, 'claude-haiku-5-5');
+    client.queue.push(message([text('Wake.')], 'end_turn'));
+    await plum.runTurn('<wake/>', { wake: true });
+    client.queue.push(message([text('Script wake.')], 'end_turn'));
+    await plum.runTurn('<wake/>', { wake: true, script: true });
+    expect(client.requests.map((request) => request.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5']);
+  });
+
+  it('costThisHour prices every call of the last hour by its model', async () => {
+    client.queue.push(
+      message([text('One.')], 'end_turn', {
+        input_tokens: 1000,
+        cache_read_input_tokens: 100_000,
+        cache_creation_input_tokens: 10_000,
+        output_tokens: 1000,
+      }),
+    );
+    await plum.runTurn('first');
+    // Opus 5.5: 1k x $4 + 100k x $0.20 + 10k x $5 + 1k x $20 per MTok
+    expect(plum.costThisHour()).toBeCloseTo(0.004 + 0.02 + 0.05 + 0.02, 6);
+    now += 61 * 60_000;
+    expect(plum.costThisHour()).toBe(0);
   });
 
   it('gives up after MAX_ITERATIONS tool rounds in one turn', async () => {

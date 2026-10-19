@@ -542,6 +542,10 @@ export function defaultStore(cwd?: string) {
         type: 'string',
         default: defaultPlumModel,
       },
+      [SettingsEnum.PLUM_DIRECTOR_MODEL.toString()]: {
+        type: 'string',
+        default: '',
+      },
       [SettingsEnum.PLUM_ALLOW_WRITES.toString()]: {
         type: 'boolean',
         default: true,
@@ -1294,6 +1298,12 @@ export class SettingsService {
   get plumModel(): string {
     const model = this.get(SettingsEnum.PLUM_MODEL);
     return typeof model === 'string' && model.trim() ? model.trim() : defaultPlumModel;
+  }
+
+  // The director's model: director ticks and the wakes of a script or arc. Empty = plumModel.
+  get plumDirectorModel(): string {
+    const model = this.get(SettingsEnum.PLUM_DIRECTOR_MODEL);
+    return typeof model === 'string' && model.trim() ? model.trim() : this.plumModel;
   }
 
   get plumAllowWrites(): boolean {

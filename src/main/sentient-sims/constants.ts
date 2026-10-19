@@ -300,3 +300,5 @@ export const thoughtMemoryFloor = 4;
 
 // Plum (Claude in the game): the model PlumService calls on the player's own Anthropic key
 export const defaultPlumModel = 'claude-opus-5-5';
+// The director model to switch to for an unattended run (plumDirectorModel; '' = plumModel)
+export const unattendedPlumDirectorModel = 'claude-haiku-5-5';

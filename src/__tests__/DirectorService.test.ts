@@ -30,8 +30,16 @@ class FakeModelClient implements PlumModelClient {
 
   queue: BetaMessage[] = [];
 
+  // The next call rejects with this (an SDK error carries `status`)
+  failWith: Error | undefined;
+
   create(request: PlumModelRequest): Promise<BetaMessage> {
     this.requests.push({ ...request, messages: request.messages.map((entry) => ({ ...entry })) });
+    if (this.failWith !== undefined) {
+      const failure = this.failWith;
+      this.failWith = undefined;
+      return Promise.reject(failure);
+    }
     const next = this.queue.shift();
     if (!next) {
       return Promise.reject(new Error('FakeModelClient: no scripted reply left'));
@@ -80,12 +88,33 @@ const pushAction: PlumModToolDef = {
   tier: 'core',
 };
 
+// Each seq is a new activity too: the digest ignores seq, so a report that moves nothing a
+// Sim does is "nothing changed"
 function report(seq: number, extra: Partial<NonNullable<SimStateReport['lot']>> = {}): SimStateReport {
   return {
     type: 'state_report',
     seq,
-    sims: [{ sim_id: '1', sim_name: 'Bella Goth', sims: [], objects: [] }],
+    sims: [{ sim_id: '1', sim_name: 'Bella Goth', sims: [], objects: [], activity: { running: `act${seq}` } }],
     lot: { ...extra },
+  };
+}
+
+function asleepReport(seq: number, asleep = true): SimStateReport {
+  return {
+    type: 'state_report',
+    seq,
+    sims: [
+      { sim_id: '1', sim_name: 'Bella Goth', sims: [], objects: [], self: { asleep }, activity: { running: 'sleep' } },
+      {
+        sim_id: '2',
+        sim_name: 'Mortimer Goth',
+        sims: [],
+        objects: [],
+        self: { asleep: true },
+        activity: { running: 'sleep' },
+      },
+    ],
+    lot: { clock: { hour: 23, minute: 0 } },
   };
 }
 
@@ -455,5 +484,96 @@ describe('DirectorService', () => {
     // The follow-up (wake) tick tells Plum where the truth about its triggers is
     expect(chainedDirector.tickText(false, '<wake/>')).toContain('The <live> block is the truth about your triggers');
     expect(chainedDirector.tickText(true)).not.toContain('The <live> block is the truth');
+  });
+
+  it('only triggers that can fire hold the tick: a chained `after` beat alone does not', async () => {
+    client.queue.push(message([text('ARC: Chain')], 'end_turn'));
+    director.start();
+    await flush();
+    expect(client.requests).toHaveLength(1);
+    const parent = plum.wake.set({
+      kind: 'sim_finishes',
+      simId: '1',
+      simName: 'Bella Goth',
+      doing: 'insult',
+      note: 'beat 2',
+      then: { do: 'push_action', simId: '1', simName: 'Bella Goth', action: 'gossip' },
+    });
+    const child = plum.wake.set({ kind: 'sim_finishes', note: 'beat 3', after: parent.id });
+    expect(plum.wake.list({ live: true }).map((trigger) => trigger.id)).toEqual([parent.id]);
+    // Both armed: the interval holds even though the digest moved
+    ctx.simStateCache.ingest(report(2));
+    now += TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(1);
+    expect(child.after).toBe(parent.id);
+    // Nothing live any more (the arc was cancelled): the next change runs a tick instead of
+    // holding forever
+    plum.wake.cancelAll();
+    client.queue.push(message([text('Re-planning.')], 'end_turn'));
+    ctx.simStateCache.ingest(report(3));
+    now += TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(2);
+  });
+
+  it('a sleeping cast arms one morning wake and holds until it fires', async () => {
+    client.queue.push(message([text('ARC: Night')], 'end_turn'));
+    director.start();
+    await flush();
+    expect(client.requests).toHaveLength(1);
+    ctx.simStateCache.ingest(asleepReport(2));
+    now += TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(1);
+    const armed = plum.wake.list();
+    expect(armed).toHaveLength(1);
+    expect(armed[0]).toMatchObject({ kind: 'game_time', hour: 6, minute: 30 });
+    // Another night report: still one wake, still no turn
+    ctx.simStateCache.ingest(asleepReport(3));
+    now += TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(1);
+    expect(plum.wake.list()).toHaveLength(1);
+    // Morning: the clock reaches 06:30, the wake fires and the tick runs with its note
+    client.queue.push(message([text('Good morning, Goths.')], 'end_turn'));
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 4,
+      sims: [{ sim_id: '1', sim_name: 'Bella Goth', sims: [], objects: [], activity: { running: 'stretch' } }],
+      lot: { clock: { hour: 6, minute: 31 } },
+    });
+    await flush();
+    expect(client.requests).toHaveLength(2);
+    expect(plum.wake.list()).toHaveLength(0);
+    const last = client.requests[1].messages[client.requests[1].messages.length - 1]
+      .content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(last[last.length - 1].text).toContain('The household is waking up');
+  });
+
+  it('an API 400 on a director turn backs the tick off ten minutes', async () => {
+    client.queue.push(message([text('ARC: Refused')], 'end_turn'));
+    director.start();
+    await flush();
+    expect(client.requests).toHaveLength(1);
+    client.failWith = Object.assign(new Error('tools.3.input_schema: oneOf is not supported'), { status: 400 });
+    ctx.simStateCache.ingest(report(2));
+    now += TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(2);
+    // Nine minutes of changed reports: no call
+    for (let minute = 0; minute < 9; minute += 1) {
+      ctx.simStateCache.ingest(report(10 + minute));
+      now += TICK_MS;
+      await vi.advanceTimersByTimeAsync(TICK_MS);
+    }
+    expect(client.requests).toHaveLength(2);
+    expect(director.status().suspended).toContain('refused by the API');
+    // Past the back-off the tick runs again
+    client.queue.push(message([text('Back.')], 'end_turn'));
+    ctx.simStateCache.ingest(report(30));
+    now += 2 * TICK_MS;
+    await vi.advanceTimersByTimeAsync(TICK_MS);
+    expect(client.requests).toHaveLength(3);
   });
 });

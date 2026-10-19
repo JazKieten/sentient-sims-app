@@ -1,6 +1,6 @@
 import { Box, Checkbox, FormControlLabel, FormHelperText, TextField, Typography } from '@mui/material';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
-import { defaultPlumModel } from 'main/sentient-sims/constants';
+import { defaultPlumModel, unattendedPlumDirectorModel } from 'main/sentient-sims/constants';
 import useSetting from '../hooks/useSetting';
 import APIKeyInput from '../APIKeyInput';
 
@@ -10,6 +10,7 @@ export default function PlumSettingsComponent() {
   const enabled = useSetting(SettingsEnum.PLUM_ENABLED, true);
   const apiKey = useSetting(SettingsEnum.PLUM_API_KEY, '');
   const model = useSetting(SettingsEnum.PLUM_MODEL, defaultPlumModel);
+  const directorModel = useSetting(SettingsEnum.PLUM_DIRECTOR_MODEL, '');
   const allowWrites = useSetting(SettingsEnum.PLUM_ALLOW_WRITES, true);
   const whisperVoiced = useSetting(SettingsEnum.PLUM_WHISPER_VOICED, true);
 
@@ -41,6 +42,20 @@ export default function PlumSettingsComponent() {
           void model.setSetting(change.target.value);
         }}
         helperText={`An Anthropic model id; ${defaultPlumModel} is the default.`}
+      />
+      <TextField
+        label="Director model"
+        size="small"
+        value={directorModel.value}
+        placeholder={`same as Plum model (${model.value || defaultPlumModel})`}
+        slotProps={{ inputLabel: { shrink: true } }}
+        onChange={(change) => {
+          void directorModel.setSetting(change.target.value);
+        }}
+        helperText={
+          `The model for director ticks and script wake-ups. Empty: the Plum model above. For an unattended run set ` +
+          `${unattendedPlumDirectorModel} (about 30x cheaper than Opus; Sonnet is not worth switching to).`
+        }
       />
       <FormControlLabel
         label="Plum may change things"

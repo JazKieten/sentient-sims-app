@@ -19,6 +19,7 @@ import { buildAppTools } from 'main/sentient-sims/services/plum/PlumAppTools';
 import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage';
 import {
   describe as describeTrigger,
+  DOING_START_GRACE_MS,
   MAX_TRIGGERS,
   sameInteraction,
   TRIGGER_TTL_MS,
@@ -888,5 +889,47 @@ describe('PlumWakeService', () => {
     expect(solo.changed).toBe(`ARC "Solo": pushed beat 1 (pushed chat); wake ${w5.id} after beat 1`);
     expect(w5).toMatchObject({ doingId: '9', note: 'done' });
     expect(w5.after).toBeUndefined();
+  });
+
+  it('a `doing` that never starts within the grace fires as a bad end: a wake, and a chained push is not sent', async () => {
+    ctx.simStateCache.ingest(report(2, 'seating_Sit'));
+    plum.wake.set({ kind: 'sim_finishes', simId: '1', simName: 'Bella Goth', doing: 'Solo_Stargazing', note: 'sky' });
+    // Just under the grace, still sitting: nothing
+    now += DOING_START_GRACE_MS - 1000;
+    ctx.simStateCache.ingest(report(3, 'seating_Sit'));
+    await flush();
+    expect(client.requests).toHaveLength(0);
+    // Past it: Plum is woken with "never started"
+    client.queue.push(message([text('The stargazing never happened.')], 'end_turn'));
+    now += 2000;
+    ctx.simStateCache.ingest(report(4, 'seating_Sit'));
+    await flush();
+    expect(client.requests).toHaveLength(1);
+    expect(lastUserText(client.requests[0])).toContain('Bella Goth never started "Solo_Stargazing" in 90 s');
+    expect(plum.wake.list()).toHaveLength(0);
+
+    // A then=push_action trigger whose beat never starts: the push is NOT sent, Plum is woken
+    const gossip = armGossip();
+    expect(gossip.waitingSince).toBe(now);
+    client.queue.push(message([text('Adapting.')], 'end_turn'));
+    now += DOING_START_GRACE_MS + 1;
+    ctx.simStateCache.ingest(report(5, 'seating_Sit'));
+    await flush();
+    expect(toolCalls()).toHaveLength(0);
+    expect(client.requests).toHaveLength(2);
+    expect(lastUserText(client.requests[1])).toContain('never started "insult"');
+    expect(lastUserText(client.requests[1])).toContain('was not sent');
+  });
+
+  it('list({ live: true }) leaves out `after` triggers and the beats of a frozen script', () => {
+    const parent = armGossip();
+    const child = plum.wake.set({ kind: 'sim_finishes', note: 'beat 3', after: parent.id });
+    const plain = plum.wake.set({ kind: 'game_time', at: '07:00', note: 'morning' });
+    expect(plum.wake.list()).toHaveLength(3);
+    expect(plum.wake.list({ live: true }).map((trigger) => trigger.id)).toEqual([parent.id, plain.id]);
+    expect(plum.wake.freeze('a test freeze')).toBe(true);
+    // Frozen: the acting beat is inert, the plain wake still fires
+    expect(plum.wake.list({ live: true }).map((trigger) => trigger.id)).toEqual([plain.id]);
+    expect(child.after).toBe(parent.id);
   });
 });

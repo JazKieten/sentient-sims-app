@@ -932,4 +932,131 @@ describe('PlumWakeService', () => {
     expect(plum.wake.list({ live: true }).map((trigger) => trigger.id)).toEqual([plain.id]);
     expect(child.after).toBe(parent.id);
   });
+
+  // --- B4 (2026-10-18): the sim_Chat false cancel ---------------------------------------------
+  // Replay of main.2026-10-17T21-57-21-544Z.log 15:57:39-15:59:24 and 16:05:03-16:05:12: a
+  // social push's sim_Chat super ended canceled 71 s in while the mixer had not even been
+  // pushed (staging took 94 s), and a `chat` that ran was graded canceled with
+  // INTERACTION_INCOMPATIBILITY, the way chats end. Each dropped the rest of the arc.
+
+  it('a social push waits for its outcome by request id only: no report, no super end, no start grace', async () => {
+    const w1 = armGossip();
+    const w2 = plum.wake.set({
+      kind: 'sim_finishes',
+      note: 'beat 2',
+      after: w1.id,
+      then: {
+        do: 'push_action',
+        simId: '1',
+        simName: 'Bella Goth',
+        action: 'tell_joke',
+        targetId: '2',
+        targetName: 'Don',
+      },
+    });
+    const w3 = plum.wake.set({ kind: 'sim_finishes', note: 'recap', after: w2.id });
+    ctx.simStateCache.ingest(report(2, 'mixer_social_Insult_targeted'));
+    ctx.simStateCache.ingest(report(3, null));
+    await flush();
+    expect(toolCalls()).toHaveLength(1);
+    // The mod's push_action for a social: request id and `social`, no interaction id
+    result(toolCalls()[0], {
+      changed: 'pushed gossip on Bella Goth (with Don)',
+      request_id: 'plum-3318',
+      social: true,
+      interaction: 'sim_Chat',
+    });
+    await flush();
+    expect(w2.doingId).toBeUndefined();
+    expect(w2.requestId).toBe('plum-3318');
+    // 100 s of reports: the super staging, then the mixer, then idle: nothing fires, nothing "never started"
+    ctx.simStateCache.ingest(report(4, 'sim_Chat'));
+    now += 50_000;
+    ctx.simStateCache.ingest(report(5, 'mixer_socials_TellJoke_group_Funny_alwaysOn'));
+    now += 50_000;
+    ctx.simStateCache.ingest(report(6, null));
+    await flush();
+    expect(toolCalls()).toHaveLength(1);
+    expect(client.requests).toHaveLength(0);
+    // The sim_Chat super's canceled end (the mod watches nothing for a social): not this trigger's
+    plum.onModMessage({
+      kind: 'interaction_ended',
+      interaction_id: '1119',
+      sim_id: '1',
+      name: 'sim_Chat',
+      outcome: 'canceled',
+    });
+    await flush();
+    expect(toolCalls()).toHaveLength(1);
+    expect(client.requests).toHaveLength(0);
+    expect(plum.wake.list()).toEqual([w2, w3]);
+    // The engine's outcome by request id ends it well: the joke goes out, w3 chains on
+    plum.wake.onOutcome({
+      request_id: 'plum-3318',
+      sim_id: '1',
+      action: 'gossip',
+      interaction_name: 'mixer_social_Gossip_targeted_Friendly_alwaysOn',
+      outcome: 'success',
+    });
+    await flush();
+    expect(toolCalls()).toHaveLength(2);
+    expect(toolCalls()[1].args).toMatchObject({ action: 'tell_joke' });
+    expect(client.requests).toHaveLength(0);
+  });
+
+  it('a social super that RAN and ended canceled is a good end; a user cancel or one that never ran is bad', async () => {
+    let seq = 10;
+    const run = async (outcome: Record<string, unknown>) => {
+      sendModNotification.mockClear();
+      client.requests.length = 0;
+      plum.wake.cancelAll();
+      const w1 = armGossip();
+      const w2 = plum.wake.set({
+        kind: 'sim_finishes',
+        note: 'beat 2',
+        after: w1.id,
+        then: { do: 'push_action', simId: '1', simName: 'Bella Goth', action: 'tell_joke' },
+      });
+      ctx.simStateCache.ingest(report(seq++, 'mixer_social_Insult_targeted'));
+      ctx.simStateCache.ingest(report(seq++, null));
+      await flush();
+      result(toolCalls()[0], { changed: 'pushed chat', request_id: 'plum-c', social: true, interaction: 'sim_Chat' });
+      await flush();
+      plum.wake.onOutcome({
+        request_id: 'plum-c',
+        sim_id: '1',
+        action: 'chat',
+        interaction_name: 'sim_Chat',
+        outcome: 'canceled',
+        reason: 'interrupted after running: INTERACTION_INCOMPATIBILITY',
+        ran: true,
+        finishing: 'INTERACTION_INCOMPATIBILITY',
+        ...outcome,
+      });
+      await flush();
+      return { pushes: toolCalls().length, w2 };
+    };
+    // Ran, incompatibility: the chat ended as chats do, the next beat goes out
+    let got = await run({});
+    expect(got.pushes).toBe(2);
+    expect(toolCalls()[1].args).toMatchObject({ action: 'tell_joke' });
+    expect(client.requests).toHaveLength(0);
+    // The player cancelled it: bad, the push is not sent and Plum is woken
+    client.queue.push(message([text('Rethinking.')], 'end_turn'));
+    got = await run({ finishing: 'USER_CANCEL' });
+    expect(got.pushes).toBe(1);
+    expect(client.requests).toHaveLength(1);
+    expect(lastUserText(client.requests[0])).toContain('ended canceled');
+    expect(lastUserText(client.requests[0])).toContain('was not sent');
+    // Never ran: bad
+    client.queue.push(message([text('Rethinking.')], 'end_turn'));
+    got = await run({ ran: false });
+    expect(got.pushes).toBe(1);
+    expect(client.requests).toHaveLength(1);
+    // A non-social (an object verb) that ran and was canceled stays bad
+    client.queue.push(message([text('Rethinking.')], 'end_turn'));
+    got = await run({ interaction_name: 'computer_Browse_Web', action: 'browse_web' });
+    expect(got.pushes).toBe(1);
+    expect(client.requests).toHaveLength(1);
+  });
 });

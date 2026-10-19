@@ -133,7 +133,42 @@ export type WakeOutcome = {
   interaction_name?: string;
   outcome: string;
   reason?: string;
+  // Whether the interaction had RUN before it ended, and the game's FinishingType (both on
+  // InteractionOutcomeEvent; CognitionController.postOutcome spreads the event)
+  ran?: boolean | null;
+  finishing?: string;
 };
+
+// A social SUPER (sim_Chat, sim_BeAffectionate, sim_CallOver...) that ran and ended canceled
+// ended the way chats end: the game cancels the super with INTERACTION_INCOMPATIBILITY or
+// the group dissolving when the Sims part. Live 2026-10-17 (main.2026-10-17T21-57-21-544Z.log
+// 16:05:12): Seth's pushed `chat` ran, was graded `canceled ... INTERACTION_INCOMPATIBILITY`
+// and dropped the rest of the arc. Only these finishes mean the push really failed.
+const BAD_FINISHES = new Set(['USER_CANCEL', 'KILLED', 'RESET', 'FAILED_TESTS', 'TRANSITION_FAILURE']);
+const SOCIAL_SUPERS = new Set(['sim_chat', 'sim_beaffectionate', 'sim_callover']);
+
+export function isSocialSuper(name: string | null | undefined): boolean {
+  if (!name) {
+    return false;
+  }
+  const lower = name.toLowerCase();
+  return SOCIAL_SUPERS.has(lower) || (lower.startsWith('sim_') && !isMixer(lower));
+}
+
+// The end a push's outcome report amounts to for a trigger: a social super's cancel after it
+// ran counts as finished unless the game names a real failure
+export function outcomeEnd(event: WakeOutcome): WakeEnd {
+  const outcome = event.outcome.trim().toLowerCase();
+  if (
+    outcome === 'canceled' &&
+    event.ran === true &&
+    isSocialSuper(event.interaction_name) &&
+    !BAD_FINISHES.has((event.finishing ?? '').trim().toUpperCase())
+  ) {
+    return { outcome: 'finished' };
+  }
+  return { outcome: event.outcome };
+}
 
 export type WakeDeps = {
   now?: () => number;
@@ -950,6 +985,14 @@ export class PlumWakeService {
           if (this.isWatched(trigger.simId, trigger.doingId ?? trigger.doing)) {
             continue;
           }
+          // A social push (request id, no interaction id since 2026-10-18): the engine owns
+          // that end and reports it on the outcome route (its own mixer timeout included),
+          // so neither the report nor a same-named super's end may fire it. Live 2026-10-17:
+          // the staging took 94 s, past the start grace, and the sim_Chat super's cancel
+          // arrived before the mixer was even pushed.
+          if (trigger.requestId && !trigger.doingId) {
+            continue;
+          }
           // Wait for the named interaction to start, then to stop. A running MIXER is a
           // beat of the super the trigger waits on, never a new super: still doing it.
           if (sameInteraction(running, trigger.doing)) {
@@ -1028,6 +1071,9 @@ export class PlumWakeService {
         if (trigger.doingId !== event.interaction_id) {
           continue;
         }
+      } else if (trigger.requestId) {
+        // A social push: only its outcome report ends it (onOutcome), never a super's end
+        continue;
       } else if (
         trigger.doing &&
         trigger.doing !== event.interaction_id &&
@@ -1069,7 +1115,12 @@ export class PlumWakeService {
       }
       const what = event.interaction_name ?? event.action ?? 'the action';
       const reason = event.reason ? ` (${event.reason})` : '';
-      this.fire(trigger, `${trigger.simName}'s "${what}" ended: ${event.outcome}${reason}`, { outcome: event.outcome });
+      const ended = outcomeEnd(event);
+      const how =
+        ended.outcome === event.outcome
+          ? event.outcome
+          : `${event.outcome}, which for a social that ran is a normal end`;
+      this.fire(trigger, `${trigger.simName}'s "${what}" ended: ${how}${reason}`, ended);
     }
     this.drain();
   }

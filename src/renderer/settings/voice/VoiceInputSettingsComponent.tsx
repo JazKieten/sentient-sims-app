@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  Autocomplete,
   Box,
   Button,
   Checkbox,
@@ -21,6 +22,15 @@ import {
   defaultVoiceInputModel,
   openaiDefaultEndpoint,
 } from 'main/sentient-sims/constants';
+import {
+  customVoiceInputProvider,
+  defaultVoiceInputModelFor,
+  VoiceInputProvider,
+  voiceInputModelSuggestions,
+  voiceInputProviderFromValue,
+  voiceInputProviderName,
+  voiceInputProviders,
+} from 'main/sentient-sims/models/VoiceInputProvider';
 import { voiceHotkeyPresets } from 'main/sentient-sims/models/VoiceHotkeyPresets';
 import { VOICE_INPUT_LANGUAGES, normalizeVoiceInputLanguage } from 'main/sentient-sims/models/VoiceInputLanguages';
 import useSetting from 'renderer/hooks/useSetting';
@@ -41,10 +51,15 @@ const testRecordMs = 3000;
 export default function VoiceInputSettingsComponent() {
   const { isMac } = window.electron;
   const enabled = useSetting<boolean>(SettingsEnum.VOICE_INPUT_ENABLED, false);
-  const provider = useSetting<ApiType>(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.SentientSimsAI);
+  const providerSetting = useSetting<string>(SettingsEnum.VOICE_INPUT_PROVIDER, ApiType.SentientSimsAI);
   const endpoint = useSetting<string>(SettingsEnum.VOICE_INPUT_ENDPOINT, openaiDefaultEndpoint);
   const apiKey = useSetting<string>(SettingsEnum.VOICE_INPUT_KEY, '');
   const model = useSetting<string>(SettingsEnum.VOICE_INPUT_MODEL, defaultVoiceInputModel);
+  const models = useSetting<Record<string, string>>(SettingsEnum.VOICE_INPUT_MODELS, {});
+  const openaiKey = useSetting<string>(SettingsEnum.OPENAI_KEY, '');
+  const openrouterKey = useSetting<string>(SettingsEnum.OPENROUTER_KEY, '');
+  const geminiKeys = useSetting<string>(SettingsEnum.GEMINI_KEYS, '');
+  const elevenLabsKey = useSetting<string>(SettingsEnum.ELEVENLABS_KEY, '');
   const hotkey = useSetting<string>(SettingsEnum.VOICE_INPUT_HOTKEY, defaultVoiceInputHotkeyFor(isMac));
   const hotkeyMode = useSetting<string>(SettingsEnum.VOICE_INPUT_HOTKEY_MODE, 'hold');
   const language = useSetting<string>(SettingsEnum.VOICE_INPUT_LANGUAGE, '');
@@ -54,11 +69,32 @@ export default function VoiceInputSettingsComponent() {
   const personaName = useSetting<string>(SettingsEnum.PLAYER_VOICE_PERSONA_NAME, '');
   const followsClock = useSetting<boolean>(SettingsEnum.PLAYBACK_FOLLOWS_GAME_CLOCK, true);
 
-  const providerValue =
-    provider.value === ApiType.OpenAI || provider.value === ApiType.ElevenLabs
-      ? provider.value
-      : ApiType.SentientSimsAI;
+  const provider = voiceInputProviderFromValue(providerSetting.value);
   const hotkeyPresets = voiceHotkeyPresets(isMac, hotkey.value);
+
+  // The main AI settings hold the key each hosted provider signs its requests with;
+  // Scribe signs with the ElevenLabs key from the Voices settings
+  const providerKeys: Partial<Record<VoiceInputProvider, { set: boolean; label: string; where: string }>> = {
+    [ApiType.OpenAI]: { set: openaiKey.value.trim() !== '', label: 'OpenAI key', where: 'AI settings' },
+    [ApiType.OpenRouter]: { set: openrouterKey.value.trim() !== '', label: 'OpenRouter key', where: 'AI settings' },
+    [ApiType.Gemini]: { set: geminiKeys.value.trim() !== '', label: 'Gemini key', where: 'AI settings' },
+    [ApiType.ElevenLabs]: { set: elevenLabsKey.value.trim() !== '', label: 'ElevenLabs key', where: 'Voices' },
+  };
+  const providerKey = providerKeys[provider];
+  let providerKeyHelp: string | undefined;
+  if (providerKey) {
+    providerKeyHelp = providerKey.set
+      ? `Uses your ${providerKey.label} from the ${providerKey.where} settings.`
+      : `Add your ${providerKey.label} under ${providerKey.where} settings first.`;
+  }
+  const providerModel = provider === customVoiceInputProvider ? model.value : (models.value[provider] ?? '');
+  const setProviderModel = (value: string) => {
+    if (provider === customVoiceInputProvider) {
+      void model.setSetting(value);
+    } else {
+      void models.setSetting({ ...models.value, [provider]: value });
+    }
+  };
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [testState, setTestState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
@@ -210,25 +246,26 @@ export default function VoiceInputSettingsComponent() {
             <Typography sx={{ minWidth: 110 }}>Transcription:</Typography>
             <Select
               size="small"
-              value={providerValue}
-              onChange={(change) => void provider.setSetting(change.target.value)}
+              value={provider}
+              onChange={(change) => void providerSetting.setSetting(change.target.value)}
             >
-              <MenuItem value={ApiType.SentientSimsAI}>Sentient Sims AI</MenuItem>
-              <MenuItem value={ApiType.ElevenLabs}>ElevenLabs Scribe</MenuItem>
-              <MenuItem value={ApiType.OpenAI}>OpenAI-compatible endpoint</MenuItem>
+              {voiceInputProviders.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {voiceInputProviderName(option)}
+                </MenuItem>
+              ))}
             </Select>
           </Stack>
-          {providerValue === ApiType.SentientSimsAI ? (
+          {provider === ApiType.SentientSimsAI ? (
             <FormHelperText>Uses your Sentient Sims AI login. No endpoint, key or model is needed.</FormHelperText>
           ) : null}
-          {providerValue === ApiType.ElevenLabs ? (
+          {provider === ApiType.ElevenLabs ? (
             <FormHelperText>
-              Uses the ElevenLabs API key from the Voices settings. Your Sims&apos; names are sent along as spellings
-              the model should prefer, so unusual names come out right. ElevenLabs bills transcription per second of
-              audio, with a 20% surcharge for the name list.
+              Your Sims&apos; names are sent along as spellings the model should prefer, so unusual names come out
+              right. ElevenLabs bills transcription per second of audio, with a 20% surcharge for the name list.
             </FormHelperText>
           ) : null}
-          {providerValue === ApiType.OpenAI ? (
+          {provider === customVoiceInputProvider ? (
             <>
               <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
                 <Typography sx={{ minWidth: 110 }}>Endpoint:</Typography>
@@ -237,7 +274,7 @@ export default function VoiceInputSettingsComponent() {
                   fullWidth
                   value={endpoint.value}
                   onChange={(change) => void endpoint.setSetting(change.target.value)}
-                  helperText="Any OpenAI-compatible /audio/transcriptions endpoint (OpenAI, Groq, local whisper server)"
+                  helperText="Any OpenAI-compatible /audio/transcriptions endpoint (Groq, a local whisper server)"
                 />
               </Stack>
               <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
@@ -248,18 +285,33 @@ export default function VoiceInputSettingsComponent() {
                   type="password"
                   value={apiKey.value}
                   onChange={(change) => void apiKey.setSetting(change.target.value)}
-                  helperText="Leave empty to reuse your OpenAI key from the AI settings (OpenAI endpoint only)"
-                />
-              </Stack>
-              <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
-                <Typography sx={{ minWidth: 110 }}>Model:</Typography>
-                <TextField
-                  size="small"
-                  value={model.value}
-                  onChange={(change) => void model.setSetting(change.target.value)}
+                  helperText="Leave empty for a local server that needs no key"
                 />
               </Stack>
             </>
+          ) : null}
+          {provider !== ApiType.SentientSimsAI ? (
+            <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+              <Typography sx={{ minWidth: 110 }}>Model:</Typography>
+              <Autocomplete
+                freeSolo
+                fullWidth
+                size="small"
+                options={voiceInputModelSuggestions(provider)}
+                inputValue={providerModel}
+                onInputChange={(_event, value) => {
+                  setProviderModel(value);
+                }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    placeholder={defaultVoiceInputModelFor(provider)}
+                    helperText={providerKeyHelp}
+                    slotProps={{ formHelperText: { error: providerKey !== undefined && !providerKey.set } }}
+                  />
+                )}
+              />
+            </Stack>
           ) : null}
           <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
             <Typography sx={{ minWidth: 110 }}>Language:</Typography>

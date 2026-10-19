@@ -17,6 +17,8 @@ export type ElevenLabsSTTParams = {
   // Empty = let the model detect it
   languageCode?: string;
   keyterms?: string[];
+  // Omitted = ELEVENLABS_STT_MODEL
+  modelId?: string;
 };
 
 export type ElevenLabsSTTRequest = {
@@ -33,9 +35,9 @@ function fileExtension(mimeType: string): string {
 }
 
 export function buildElevenLabsSTTRequest(params: ElevenLabsSTTParams): ElevenLabsSTTRequest {
-  const { endpoint, apiKey, audio, mimeType, languageCode, keyterms } = params;
+  const { endpoint, apiKey, audio, mimeType, languageCode, keyterms, modelId } = params;
   const body = new FormData();
-  body.append('model_id', ELEVENLABS_STT_MODEL);
+  body.append('model_id', modelId?.trim() || ELEVENLABS_STT_MODEL);
   // A copy into a plain Uint8Array: Buffer's backing store may be a SharedArrayBuffer
   // as far as the types know, and Blob only takes ArrayBuffer-backed views
   const bytes = new Uint8Array(audio);

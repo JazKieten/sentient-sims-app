@@ -72,9 +72,10 @@ export class AIController {
     const meta = isGameEvent ? { eventAt } : undefined;
     const result = isPlayerVoice
       ? await this.ctx.generationQueue.runSpeech(() => this.ctx.ai.interactionEvent(event, meta))
-      : await this.ctx.generationQueue.runExclusive(() => this.ctx.ai.interactionEvent(event, meta), {
-          priority: isChat,
-        });
+      : await this.ctx.generationQueue.runExclusive(
+          ({ arrivedAt }) => this.ctx.ai.interactionEvent(event, { ...meta, arrivedAt }),
+          { priority: isChat, blocking: true },
+        );
     result.input = event;
     // Leading newline so each generation stands apart from the previous one in the game window;
     // memories, TTS, and the app chat UI keep the untouched text. Classic mode sends it verbatim.

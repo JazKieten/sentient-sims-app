@@ -20,7 +20,7 @@ function generated(text = 'dialogue'): InteractionEventResult {
   return { status: InteractionEventStatus.GENERATED, text };
 }
 
-function makeContext(overrides: Record<string, unknown> = {}) {
+function makeContext(overrides: Record<string, unknown> = {}, generationConcurrency = 1) {
   const play = vi.fn<(claimedAt?: number) => boolean>(() => true);
   const ai = {
     resolveInteractionPreAction: vi.fn(() => Promise.resolve({ preAction: 'Alex waves' })),
@@ -34,7 +34,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
   };
   const sceneFreshness = { recordEvent: vi.fn() };
   const ctx = {
-    settings: { generationConcurrency: 1, prefetchMaxQueueDepth: 2 },
+    settings: { generationConcurrency, prefetchMaxQueueDepth: 2 },
     ai,
     sceneFreshness,
   } as unknown as ApiContext;
@@ -190,6 +190,108 @@ describe('GenerationQueueService', () => {
     expect((await claimed).result.result_source).toBe('prefetch');
   });
 
+  it('reports a blocking request as waiting until it starts running', async () => {
+    const { ctx } = makeContext();
+    const queue = new GenerationQueueService(ctx);
+    let release!: () => void;
+    const occupied = queue.runExclusive(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    expect(queue.hasBlockedRequestWaiting()).toBe(false);
+
+    const interaction = queue.runExclusive(() => Promise.resolve('answered'), { blocking: true });
+    expect(queue.hasBlockedRequestWaiting()).toBe(true);
+
+    release();
+    await occupied;
+    await interaction;
+    expect(queue.hasBlockedRequestWaiting()).toBe(false);
+  });
+
+  it('does not count prefetch or continuation work as waiting', async () => {
+    const { ctx } = makeContext();
+    const queue = new GenerationQueueService(ctx);
+    let release!: () => void;
+    const occupied = queue.runExclusive(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const round = queue.runExclusive(() => Promise.resolve(), { priority: true });
+    expect(queue.hasBlockedRequestWaiting()).toBe(false);
+
+    release();
+    await Promise.all([occupied, round]);
+  });
+
+  it('tells a running round to yield when a blocking request has to wait behind it', async () => {
+    const { ctx } = makeContext();
+    const queue = new GenerationQueueService(ctx);
+    let release!: () => void;
+    let yielded!: AbortSignal;
+    const round = queue.runExclusive(
+      (job) =>
+        new Promise<void>((resolve) => {
+          yielded = job.yielded;
+          release = resolve;
+        }),
+      { priority: true, yieldsToBlocking: true },
+    );
+    expect(yielded.aborted).toBe(false);
+
+    const interaction = queue.runExclusive(() => Promise.resolve('answered'), { blocking: true });
+    expect(yielded.aborted).toBe(true);
+
+    release();
+    await Promise.all([round, interaction]);
+  });
+
+  it('leaves a running round alone when the blocking request can start at once', async () => {
+    const { ctx } = makeContext({}, 2);
+    const queue = new GenerationQueueService(ctx);
+    let release!: () => void;
+    let yielded!: AbortSignal;
+    const round = queue.runExclusive(
+      (job) =>
+        new Promise<void>((resolve) => {
+          yielded = job.yielded;
+          release = resolve;
+        }),
+      { priority: true, yieldsToBlocking: true },
+    );
+
+    await queue.runExclusive(() => Promise.resolve(), { blocking: true });
+    expect(yielded.aborted).toBe(false);
+
+    release();
+    await round;
+  });
+
+  it('never tells a prefetch to yield', async () => {
+    const { ctx } = makeContext();
+    const queue = new GenerationQueueService(ctx);
+    let release!: () => void;
+    let yielded!: AbortSignal;
+    const prefetch = queue.runExclusive(
+      (job) =>
+        new Promise<void>((resolve) => {
+          yielded = job.yielded;
+          release = resolve;
+        }),
+    );
+
+    const interaction = queue.runExclusive(() => Promise.resolve(), { blocking: true });
+    expect(yielded.aborted).toBe(false);
+
+    release();
+    await Promise.all([prefetch, interaction]);
+  });
+
   it('uses the synchronous compatibility path when no prefetch entry exists', async () => {
     const { ctx, ai } = makeContext();
     const queue = new GenerationQueueService(ctx);
@@ -197,9 +299,12 @@ describe('GenerationQueueService', () => {
 
     const claimed = await queue.claim(request);
 
-    // The claim is the game event: its time is what the scene is judged against
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    expect(ai.interactionEvent).toHaveBeenCalledWith(request.event, { eventAt: expect.any(Number) });
+    // The claim is the game event: its time is what the scene is judged against; arrival
+    // starts the deadline clock
+    expect(ai.interactionEvent).toHaveBeenCalledWith(request.event, {
+      eventAt: expect.any(Number) as number,
+      arrivedAt: expect.any(Number) as number,
+    });
     expect(claimed.result.result_source).toBe('synchronous');
   });
 

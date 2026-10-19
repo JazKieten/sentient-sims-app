@@ -132,11 +132,13 @@ export class AIExchangeLogService {
     responseText: string;
     durationMs: number;
     error?: string;
+    // The caller cut the call short (the scene ended); the provider did not fail
+    cancelled?: boolean;
   }): number {
     const context = this.labelContext.getStore();
     const id = this.nextId;
     this.nextId += 1;
-    if (context?.health !== false) {
+    if (context?.health !== false && !params.cancelled) {
       this.trackHealth(params.error);
     }
 

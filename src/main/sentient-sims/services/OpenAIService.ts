@@ -5,7 +5,7 @@ import {
   ChatCompletionCreateParamsNonStreaming,
   ChatCompletionMessageParam,
 } from 'openai/resources/chat/completions.js';
-import { GenerationService } from './GenerationService';
+import { GenerationCallControl, GenerationService } from './GenerationService';
 import { SimsGenerateResponse } from '../models/SimsGenerateResponse';
 import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { AIModel } from '../models/AIModel';
@@ -149,7 +149,10 @@ export class OpenAIService implements GenerationService {
     }
   }
 
-  async sentientSimsGenerate(request: OpenAICompatibleRequest): Promise<SimsGenerateResponse> {
+  async sentientSimsGenerate(
+    request: OpenAICompatibleRequest,
+    control?: GenerationCallControl,
+  ): Promise<SimsGenerateResponse> {
     const completionRequest: ChatCompletionCreateParamsNonStreaming = {
       model: request.model ?? this.getOpenAIModel(),
       max_tokens: request.maxResponseTokens,
@@ -182,7 +185,7 @@ export class OpenAIService implements GenerationService {
     const logged = { ...completionRequest, messages: withoutImageData(request).messages };
     log.debug(`OpenAI Request:\n${JSON.stringify(logged, null, 2)}`);
 
-    const result = await this.createCompletion(completionRequest, request.maxResponseTokens);
+    const result = await this.createCompletion(completionRequest, request.maxResponseTokens, control);
     let text = this.getOutputFromGeneration(result);
 
     if (request.guidedChoice && this.supportsJsonSchema()) {
@@ -207,16 +210,22 @@ export class OpenAIService implements GenerationService {
   private async createCompletion(
     request: ChatCompletionCreateParamsNonStreaming,
     maxResponseTokens?: number,
+    control?: GenerationCallControl,
   ): Promise<ChatCompletion> {
     const client = this.getOpenAIClient();
+    // The SDK validates every option key it is handed, so an absent one must be absent, not undefined
+    const requestOptions = {
+      ...(control?.signal && { signal: control.signal }),
+      ...(control?.timeoutMs !== undefined && { timeout: Math.ceil(control.timeoutMs) }),
+    };
     if (!isOpenRouterEndpoint(this.serviceUrl())) {
-      return client.chat.completions.create(request);
+      return client.chat.completions.create(request, requestOptions);
     }
 
     if (!this.mandatoryReasoningModels.has(request.model)) {
       const withoutReasoning: OpenRouterCompletionParams = { ...request, reasoning: { effort: 'none' } };
       try {
-        return await client.chat.completions.create(withoutReasoning);
+        return await client.chat.completions.create(withoutReasoning, requestOptions);
       } catch (error) {
         if (!isReasoningRejection(error)) {
           throw error;
@@ -231,7 +240,7 @@ export class OpenAIService implements GenerationService {
       max_tokens: maxResponseTokens === undefined ? undefined : maxResponseTokens + mandatoryReasoningHeadroomTokens,
       reasoning: { effort: 'minimal' },
     };
-    return client.chat.completions.create(minimalReasoning);
+    return client.chat.completions.create(minimalReasoning, requestOptions);
   }
 
   getOutputFromGeneration(generation: ChatCompletion) {

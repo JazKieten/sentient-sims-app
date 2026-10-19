@@ -32,6 +32,8 @@ import { VoiceType, voiceTypeForTTS } from '../models/VoiceType';
 import { markScenePaced } from '../util/pacedScenes';
 import { applySimAliasNames } from '../util/simAliases';
 import { canSpeak } from '../util/speechCapability';
+import { SceneAbortedError } from '../exceptions/SceneAbortedError';
+import { GenerationCallControl } from './GenerationService';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
 import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
@@ -40,6 +42,8 @@ import {
   defaultWantsPrefixes,
   defaultWantsPrompt,
   directedSceneBudgetMs,
+  interactionDeadlineMs,
+  minimumGenerationMs,
   retiredSentientSimsAIModels,
   thoughtMemoryFloor,
   wickedWhimsMaxResponseTokens,
@@ -56,6 +60,7 @@ import { OpenAICompatibleRequest } from '../models/OpenAICompatibleRequest';
 import { MessageImage } from '../models/OpenAIMessage';
 import { promptFor } from '../pipeline/prompts';
 import { StageId } from '../pipeline/stages';
+import { SimsGenerateResponse } from '../models/SimsGenerateResponse';
 import {
   buildBriefingSystemPrompt,
   buildSceneReviewSystemPrompt,
@@ -347,6 +352,11 @@ export type DirectedGenerationOptions = {
   // into every continuation, so the game can end all of it at once when the sims in it
   // walk apart or one leaves the lot (ScenePlaybackRegistry).
   sceneId?: string;
+  // When the game gives up on the request this scene answers. Set on a request the game
+  // is blocked on; a continuation round nobody is waiting on carries none.
+  deadlineAt?: number;
+  // Fires when the game ends the scene, cutting short whatever provider call is in flight
+  signal?: AbortSignal;
   // A chat beat opens with a line the player already typed: it drives the scene and seeds the
   // transcript the actors reply to, the sim who said it takes no actor turn, and it stays out
   // of the aired scene (the mod already showed it, and it rides along as the memory's action)
@@ -392,6 +402,28 @@ export type DirectedGenerationOptions = {
 // Airs a generated scene. For a prefetched scene the claim time is the event time the
 // scene is judged against. Returns false when it declined to air (the game moved on).
 export type ScenePlay = (claimedAt?: number) => boolean;
+
+// What the queue knows about a request the game is blocked on: when it reached the queue
+export type InteractionRequestContext = {
+  arrivedAt?: number;
+  // The game event's time (SceneFreshness judges the scene against it)
+  eventAt?: number;
+};
+
+type RequestDeadline = {
+  deadlineAt?: number;
+  eventAt?: number;
+};
+
+// Which pipeline stage a one-shot call is, and how it can be cut short: the scene's stop
+// signal, and the time the game gives up on the request it serves
+export type OneShotOptions = {
+  stageId?: StageId;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  images?: MessageImage[];
+  interactive?: boolean;
+};
 
 export type DeferredInteractionResult = {
   result: InteractionEventResult;
@@ -780,24 +812,37 @@ ${factsBlock}
     }
   }
 
-  async interactionEvent(event: InteractionEvents, meta?: { eventAt?: number }): Promise<InteractionEventResult> {
+  async interactionEvent(
+    event: InteractionEvents,
+    request: InteractionRequestContext = {},
+  ): Promise<InteractionEventResult> {
+    const deadline: RequestDeadline = {
+      deadlineAt: request.arrivedAt === undefined ? undefined : request.arrivedAt + interactionDeadlineMs,
+      eventAt: request.eventAt,
+    };
+    if (deadline.deadlineAt !== undefined && deadline.deadlineAt - Date.now() < minimumGenerationMs) {
+      // The mod has given up on this request, or will before any generation lands
+      const waitedSeconds = Math.round((Date.now() - (request.arrivedAt ?? Date.now())) / 1000);
+      log.warn(`[Queue] ${event.event_type} waited ${waitedSeconds}s in the queue; too late to answer it, skipping`);
+      return { status: InteractionEventStatus.NOOP };
+    }
     await this.handleSceneBoundary(event);
 
     switch (event.event_type) {
       case SSEventType.DO_SOMETHING:
-        return this.handleDoSomething(event as DoSomethingInteractionEvent);
+        return this.handleDoSomething(event as DoSomethingInteractionEvent, deadline);
       case SSEventType.CHAT:
-        return this.handleChat(event as ChatInteractionEvent);
+        return this.handleChat(event as ChatInteractionEvent, deadline);
       case SSEventType.CHAT_CONTINUE:
-        return this.handleChatContinue(event);
+        return this.handleChatContinue(event, deadline);
       case SSEventType.INTERACTION:
-        return this.handleInteraction(event as InteractionEvent, meta);
+        return this.handleInteraction(event as InteractionEvent, deadline);
       case SSEventType.WICKED_WHIMS:
         return this.handleWickedWhims(event as WWInteractionEvent);
       case SSEventType.WANTS:
         return this.handleWants(event);
       case SSEventType.CONTINUE:
-        return this.handleContinue(event, meta);
+        return this.handleContinue(event, deadline);
       case SSEventType.INTERACTION_MAPPING:
         return this.handleInteractionMapping(event as InteractionMappingEvent);
       default:
@@ -890,7 +935,7 @@ ${factsBlock}
     };
   }
 
-  async handleInteraction(event: InteractionEvent, meta?: { eventAt?: number }) {
+  async handleInteraction(event: InteractionEvent, deadline: RequestDeadline = {}) {
     const primaryEvent = toPrimaryInteractionEvent(event);
     const resolved = await this.resolveInteractionPreAction(primaryEvent, event);
     if (resolved.result) {
@@ -898,7 +943,11 @@ ${factsBlock}
     }
     // Everything goes through the directed pipeline: pairs play dialogue + monologue,
     // a lone sim gets a monologue-only beat. There is no single-pass narrator anymore.
-    return this.runDirectedGeneration(primaryEvent, { action: resolved.preAction, eventAt: meta?.eventAt });
+    return this.runDirectedGeneration(primaryEvent, {
+      action: resolved.preAction,
+      eventAt: deadline.eventAt,
+      deadlineAt: deadline.deadlineAt,
+    });
   }
 
   async interactionEventDeferred(
@@ -939,14 +988,15 @@ ${factsBlock}
     }
   }
 
-  async handleContinue(event: ContinueInteractionEvent, meta?: { eventAt?: number }) {
+  async handleContinue(event: ContinueInteractionEvent, deadline: RequestDeadline = {}) {
     // Group continues keep the full performer set (capped) like fresh interactions do
     const primaryEvent = toPrimaryInteractionEvent(event);
     if (primaryEvent.sentient_sims.length >= 1) {
       // Directed continue needs prior memories to pick up from; fall through when there are none
       const directed = await this.tryDirectedGeneration(primaryEvent, {
         continueScene: true,
-        eventAt: meta?.eventAt,
+        eventAt: deadline.eventAt,
+        deadlineAt: deadline.deadlineAt,
       });
       if (directed?.status === InteractionEventStatus.GENERATED) {
         return directed;
@@ -1033,10 +1083,13 @@ ${factsBlock}
     });
   }
 
-  async handleDoSomething(doSomethingEvent: DoSomethingInteractionEvent) {
+  async handleDoSomething(doSomethingEvent: DoSomethingInteractionEvent, deadline: RequestDeadline = {}) {
     // Solo Do Something plays as a monologue-only directed beat: the player sees the
     // sim's thought via the memory display instead of narrator prose
-    const directed = await this.tryDirectedGeneration(doSomethingEvent, { action: doSomethingEvent.action });
+    const directed = await this.tryDirectedGeneration(doSomethingEvent, {
+      action: doSomethingEvent.action,
+      deadlineAt: deadline.deadlineAt,
+    });
     if (directed?.status === InteractionEventStatus.GENERATED) {
       return directed;
     }
@@ -1054,7 +1107,7 @@ ${factsBlock}
     );
   }
 
-  async handleChat(chatEvent: ChatInteractionEvent) {
+  async handleChat(chatEvent: ChatInteractionEvent, deadline: RequestDeadline = {}) {
     const primaryEvent = toPrimaryInteractionEvent(chatEvent);
     // sentient_sims[0] is the sim the player typed as — the legacy completion prompt encoded
     // the same assumption as '{actor.0}:' speaking and '{actor.1}:' replying
@@ -1069,6 +1122,7 @@ ${factsBlock}
           // action only feeds memory retrieval here; playerLine drives the scene itself
           action: chatEvent.action,
           playerLine: { speaker: primaryEvent.sentient_sims[0].name, text: spoken },
+          deadlineAt: deadline.deadlineAt,
         },
         { priority: true },
       );
@@ -1087,6 +1141,7 @@ ${factsBlock}
         primaryEvent,
         {
           playerLine: { speaker: this.ctx.settings.playerSpeakerName, text: spoken },
+          deadlineAt: deadline.deadlineAt,
         },
         { priority: true },
       );
@@ -1099,7 +1154,7 @@ ${factsBlock}
     });
   }
 
-  async handleChatContinue(chatContinueEvent: ChatContinueInteractionEvent) {
+  async handleChatContinue(chatContinueEvent: ChatContinueInteractionEvent, deadline: RequestDeadline = {}) {
     const primaryEvent = toPrimaryInteractionEvent(chatContinueEvent);
     // Continue inside an open conversation thread with the player: the sim keeps talking
     // to the player (who said nothing new) or wraps up — never the two sims talking on to
@@ -1113,13 +1168,21 @@ ${factsBlock}
     if (openThread && openThread.lines.length > 0) {
       return this.runDirectedGeneration(
         primaryEvent,
-        { continueScene: true, playerLine: { speaker: speakerSim.name, text: '' }, sceneId: openThread.sceneId },
+        {
+          continueScene: true,
+          playerLine: { speaker: speakerSim.name, text: '' },
+          sceneId: openThread.sceneId,
+          deadlineAt: deadline.deadlineAt,
+        },
         { priority: true },
       );
     }
     if (this.ctx.settings.directedScenesEnabled && primaryEvent.sentient_sims.length >= 2) {
       // Directed continue needs prior memories to pick up from; fall through when there are none
-      const directed = await this.tryDirectedGeneration(primaryEvent, { continueScene: true });
+      const directed = await this.tryDirectedGeneration(primaryEvent, {
+        continueScene: true,
+        deadlineAt: deadline.deadlineAt,
+      });
       if (directed?.status === InteractionEventStatus.GENERATED) {
         return directed;
       }
@@ -1459,8 +1522,11 @@ ${factsBlock}
     // the user message; only providers that can see them are given any.
     // interactive: the player pressed a button and sees the result, so it is left out of
     // provider health.
-    options?: { stageId?: StageId; images?: MessageImage[]; interactive?: boolean },
+    options?: OneShotOptions,
   ): Promise<{ exchange: LLMExchange; text: string }> {
+    if (options?.signal?.aborted) {
+      throw new SceneAbortedError(label);
+    }
     const providerConfig = this.ctx.providerConfigs.getConfigForDirectedStage(actionType, interactionActionType);
     // The context budget belongs to the model, not to this call site: a hardcoded 3900 threw
     // away most of a 16k window on the big models and silently cut the payload on every one.
@@ -1491,14 +1557,36 @@ ${factsBlock}
     if (userMessage && options?.images?.length) {
       userMessage.images = options.images;
     }
-    const response = await this.ctx.aiExchangeLog.runLabeled(
-      label,
-      actionType,
-      () => this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
-      options?.stageId,
-      { health: !options?.interactive },
-    );
+    const control: GenerationCallControl = {
+      signal: options?.signal,
+      timeoutMs: this.callTimeoutMs(options?.deadlineAt),
+    };
+    let response: SimsGenerateResponse;
+    try {
+      response = await this.ctx.aiExchangeLog.runLabeled(
+        label,
+        actionType,
+        () => this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest, control),
+        options?.stageId,
+        { health: !options?.interactive },
+      );
+    } catch (err) {
+      if (options?.signal?.aborted) {
+        throw new SceneAbortedError(label);
+      }
+      throw err;
+    }
     return { exchange: { label, request: openAIRequest, responseText: response.text }, text: response.text };
+  }
+
+  // A call the game is waiting on may not outlive the game's patience; one nobody is
+  // waiting on gets the provider's own timeout
+  private callTimeoutMs(deadlineAt?: number): number | undefined {
+    if (deadlineAt === undefined) {
+      return undefined;
+    }
+    const limit = this.ctx.settings.generationTimeoutSeconds * 1000;
+    return Math.max(1000, Math.min(limit, deadlineAt - Date.now()));
   }
 
   async runDirectedScene(request: DirectedSceneRequest): Promise<InteractionEventResult> {
@@ -1555,8 +1643,12 @@ ${factsBlock}
     // A conversation the game has already ended must not spend another round of
     // generation on itself, let alone air it
     const sceneStopped = () => this.ctx.scenePlayback.isStopped(sceneId);
-    if (options.continueScene && sceneStopped()) {
-      log.info(`[Pipeline] Scene ${sceneId} was ended in-game; dropping the continuation`);
+    // A continuation stops at the next stage boundary once the game has ended its scene or
+    // an interaction the game is waiting on has taken its queue slot
+    const roundDropped = () => sceneStopped() || options.signal?.aborted === true;
+    const dropReason = () => (sceneStopped() ? 'ended in-game' : 'yielded to an interaction the game is waiting on');
+    if (options.continueScene && roundDropped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ${dropReason()}; dropping the continuation`);
       return { status: InteractionEventStatus.NOOP };
     }
     // A scene from a game event: is the event still what is happening? Judged here, before
@@ -1587,6 +1679,10 @@ ${factsBlock}
       modelSettings: await this.ctx.modelSettings.getModelSettings(directorConfig.model, directorConfig.apiType),
     };
     const promptRequest = await this.ctx.promptBuilder.buildPromptRequest(event, promptOptions);
+    if (options.continueScene && roundDropped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ${dropReason()} during memory retrieval; dropping the continuation`);
+      return { status: InteractionEventStatus.NOOP };
+    }
 
     // promptRequest.location is already wrapped in <LOCATION> tags. The scene prefix
     // (where and when) is kept apart from the participants block because an actor whose
@@ -1726,8 +1822,12 @@ ${factsBlock}
     const exchanges: LLMExchange[] = [];
     // The mod abandons an interaction request after 80 seconds, so each stage checks the
     // clock before starting another round trip and airs what it has instead of timing out
+    // A request the game is blocked on also measures from when it reached the queue: the
+    // mod's clock started then, however long the request waited behind other work
     const startedAt = Date.now();
-    const overBudget = () => Date.now() - startedAt > directedSceneBudgetMs;
+    const deadlineAt = Math.min(startedAt + directedSceneBudgetMs, options.deadlineAt ?? Infinity);
+    const overBudget = () => Date.now() > deadlineAt;
+    const callControl: OneShotOptions = { signal: options.signal, deadlineAt: options.deadlineAt };
 
     // 1. Director splits the full context into one complete, self-contained prompt per actor
     // Player-facing: every performer's live status goes to the director too, so the Want
@@ -1762,12 +1862,15 @@ ${factsBlock}
         options.directorModel,
         AIActionType.DIRECTED_SCENE_DIRECTOR,
         interactionActionType,
-        { stageId: StageId.PLANNING_BRIEF },
+        { ...callControl, stageId: StageId.PLANNING_BRIEF },
       );
       exchanges.push(briefing.exchange);
       this.logExchange(briefing.exchange);
       briefingText = briefing.text;
     } catch (err) {
+      if (err instanceof SceneAbortedError) {
+        throw err;
+      }
       log.error('Director briefing failed, actors will use the raw scene context', err);
     }
 
@@ -1814,8 +1917,8 @@ ${factsBlock}
     for (let i = 0; i < performers.length; i += 1) {
       // Checked between turns: a walk-away lands mid-generation more often than not,
       // and every further turn is a request paid for and thrown away
-      if (options.continueScene && sceneStopped()) {
-        log.info(`[Pipeline] Scene ${sceneId} ended in-game mid-performance; dropping it`);
+      if (options.continueScene && roundDropped()) {
+        log.info(`[Pipeline] Scene ${sceneId} ${dropReason()} mid-performance; dropping it`);
         return { status: InteractionEventStatus.NOOP, exchanges };
       }
       const sim = performers[i];
@@ -1870,7 +1973,7 @@ ${factsBlock}
           options.actorModels?.[event.sentient_sims.indexOf(sim)],
           AIActionType.DIRECTED_SCENE_ACTOR,
           interactionActionType,
-          { stageId: StageId.BROCA_SPEECH },
+          { ...callControl, stageId: StageId.BROCA_SPEECH },
         );
         exchanges.push(performance.exchange);
         this.logExchange(performance.exchange);
@@ -1906,6 +2009,9 @@ ${factsBlock}
           monologueBySim.set(sim.sim_id, think);
         }
       } catch (err) {
+        if (err instanceof SceneAbortedError) {
+          throw err;
+        }
         // A failed actor loses their line, not the scene
         log.error(`Actor generation failed for ${sim.name}`, err);
       }
@@ -1929,8 +2035,8 @@ ${factsBlock}
       return { status: InteractionEventStatus.NOOP, exchanges };
     }
 
-    if (options.continueScene && sceneStopped()) {
-      log.info(`[Pipeline] Scene ${sceneId} ended in-game before the review; dropping it`);
+    if (options.continueScene && roundDropped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ${dropReason()} before the review; dropping it`);
       return { status: InteractionEventStatus.NOOP, exchanges };
     }
 
@@ -1970,7 +2076,7 @@ ${factsBlock}
           options.directorModel,
           AIActionType.DIRECTED_SCENE_REVIEWER,
           interactionActionType,
-          { stageId: StageId.PREFRONTAL_REVIEW },
+          { ...callControl, stageId: StageId.PREFRONTAL_REVIEW },
         );
         exchanges.push(compiled.exchange);
         this.logExchange(compiled.exchange);
@@ -1992,6 +2098,9 @@ ${factsBlock}
           reviewedLines = reviewedLines.slice(0, performedLines.length);
         }
       } catch (err) {
+        if (err instanceof SceneAbortedError) {
+          throw err;
+        }
         log.error('Director review failed, airing the lines as performed', err);
       }
     }
@@ -2009,8 +2118,8 @@ ${factsBlock}
     //    Memory scores become each sim's importance on their private monologue row; action
     //    scores are the Full Autonomy trigger — over threshold, the sim graduates to an
     //    Action Scene (wired in the next phase).
-    if (options.continueScene && sceneStopped()) {
-      log.info(`[Pipeline] Scene ${sceneId} ended in-game before scoring; dropping it`);
+    if (options.continueScene && roundDropped()) {
+      log.info(`[Pipeline] Scene ${sceneId} ${dropReason()} before scoring; dropping it`);
       return { status: InteractionEventStatus.NOOP, exchanges };
     }
     const sceneScores = await this.runSceneScores(
@@ -2020,6 +2129,7 @@ ${factsBlock}
       options.directorModel,
       interactionActionType,
       playerFacing && playerLine ? { speaker: playerLine.speaker } : undefined,
+      callControl,
     );
     if (sceneScores.exchange) {
       exchanges.push(sceneScores.exchange);
@@ -2080,7 +2190,12 @@ ${factsBlock}
     // watching…" aired as Ehren's inner monologue). The player speaks next, not the sim.
     const partnerless = Boolean(playerLine) && speakers.length === 1;
     // (a monologue-only beat returned above, so it never reaches this gate)
-    const continueNext = wantsMore && roundsAllowed && !overBudget() && !partnerless && !options.saveMemory;
+    // An interaction the game is blocked on is already queued: the next round would hold
+    // the queue for most of the mod's 80 s and the interaction would time out behind it.
+    // The scene closes as idle instead; the interaction runs next with the time to itself.
+    const gameWaiting = this.ctx.generationQueue.hasBlockedRequestWaiting();
+    const continueNext =
+      wantsMore && roundsAllowed && !overBudget() && !partnerless && !options.saveMemory && !gameWaiting;
     if (wantsMore && !continueNext) {
       log.info(
         `[Pipeline] Scene wants another round but ${
@@ -2090,7 +2205,9 @@ ${factsBlock}
               ? 'the scene budget is spent'
               : partnerless
                 ? 'the only other speaker is the player — waiting for them'
-                : 'this path does not continue'
+                : gameWaiting
+                  ? 'the game is waiting on an interaction — yielding to it'
+                  : 'this path does not continue'
         }`,
       );
     }
@@ -2280,11 +2397,13 @@ ${factsBlock}
         // can never finish and air before this round; not awaited, so the enclosing queue
         // job completes and drain() picks the continuation up next — no deadlock at
         // concurrency 1.
-        this.ctx.scenePlayback.generationStarted(sceneId);
+        const sceneSignal = this.ctx.scenePlayback.generationStarted(sceneId);
+        let yieldedToGame: AbortSignal | undefined;
         void this.ctx.generationQueue
           .runExclusive(
-            () =>
-              this.runDirectedGeneration(
+            ({ yielded }) => {
+              yieldedToGame = yielded;
+              return this.runDirectedGeneration(
                 event,
                 {
                   ...options,
@@ -2296,12 +2415,25 @@ ${factsBlock}
                   round: round + 1,
                   carriedLines: nextRoundLines,
                   sceneId,
+                  // Nobody is blocked on a continuation, so it has no deadline. Only the
+                  // game's stop, or an interaction the game is waiting on, can cut it.
+                  deadlineAt: undefined,
+                  signal: sceneSignal ? AbortSignal.any([sceneSignal, yielded]) : yielded,
                 },
                 { ...playbackOptions, deferPlayback: false, onPlaybackReady: undefined },
-              ),
-            { priority: true },
+              );
+            },
+            { priority: true, yieldsToBlocking: true },
           )
           .catch((error: unknown) => {
+            if (error instanceof SceneAbortedError) {
+              log.info(
+                yieldedToGame?.aborted
+                  ? `[Pipeline] Scene ${sceneId} yielded to an interaction the game is waiting on; round ${round + 1} dropped`
+                  : `[Pipeline] Scene ${sceneId} ended in-game mid-request; round ${round + 1} dropped`,
+              );
+              return;
+            }
             log.warn(`[Pipeline] Scene round ${round + 1} failed`, error);
           })
           .finally(() => {
@@ -2474,6 +2606,7 @@ ${factsBlock}
     model?: string,
     interactionActionType?: AIActionType,
     playerFacing?: { speaker: string },
+    control: OneShotOptions = {},
   ): Promise<{ scores: Map<string, SceneScore>; exchange?: LLMExchange }> {
     const names = performances.map((performance) => performance.name);
     if (names.length === 0) {
@@ -2497,7 +2630,7 @@ ${factsBlock}
         model,
         AIActionType.DIRECTED_SCENE_SCORES,
         interactionActionType,
-        { stageId: StageId.LIMBIC_SALIENCE },
+        { ...control, stageId: StageId.LIMBIC_SALIENCE },
       );
       this.logExchange(oneShot.exchange);
       const scores = parseSceneScores(oneShot.text, names);
@@ -2506,6 +2639,9 @@ ${factsBlock}
       }
       return { scores, exchange: oneShot.exchange };
     } catch (error) {
+      if (error instanceof SceneAbortedError) {
+        throw error;
+      }
       log.warn('[Pipeline] Scene scores stage failed; continuing without scores', error);
       return { scores: new Map() };
     }

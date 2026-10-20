@@ -256,7 +256,9 @@ type set in Manage Worlds, which lotVenue prefers (Ward Park's active venue is v
 failed, tuning name -> count; capped at 40 rooms x 60 kinds, biggest first): util/lotRooms names each room from what
 is in it (a bed makes a bedroom whatever else is there; appliances a kitchen, with sofa + TV an open-plan kitchen and
 living room; lockers a locker room; a toilet a bathroom at home and a restroom at a venue; desk + computer a study;
-3+ bookshelves a library; machines a home gym / workout room), hides what the name already says (the bed, the stove,
+3+ bookshelves a library; machines a home gym / workout room; at a venue gym gear and then desk + computer (an
+office) name a room before lockers or a kitchen corner, and dining chairs alone name nothing; a whirlpool tub is a
+bathtub, never a pool), hides what the name already says (the bed, the stove,
 the toilet), merges a level's outdoor groups into "outside: ..." (labelled a pool anywhere, a patio or a garden only
 at a home, so a park gets no invented rooms), shows a room nothing defines as "a room with ..." only when it holds 2+
 kinds, collapses same-name rooms ("two bedrooms, one with a desk"), reads a floor's rooms kitchen and living room
@@ -278,14 +280,21 @@ src/__tests__/LotTraitExperiment.test.ts (gated on LOT_TRAIT_EXPERIMENT=dry|live
 none / names / names with clause, blind judge; 2026-10-18 on llama-3.3-70b, 45 runs each: the trait's character
 reached the card 51% / 98% / 100% of the time (felt 0.31 / 1.00 / 1.42 of 2), a game rule was explained in 0 / 0 / 2%,
 so the clause ships; downstream it reached 1 of 6 "what do you think of this place" replies (LotFormatExperiment
-cardtrait), none of the chats, as on 2026-10-16. Tests: LotTraitWords, LotRooms, LotFurnishings, LotDescription. The writer goes floor
+cardtrait), none of the chats, as on 2026-10-16. Furnishing depth (src/__tests__/LotDepthExperiment.test.ts, LOT_DEPTH_EXPERIMENT=dry|live|summary, not in
+tiers.json; 2026-10-19, stopped after the cards, 15 lots x 3 depths x 2 drafts, sonnet-4.5 judge): grounded 97 / 73 / 33%
+and invented 3 / 27 / 63% for full rooms / defining objects only / no furnishings, worst at venues, so mapping stays;
+the scenes were never judged. Thin facts made the writer copy the prompt's own examples (a stage with a violin, the
+pool), hence the prompt's "examples show the shape only" rule. Tests: LotTraitWords, LotRooms, LotFurnishings, LotDescription. The writer goes floor
 by floor and ends on what the place is like and who it is for: in the 2026-10-16 test (160 scenes, scratchpad data)
 no reply named a furnishing, but a place's character ("only celebrities get in") did carry into dialogue. lotFacts says
 them in plain words (util/lotFurnishings: kinds, never counts; a venue keeps its showers and restrooms, a home does
 not; names no rule knows are logged as "furnishings with no plain words", and the dev build's Lot Words panel under the
 Locations editor lists them for every lot visited this run: services/LotWordsService, GET/PUT /lot-words, the player's
 words saved to Mods/sentient-sims/lot-words.json win over FURNISHING_WORDS by exact name, and "Copy for Claude" hands
-them over to fold into the table) and names the place by
+them over to fold into the table; each unmapped name carries a first guess, read off the name or from one
+StageId.LOT_WORDS call per 40 names (POST /lot-words/suggest, kept in lot-word-suggestions.json, never used by a
+description until the player accepts it), an a/an/none toggle sets the article, and saved rows leave the queue for a
+Done list) and names the place by
 descriptions/lotNeighborhoods.ts (lot id -> neighborhood + world, generated from the sheet's Neighborhood column),
 else the reported world (also the Locations page's Neighborhood column; LocationEntity.neighborhood). Lot types
 read as Manage Worlds names them (util/lotDescription VENUES + VENUE_PATTERNS: Café, National Park for

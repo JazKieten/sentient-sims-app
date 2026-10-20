@@ -16,6 +16,7 @@ import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import type { PlumTurnResult } from 'main/sentient-sims/services/PlumService';
 import {
+  ACK_GIVEUP_MS,
   ACK_TIMEOUT_MS,
   ClaudeCodeBrain,
   claudeCodeRoutes,
@@ -180,14 +181,36 @@ describe('ClaudeCodeBrain', () => {
     expect(await done).toEqual({});
   });
 
-  it('no ack in 20 s: "not registered" until any hook arrives', async () => {
-    const { done } = await startTurn('hi');
+  it('no ack in 20 s: stalled (the terminal is busy), and a late pick-up still runs the turn', async () => {
+    const { id, done } = await startTurn('hi');
     now += ACK_TIMEOUT_MS;
     await vi.advanceTimersByTimeAsync(ACK_TIMEOUT_MS);
+    expect(brain.unavailable()).toContain('/usage');
+    let settled = false;
+    void done.then(() => {
+      settled = true;
+      return settled;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    // The menu closes a minute later: the queued event arrives and runs normally
+    now += 60_000;
+    await vi.advanceTimersByTimeAsync(60_000);
+    submit('p1', id);
+    expect(brain.unavailable()).toBeUndefined();
+    expect(brain.reply(id, 'Here.').ok).toBe(true);
+    brain.onHook({ hook_event_name: 'Stop', prompt_id: 'p1' });
+    expect(await done).toEqual({});
+  });
+
+  it('no pick-up in 3 minutes gives the turn up until any hook arrives', async () => {
+    const { done } = await startTurn('hi');
+    now += ACK_GIVEUP_MS;
+    await vi.advanceTimersByTimeAsync(ACK_GIVEUP_MS);
     const result = await done;
     expect(result.error?.status).toBe(503);
-    expect(brain.unavailable()).toContain('not registered');
-    expect(ctx.plum.brainUnavailable()).toContain('not registered');
+    expect(brain.unavailable()).toContain('3 minutes');
+    expect(ctx.plum.brainUnavailable()).toContain('3 minutes');
     expect(eventsOfKind('error').length).toBeGreaterThan(0);
     brain.onHook({ hook_event_name: 'SessionStart', source: 'startup' });
     expect(brain.unavailable()).toBeUndefined();

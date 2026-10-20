@@ -31,6 +31,10 @@ npm run plum:claude -- --continue         # pick the last session back up
 
 The first time, accept the prompts: trust the folder, and load the development channel.
 
+**Don't leave a menu open in it.** While `/usage`, `/mcp` or any other panel is open, or
+text sits typed in its prompt, Claude Code queues Plum's turns instead of running them. After
+20 s the tab says "Claude Code hasn't picked up the turn". Press Esc and the turn runs.
+
 **Keep this terminal off the stream capture.** It shows Plum's raw messages, the `<live>`
 block and the notes.
 
@@ -65,7 +69,9 @@ there is a rolling window plus a weekly cap, and Opus uses them faster.
 3. Plum's tool calls go to `/plum/cc/tool` and become the tab's tool rows.
    `mcp__plum__reply {turn, text}` is the only thing the player sees.
 4. A Stop with the same `prompt_id` ends the turn. A Stop for any other prompt is ignored.
-5. If nothing acks the turn in 20 s, the tab says "channel not registered". After 5 minutes
+5. If nothing acks the turn in 20 s, the tab says Claude Code hasn't picked it up, usually
+   because a menu is open in its terminal; the turn still runs once it's closed. After 3 minutes
+   it is given up (and the tab suggests a restart, in case the channel is missing). After 5 minutes
    with no activity the turn is given up: its writes are refused and its late Stop absorbed.
 6. A StopFailure for a rate limit or billing error shows "Claude plan limit reached; switch
    Plum's brain to API in Settings" and holds the brain for 10 minutes.

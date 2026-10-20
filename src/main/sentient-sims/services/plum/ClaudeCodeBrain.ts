@@ -14,7 +14,9 @@
 //
 // Rules: one delivered turn at a time, and never a push while the session is busy with
 // another prompt (the terminal's own, or an abandoned turn that never stopped); a turn with
-// no ack in ACK_TIMEOUT_MS means the channel is not registered; a bound turn with no
+// no ack in ACK_TIMEOUT_MS is stalled (Claude Code QUEUES a channel event while its terminal
+// is busy: a menu like /usage open, text typed in the prompt; measured 2026-10-20) and is
+// given up only after ACK_GIVEUP_MS, when the channel may really be missing; a bound turn with no
 // activity for IDLE_TIMEOUT_MS is abandoned, its write tools refused and its late Stop
 // absorbed. A tool call no turn owns (typed in the terminal) goes through looseTool.
 import { randomBytes } from 'crypto';
@@ -28,6 +30,7 @@ import type { PlumBrainSlot, PlumTurnPort } from '../../tiers/types';
 import { PLUM_SYSTEM_PROMPT } from './plumPrompt';
 
 export const ACK_TIMEOUT_MS = 20_000;
+export const ACK_GIVEUP_MS = 3 * 60_000;
 export const IDLE_TIMEOUT_MS = 5 * 60_000;
 // A prompt the session is busy with that shows no activity for this long is taken to be over
 // (Esc in the terminal fires no Stop), so the next turn may go
@@ -38,8 +41,10 @@ export const LIMIT_HOLD_MS = 10 * 60_000;
 export const HEARTBEAT_MS = 15_000;
 
 const NOT_RUNNING = 'Claude Code session is not running (start it with `npm run plum:claude`)';
+const STALLED =
+  "Claude Code hasn't picked up the turn: close any menu (like /usage) or clear typed text in its terminal";
 const NOT_REGISTERED =
-  'Claude Code did not take the turn: the plum channel is not registered (restart it with `npm run plum:claude`)';
+  'Claude Code did not pick up the turn in 3 minutes: close any menu in its terminal, or restart it with `npm run plum:claude`';
 const PLAN_LIMIT = "Claude plan limit reached; switch Plum's brain to API in Settings";
 const SIGNED_OUT =
   "Claude Code could not sign in; run /login in its terminal or switch Plum's brain to API in Settings";
@@ -131,6 +136,9 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
 
   private channelDown: string | undefined;
 
+  // The delivered turn has not been picked up yet (past ACK_TIMEOUT_MS)
+  private stalled = false;
+
   private limitUntil: number | undefined;
 
   private limitReason: string | undefined;
@@ -150,6 +158,9 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
     }
     if (this.channelDown) {
       return this.channelDown;
+    }
+    if (this.stalled) {
+      return STALLED;
     }
     if (this.limitUntil !== undefined && this.now() < this.limitUntil) {
       return this.limitReason ?? PLAN_LIMIT;
@@ -259,11 +270,19 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
     this.broadcast('turn', { turn: port.id, kind: port.kind, content: parts.join('\n\n') });
     log.info(`[Plum/cc] turn ${port.id} kind=${port.kind} sent${turn.carriesSeed ? ' with the seed' : ''}`);
     turn.ackTimer = setTimeout(() => {
-      if (!turn.acked && !turn.done) {
-        this.channelDown = NOT_REGISTERED;
-        this.abandon(turn, { error: { status: 503, message: NOT_REGISTERED } });
-        this.refreshStatus();
+      if (turn.acked || turn.done) {
+        return;
       }
+      log.warn(`[Plum/cc] turn ${port.id} not picked up after ${ACK_TIMEOUT_MS / 1000} s; waiting`);
+      this.stalled = true;
+      this.refreshStatus();
+      turn.ackTimer = setTimeout(() => {
+        if (!turn.acked && !turn.done) {
+          this.channelDown = NOT_REGISTERED;
+          this.abandon(turn, { error: { status: 503, message: NOT_REGISTERED } });
+          this.refreshStatus();
+        }
+      }, ACK_GIVEUP_MS - ACK_TIMEOUT_MS);
     }, ACK_TIMEOUT_MS);
   }
 
@@ -271,6 +290,10 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
     if (!turn.acked) {
       turn.acked = true;
       clearTimeout(turn.ackTimer);
+      if (this.stalled) {
+        this.stalled = false;
+        this.refreshStatus();
+      }
       if (turn.carriesSeed) {
         this.needsSeed = false;
       }
@@ -301,6 +324,7 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
       return;
     }
     turn.done = true;
+    this.stalled = false;
     clearTimeout(turn.ackTimer);
     clearTimeout(turn.idleTimer);
     clearTimeout(turn.waitTimer);

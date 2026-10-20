@@ -159,6 +159,13 @@ export const devTier: TierRegistration = {
     // scripts/plum-claude/launch.mjs reads the same file
     devOf(ctx).claudeCode.loadToken(path.join(electronApp.getPath('userData'), 'plum-claude'));
   },
+  onSettingChanged: (ctx, key) => {
+    // Back on Claude Code after API turns: the session never saw them, so the next turn
+    // carries the seed (the rows include what the API brain said)
+    if (key === 'plumBrain') {
+      devOf(ctx).claudeCode.onThreadReset();
+    }
+  },
   onMemoryUpserted: (ctx, memory) => {
     devOf(ctx).memoryTrace.attach(memory);
   },

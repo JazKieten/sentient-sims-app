@@ -75,6 +75,10 @@ tool calls never run a destructive tool.
 
 "New conversation" in the tab starts a new rows thread. Run `/clear` in the terminal too.
 
+Switching Plum's brain (to API and back) is safe mid-session: the next Claude Code turn
+carries the seed again, so it knows what the API brain said in between. The same happens
+when the app restarts under a running session; the channel reconnects by itself.
+
 ## Step 0 probe (2026-10-19)
 
 `probe/` holds the stub that settled the open questions: `probe-launch.mjs`, plus

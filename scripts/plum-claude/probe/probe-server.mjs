@@ -1,6 +1,6 @@
 // Step 0 probe (plan tender-wishing-pebble): a stub channel server for one live session.
 // stdio MCP (newline-delimited JSON-RPC) with an echo tool and a reply tool; a localhost
-// HTTP trigger pushes a channel event: GET http://127.0.0.1:25199/push?text=hi&turn=p1
+// HTTP trigger pushes a channel event: GET http://127.0.0.1:25290/push?text=hi&turn=p1
 // Every message in or out is appended to probe.log next to this file.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -97,5 +97,5 @@ http
     }
     res.end('ok\n');
   })
-  .listen(25199, '127.0.0.1');
+  .listen(25290, '127.0.0.1');
 note('start', { pid: process.pid });

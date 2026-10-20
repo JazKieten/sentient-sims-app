@@ -1357,7 +1357,8 @@ export class PlumWakeService {
           return;
         }
       } else {
-        if (this.plum.isRunning) {
+        // An external brain that is down (session closed, plan limit) keeps the wake for later
+        if (this.plum.isRunning || this.plum.brainUnavailable()) {
           return;
         }
         // A script's or an arc's wake with the director off is still the director's business:

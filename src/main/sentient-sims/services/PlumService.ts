@@ -28,6 +28,7 @@ import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
 import { costOf, formatDollars } from './plum/plumPricing';
 import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
+import type { PlumBrainSlot } from '../tiers/types';
 import {
   AppTool,
   CatalogueEntry,
@@ -251,6 +252,7 @@ export class PlumService {
       }
     }
     log.info(`[Plum] catalogue from a ${tier} mod: ${this.catalogue.length} tools, mod enabled=${enabled}`);
+    this.ctx.ext.plumBrain?.onCatalogueChanged?.();
     this.emitStatus('idle');
   }
 
@@ -350,7 +352,10 @@ export class PlumService {
     this.turnPushes = 0;
     try {
       const result = await this.runTurnInner(text, options);
-      await this.rollIfLong(options);
+      // An external brain keeps its own context (Claude Code compacts); nothing to roll here
+      if (!this.externalBrain()) {
+        await this.rollIfLong(options);
+      }
       return result;
     } finally {
       this.turnRunning = false;
@@ -371,6 +376,10 @@ export class PlumService {
     if (!this.modEnabled) {
       this.emitError('Plum is turned off in the Sentient Sims mod settings.');
       return {};
+    }
+    const brain = this.externalBrain();
+    if (brain) {
+      return this.runExternalTurn(brain, text, options);
     }
     const apiKey = settings.plumApiKey;
     if (!apiKey) {
@@ -481,6 +490,107 @@ export class PlumService {
     return {};
   }
 
+  // --- an external brain (dev tier: a local Claude Code session) ---------------------------
+
+  // The brain that thinks instead of the API loop, when the setting asks for one this build has
+  private externalBrain(): PlumBrainSlot | undefined {
+    return this.ctx.settings.plumBrain === 'claude-code' ? this.ctx.ext.plumBrain : undefined;
+  }
+
+  // Why a turn cannot run now on the external brain (session down, plan limit), or undefined.
+  // The director and the wakes hold on it instead of filling the tab with errors.
+  brainUnavailable(): string | undefined {
+    return this.externalBrain()?.unavailable();
+  }
+
+  // One turn on the external brain. The brain sees the same <live> block, seed and text the
+  // API loop would send; its tool calls run through runTool (rows, write and destructive
+  // guards, the director's push cap) and its replies become rows through say.
+  private async runExternalTurn(brain: PlumBrainSlot, text: string, options: PlumTurnOptions): Promise<PlumTurnResult> {
+    const reason = brain.unavailable();
+    if (reason) {
+      // Before liveContextBlock: building it drains the trigger journal, which would be lost
+      this.emitError(reason);
+      return { error: { status: 503, message: reason } };
+    }
+    const kind = PlumService.kindOf(options);
+    if (!options.director && !options.wake) {
+      // Kept for the history replay only: the tab already echoed the line when it was typed
+      this.addRow({ kind: 'player', text });
+      this.thread.lastPlayerLineAt = this.now();
+    }
+    const live = this.liveContextBlock();
+    const startedAt = this.now();
+    let tools = 0;
+    this.emitStatus('thinking');
+    const result = await brain.runTurn({
+      id: randomUUID().slice(0, 8),
+      kind,
+      live,
+      seed: () => {
+        let notes: PlumNote[] = [];
+        if (this.repository?.isLoaded()) {
+          try {
+            notes = this.repository.notes(SEED_NOTES);
+          } catch (error) {
+            log.warn('[Plum] could not read the notes', error);
+          }
+        }
+        return this.renderSeed(notes, this.thread.rows.slice(-SEED_ROWS));
+      },
+      text,
+      runTool: async (name, args) => {
+        tools += 1;
+        this.emitStatus('tool');
+        const outcome = await this.runTool(name, args, { maxPushes: options.maxPushes });
+        this.emitStatus('thinking');
+        return outcome;
+      },
+      say: (said) => {
+        const line = said.trim();
+        if (!line) {
+          return;
+        }
+        const row = this.addRow({ kind: options.director ? 'director' : 'plum', text: line });
+        this.emit({ kind: options.director ? 'director' : 'assistant', thread_id: this.thread.id, row });
+      },
+    });
+    this.thread.lastReplyAt = this.now();
+    log.info(
+      `[Plum] external turn kind=${kind} tools=${tools} ms=${this.now() - startedAt}` +
+        `${result.error ? ` error=${result.error.status ?? ''} ${result.error.message}` : ''}`,
+    );
+    return result;
+  }
+
+  // The tool list the external brain offers its model (the same entries the API loop sends)
+  externalCatalogue(): readonly CatalogueEntry[] {
+    return this.catalogue;
+  }
+
+  // A tool the external brain's model called outside any turn (typed in its own terminal):
+  // never a destructive tool, and never a push while the director owns the beats
+  async looseTool(name: string, args: Record<string, unknown>): Promise<PlumToolOutcome> {
+    const entry = this.catalogue.find((candidate) => candidate.definition.name === name);
+    const refuse = (message: string): PlumToolOutcome => {
+      log.warn(`[Plum] loose ${name}: ${message}`);
+      return { ok: false, summary: message, error: message, content: message };
+    };
+    if (entry?.definition.risk === 'destructive') {
+      return refuse(`${name} refused: a destructive tool runs only inside a turn the player started`);
+    }
+    if (PlumService.isPushTool(name) && this.ctx.ext.director?.status().active) {
+      return refuse(`${name} refused: the director is running the beats`);
+    }
+    return this.runTool(name, args, { label: 'terminal' });
+  }
+
+  // plan_arc pushes beat 1 itself (through runScheduledTool, which has no cap), so it is the
+  // turn's push too; a whisper and a script's first beat move a Sim the same way
+  private static isPushTool(name: string): boolean {
+    return name === 'push_action' || name === 'plan_arc' || name === 'whisper' || name === 'plan_script';
+  }
+
   // --- the meter ---------------------------------------------------------------------------
 
   private recordUsage(model: string, usage: Anthropic.Beta.Messages.BetaUsage) {
@@ -583,9 +693,7 @@ export class PlumService {
       // The call counts as the act: the next one needs a fresh yes
       this.thread.lastReplyAt = this.now();
     }
-    // plan_arc pushes beat 1 itself (through runScheduledTool, which has no cap), so it is
-    // the turn's push too; a whisper and a script's first beat move a Sim the same way
-    const isPush = name === 'push_action' || name === 'plan_arc' || name === 'whisper' || name === 'plan_script';
+    const isPush = PlumService.isPushTool(name);
     if (isPush && options.maxPushes !== undefined && this.turnPushes >= options.maxPushes) {
       const message = 'one beat per tick: this push waits for the next tick (verify the last one first)';
       return finish(false, `${name} held: one beat per tick`, null, message);
@@ -798,6 +906,7 @@ export class PlumService {
       log.warn('[Plum] could not read the last conversation', error);
       this.thread = this.newThread();
     }
+    this.ctx.ext.plumBrain?.onThreadReset?.();
     this.emitHistory();
     this.emitStatus(this.turnRunning ? 'thinking' : 'idle');
   }
@@ -863,7 +972,9 @@ export class PlumService {
     const spoken = ending.rows.filter(
       (row) => row.kind === 'player' || row.kind === 'plum' || row.kind === 'director',
     ).length;
-    if (spoken >= SUMMARY_MIN_ROWS) {
+    // No summary call on an external brain: it would spend the API key the developer chose not to use
+    const external = this.externalBrain();
+    if (spoken >= SUMMARY_MIN_ROWS && !external) {
       await this.summarize(ending, model ?? this.ctx.settings.plumModel);
     }
     let notes: PlumNote[] = [];
@@ -879,6 +990,12 @@ export class PlumService {
       this.thread.rows = ending.rows;
     }
     this.emitHistory();
+    if (external) {
+      // The Claude Code session keeps its own context; only the player can clear it
+      external.onThreadReset?.();
+      this.emitStatus('idle', 'New conversation: run /clear in the Claude Code terminal too');
+      return;
+    }
     this.emitStatus('idle');
   }
 
@@ -953,7 +1070,12 @@ export class PlumService {
     // While directing, the status line is the next armed trigger plus the hour's spend (the
     // tab already shows text; no DLL change)
     let line = text;
-    if (line === undefined && directorActive) {
+    const external = this.externalBrain();
+    if (line === undefined && external) {
+      // An external brain spends the developer's own plan, not the key: no meter
+      const parts = [external.unavailable() ?? (directorActive ? this.wake.status() : undefined), 'via Claude Code'];
+      line = parts.filter((part): part is string => Boolean(part)).join(' | ');
+    } else if (line === undefined && directorActive) {
       const parts = [this.wake.status(), `${formatDollars(this.costThisHour())} this hour`].filter(
         (part): part is string => Boolean(part),
       );

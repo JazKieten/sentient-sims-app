@@ -35,6 +35,10 @@ const EMERGENCY = /fire|death|grim|reaper|burn/i;
 // A director turn the API refused (400: a bad tool schema, a rejected parameter) is re-sent
 // unchanged every minute otherwise (2026-10-17 15:53-15:55); hold this long, logged once
 export const API_REFUSAL_BACKOFF_MS = 10 * 60_000;
+// A turn the Claude Code brain lost (session closed or stalled mid-tick) holds only a minute:
+// skipReason holds on its own while the session stays down
+export const BRAIN_LOST_BACKOFF_MS = 60_000;
+const BACKOFF_STATUSES = new Set([400, 429, 503, 529]);
 // With the whole cast asleep and nothing armed, one game_time wake at this hour (the report
 // carries no sleep_until) instead of a planning turn a minute to say "everyone is down"
 export const CAST_WAKE_AT = '06:30';
@@ -81,6 +85,8 @@ export class DirectorService implements DirectorSlot {
   private backoffUntil: number | undefined;
 
   private backoffReason: string | undefined;
+
+  private backoffStatus: number | undefined;
 
   // The game_time wake this service armed itself for a sleeping cast
   private sleepWakeId: string | undefined;
@@ -161,6 +167,10 @@ export class DirectorService implements DirectorSlot {
     if (this.ctx.simStateCache.isStale(this.now())) {
       return 'the state report is stale (loading screen?)';
     }
+    const brainDown = this.plum.brainUnavailable();
+    if (brainDown) {
+      return brainDown;
+    }
     if (this.plum.isRunning) {
       return 'Plum is mid-turn';
     }
@@ -171,7 +181,7 @@ export class DirectorService implements DirectorSlot {
       return 'an emergency on the lot (fire or death)';
     }
     if (this.backoffUntil !== undefined && this.now() < this.backoffUntil) {
-      return `last turn was refused by the API (${this.backoffReason ?? 'bad request'})`;
+      return `${this.backoffStatus === 400 ? 'last turn was refused by the API' : 'the last turn failed'} (${this.backoffReason ?? 'bad request'})`;
     }
     const windowStart = this.now() - HOUR_MS;
     this.tickTimes = this.tickTimes.filter((at) => at > windowStart);
@@ -298,11 +308,16 @@ export class DirectorService implements DirectorSlot {
         maxPushes: 1,
       });
       this.readArc(rowsBefore);
-      if (result.error?.status === 400) {
-        this.backoffUntil = this.now() + API_REFUSAL_BACKOFF_MS;
+      // 400 a refused request; 429 / 529 a rate limit or overload (the API or the Claude Code
+      // brain's plan); 503 the Claude Code brain went away mid-tick
+      const status = result.error?.status;
+      if (result.error && status !== undefined && BACKOFF_STATUSES.has(status)) {
+        const holdMs = status === 503 ? BRAIN_LOST_BACKOFF_MS : API_REFUSAL_BACKOFF_MS;
+        this.backoffUntil = this.now() + holdMs;
         this.backoffReason = result.error.message;
+        this.backoffStatus = status;
         log.warn(
-          `[Director] the API refused the turn; holding ${API_REFUSAL_BACKOFF_MS / 60_000} min: ${result.error.message}`,
+          `[Director] the turn failed (${status}); holding ${holdMs / 60_000} min: ${result.error.message}`,
         );
       }
     } catch (error) {

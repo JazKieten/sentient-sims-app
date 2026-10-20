@@ -18,6 +18,7 @@ import type { ReflectionPromptContext } from '../pipeline/prompts/consolidation'
 import type { TodaysPlanBlock } from '../util/formatSelfStatus';
 import type { ModLogWebsocketMessage } from '../models/ModLogWebsocketMessage';
 import type { MemoryTrace, MemoryTracePipeline } from '../models/MemoryTrace';
+import type { PlumToolOutcome, PlumTurnKind, PlumTurnResult } from '../services/PlumService';
 
 export type Tier = 'core' | 'stream' | 'dev';
 
@@ -142,6 +143,33 @@ export type PlumPushRegistration = (
   push: { sim_id: string; action: string; target?: string },
 ) => void;
 
+// DEV: one Plum turn handed to a brain other than the API loop (a local Claude Code session,
+// services/plum/ClaudeCodeBrain.ts). PlumService builds the port; the brain delivers the
+// text, runs the tools its model asks for through runTool (rows, guards and push cap stay
+// PlumService's) and shows its replies through say.
+export type PlumTurnPort = {
+  id: string;
+  kind: PlumTurnKind;
+  // The <live> block, built once for the turn
+  live: string;
+  // Plum's notes and the tail of the last conversation, rendered fresh when asked
+  seed(): string;
+  text: string;
+  runTool(name: string, args: Record<string, unknown>): Promise<PlumToolOutcome>;
+  say(text: string): void;
+};
+
+// DEV: Plum's thinking outside the API (settings plumBrain = 'claude-code')
+export interface PlumBrainSlot {
+  // Why a turn cannot run now (session not running, plan limit), or undefined
+  unavailable(): string | undefined;
+  runTurn(port: PlumTurnPort): Promise<PlumTurnResult>;
+  // The tool catalogue changed (the mod reconnected)
+  onCatalogueChanged?(): void;
+  // A new conversation began (database loaded, New conversation): the next turn carries the seed
+  onThreadReset?(): void;
+}
+
 export interface TierExtensions {
   director?: DirectorSlot;
   plumPush?: PlumPushRegistration;
@@ -153,4 +181,5 @@ export interface TierExtensions {
   voiceCommand?: VoiceCommandSlot;
   // AUTONOMY: today's plan as the self-status block renders it
   selfStatusPlan?: (simId: string, absoluteDay: number) => TodaysPlanBlock | undefined;
+  plumBrain?: PlumBrainSlot;
 }

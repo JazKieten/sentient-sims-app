@@ -1,7 +1,7 @@
 import log from 'electron-log';
 import Store from 'electron-store';
 import path from 'path';
-import { DeprecatedSettingsEnum, SettingsEnum } from '../models/SettingsEnum';
+import { DeprecatedSettingsEnum, PlumBrain, SettingsEnum } from '../models/SettingsEnum';
 import {
   PLAYER_VOICE_PERSONAS,
   PlayerVoicePersona,
@@ -557,6 +557,10 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.PLUM_WHISPER_VOICED.toString()]: {
         type: 'boolean',
         default: true,
+      },
+      [SettingsEnum.PLUM_BRAIN.toString()]: {
+        type: 'string',
+        default: 'api',
       },
     },
     migrations: {
@@ -1318,6 +1322,11 @@ export class SettingsService {
   // A whispered Sim's accepting thought airs as a voiced "(to self)" line (PlumWhisper.ts)
   get plumWhisperVoiced(): boolean {
     return this.get(SettingsEnum.PLUM_WHISPER_VOICED) !== false;
+  }
+
+  // Where Plum thinks: the API (default) or a local Claude Code session (dev tier)
+  get plumBrain(): PlumBrain {
+    return this.get(SettingsEnum.PLUM_BRAIN) === 'claude-code' ? 'claude-code' : 'api';
   }
 
   get playerVoicePersona(): PlayerVoicePersona {

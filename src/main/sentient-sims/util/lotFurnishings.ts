@@ -390,6 +390,43 @@ export function floorLines(
     .filter(Boolean);
 }
 
+/** How a furnishing's singular starts: "a sofa", "an easel", or no article ("art supplies"). */
+export type Article = 'a' | 'an' | 'none';
+
+/** "a" or "an" by how the noun sounds, with the usual exceptions (a unicorn, an hour). */
+export function articleFor(noun: string): 'a' | 'an' {
+  const word = noun.trim().toLowerCase();
+  if (/^(hour|honest|honou?r|heir)/.test(word)) {
+    return 'an';
+  }
+  if (/^(uni|use|usu|uti|ure|eu|ewe|one\b|once)/.test(word)) {
+    return 'a';
+  }
+  return /^[aeiou]/.test(word) ? 'an' : 'a';
+}
+
+/** "a dish rack" -> a + "dish rack"; a singular with no article reads as a mass noun. */
+export function splitArticle(one: string): { article: Article; noun: string } {
+  const match = /^(a|an)\s+(.+)$/i.exec(one.trim());
+  return match ? { article: match[1].toLowerCase() as Article, noun: match[2] } : { article: 'none', noun: one.trim() };
+}
+
+export function withArticle(noun: string, article: Article): string {
+  return article === 'none' ? noun.trim() : `${article} ${noun.trim()}`;
+}
+
+/** A plain English plural of a noun phrase's last word: benches, camera dollies, sofas. */
+export function pluralOf(noun: string): string {
+  const trimmed = noun.trim();
+  if (/(s|x|z|ch|sh)$/i.test(trimmed)) {
+    return `${trimmed}es`;
+  }
+  if (/[^aeiou]y$/i.test(trimmed)) {
+    return `${trimmed.slice(0, -1)}ies`;
+  }
+  return trimmed ? `${trimmed}s` : '';
+}
+
 export function plainName(name: string, prefix: RegExp): string {
   return name
     .replace(prefix, '')

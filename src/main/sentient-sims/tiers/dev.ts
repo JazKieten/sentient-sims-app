@@ -20,6 +20,7 @@ import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { sendChatGeneration } from '../util/notifyRenderer';
 import { CatchErrors } from '../controllers/decorators/CatchError';
 import { LotWordsService } from '../services/LotWordsService';
+import { plainProviderError } from '../util/providerErrorWords';
 
 export interface DevServices {
   memoryTraceRepository: MemoryTraceRepository;
@@ -81,8 +82,7 @@ class DevRoutes {
   };
 
   getLotWords = (_req: Request, res: Response) => {
-    const { lotWords } = devOf(this.ctx);
-    res.json({ rows: lotWords.rows(), lots: lotWords.checkedLots() });
+    res.json(devOf(this.ctx).lotWords.all());
   };
 
   @CatchErrors()
@@ -90,7 +90,20 @@ class DevRoutes {
     const body = req.body as { words?: unknown };
     const { lotWords } = devOf(this.ctx);
     const words = lotWords.save(body.words);
-    res.json({ words, rows: lotWords.rows(), lots: lotWords.checkedLots() });
+    res.json({ words, ...lotWords.all() });
+  };
+
+  // The AI's first guess for every unmapped name; the panel shows them until accepted
+  suggestLotWords = async (_req: Request, res: Response) => {
+    const { lotWords } = devOf(this.ctx);
+    try {
+      await lotWords.suggest();
+      res.json(lotWords.all());
+    } catch (err) {
+      log.error('[LotWords] suggesting words failed', err);
+      const { plain } = plainProviderError(err instanceof Error ? err.message : String(err));
+      res.status(502).json({ error: plain, ...lotWords.all() });
+    }
   };
 }
 
@@ -139,6 +152,7 @@ function routes(app: Express, ctx: ApiContext) {
   app.post('/ai/v2/event/directed-scene', devRoutes.directedSceneEvent);
   app.get('/lot-words', devRoutes.getLotWords);
   app.put('/lot-words', devRoutes.saveLotWords);
+  app.post('/lot-words/suggest', devRoutes.suggestLotWords);
 }
 
 export const devTier: TierRegistration = {

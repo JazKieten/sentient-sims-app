@@ -57,6 +57,8 @@ export enum StageId {
   // Utilities that are not part of any Sim's mind.
   VOICE_COMMAND = 'voice_command',
   DESCRIPTION_DEFAULT = 'description_default',
+  // Plain words for the furnishing names the dev build's Lot Words panel has none for (JSON)
+  LOT_WORDS = 'lot_words',
   CLASSIFICATION = 'classification',
   BUFF = 'buff',
   // Not a brain part — the world. Turn order, round caps, pacing. No LLM.
@@ -246,6 +248,14 @@ export const STAGES: StageDefinition[] = [
     job: 'A first description for a Sim or a lot that has none',
     legacyActionType: AIActionType.DESCRIPTION_DEFAULT,
     defaultMaxResponseTokens: 220,
+    usesLLM: true,
+  },
+  {
+    id: StageId.LOT_WORDS,
+    brainName: 'Utility',
+    job: 'Plain words for furnishing names a lot description has none for',
+    legacyActionType: AIActionType.DESCRIPTION_DEFAULT,
+    defaultMaxResponseTokens: 2400,
     usesLLM: true,
   },
   {

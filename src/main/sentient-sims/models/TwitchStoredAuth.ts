@@ -5,4 +5,6 @@ export type TwitchStoredAuth = {
   refreshToken?: string;
   broadcasterId?: string;
   login?: string;
+  // What the login granted (the token response's scope list); absent on a pre-poll login
+  scopes?: string[];
 };

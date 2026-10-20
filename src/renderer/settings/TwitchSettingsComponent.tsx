@@ -21,7 +21,12 @@ import {
 } from '@mui/material';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ApiType } from 'main/sentient-sims/models/ApiType';
-import { defaultTwitchChatVoiceId, defaultTwitchCommandWord } from 'main/sentient-sims/constants';
+import {
+  defaultTwitchChatVoiceId,
+  defaultTwitchCommandWord,
+  defaultTwitchPollSeconds,
+  defaultTwitchVoteCommand,
+} from 'main/sentient-sims/constants';
 import { TwitchChatStatus, TwitchDeviceLoginStart } from 'main/sentient-sims/models/TwitchChatStatus';
 import useSetting from 'renderer/hooks/useSetting';
 import HelpButton from 'renderer/components/HelpButton';
@@ -60,6 +65,9 @@ export default function TwitchSettingsComponent() {
   const viewerNames = useSetting<string>(SettingsEnum.TWITCH_VIEWER_NAMES, '');
   const speakQuestions = useSetting<boolean>(SettingsEnum.TWITCH_SPEAK_QUESTIONS, true);
   const chatVoiceId = useSetting<string>(SettingsEnum.TWITCH_CHAT_VOICE_ID, '');
+  const pollMode = useSetting<string>(SettingsEnum.TWITCH_POLL_MODE, 'chat');
+  const voteCommand = useSetting<string>(SettingsEnum.TWITCH_VOTE_COMMAND, defaultTwitchVoteCommand);
+  const pollSeconds = useSetting<number>(SettingsEnum.TWITCH_POLL_SECONDS, defaultTwitchPollSeconds);
   const { ttsApiType, ttsEnabled } = useAISettings();
   const { cache: voicesCache, isRefreshing, refresh } = useElevenLabsVoices();
 
@@ -102,6 +110,7 @@ export default function TwitchSettingsComponent() {
   }
 
   const loggedIn = status?.auth.loggedIn ?? false;
+  const nativePolls = pollMode.value === 'native';
 
   return (
     <Box sx={{ width: '100%' }}>
@@ -269,6 +278,46 @@ export default function TwitchSettingsComponent() {
             </>
           ) : null}
           <Divider />
+          <Typography>Plum's chat polls</Typography>
+          <FormHelperText>
+            When the household reaches a real crossroads (someone moving in, a proposal, a career change, a big
+            purchase), Plum offers to let chat decide. Say yes in the Plum tab and the vote opens; when it closes, Plum
+            carries out the winner and hands you whatever it cannot do itself.
+          </FormHelperText>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 130 }}>Chat votes by:</Typography>
+            <Select
+              size="small"
+              value={pollMode.value}
+              onChange={(change) => void pollMode.setSetting(change.target.value)}
+            >
+              <MenuItem value="chat">Typing a command</MenuItem>
+              <MenuItem value="native">Twitch poll</MenuItem>
+            </Select>
+            {nativePolls ? null : (
+              <TextField
+                size="small"
+                label="Command"
+                sx={{ width: 120 }}
+                value={voteCommand.value}
+                onChange={(change) => void voteCommand.setSetting(change.target.value)}
+              />
+            )}
+            <TextField
+              size="small"
+              type="number"
+              label="Default length (sec)"
+              sx={{ width: 170 }}
+              value={pollSeconds.value}
+              onChange={(change) => void pollSeconds.setSetting(Number(change.target.value))}
+            />
+          </Stack>
+          <FormHelperText>
+            {nativePolls
+              ? 'Opens a real Twitch poll on your channel (Affiliate and Partner only) and needs the account login below. If the poll cannot open, chat votes by command instead.'
+              : `Viewers type ${voteCommand.value || defaultTwitchVoteCommand} 1, ${voteCommand.value || defaultTwitchVoteCommand} 2 (or just the number); a later vote replaces an earlier one. The options show in-game as a notification.`}
+          </FormHelperText>
+          <Divider />
           <FormControlLabel
             label="Only followers can ask"
             control={
@@ -278,24 +327,32 @@ export default function TwitchSettingsComponent() {
               />
             }
           />
-          {followersOnly.value ? (
+          {followersOnly.value || nativePolls ? (
             <Stack spacing={2}>
               {loggedIn ? (
-                <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
-                  <Chip size="small" color="success" label={`Twitch account: ${status?.auth.login ?? 'connected'}`} />
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => void window.electron.tierInvoke('twitch-logout')}
-                  >
-                    Disconnect
-                  </Button>
-                </Stack>
+                <>
+                  <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+                    <Chip size="small" color="success" label={`Twitch account: ${status?.auth.login ?? 'connected'}`} />
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => void window.electron.tierInvoke('twitch-logout')}
+                    >
+                      Disconnect
+                    </Button>
+                  </Stack>
+                  {nativePolls && !status?.auth.pollsAllowed ? (
+                    <FormHelperText error>
+                      This login cannot open polls yet: Disconnect, then Connect again to grant the poll permission.
+                    </FormHelperText>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <FormHelperText>
-                    Checking who follows you needs a one-time Twitch login. Create a (free) application at
-                    dev.twitch.tv/console (type: Device Code Grant, any name), paste its Client ID here, then connect.
+                    Checking who follows you and opening Twitch polls need a one-time Twitch login. Create a (free)
+                    application at dev.twitch.tv/console (type: Device Code Grant, any name), paste its Client ID here,
+                    then connect.
                   </FormHelperText>
                   <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
                     <Typography sx={{ minWidth: 130 }}>Client ID:</Typography>
@@ -332,9 +389,11 @@ export default function TwitchSettingsComponent() {
                       </Button>
                     </Stack>
                   ) : null}
-                  <FormHelperText error>
-                    While no account is connected, follower-gated questions are dropped.
-                  </FormHelperText>
+                  {followersOnly.value ? (
+                    <FormHelperText error>
+                      While no account is connected, follower-gated questions are dropped.
+                    </FormHelperText>
+                  ) : null}
                 </>
               )}
             </Stack>

@@ -11,8 +11,12 @@ import { ApiContext } from './ApiContext';
 
 // OAuth Device Code Grant against the streamer's own Twitch application (public client, no
 // secret): the app shows a code, the streamer enters it at twitch.tv/activate once, and the
-// stored token lets the follower gate ask "does this viewer follow me?" per !ask.
-const twitchScopes = 'moderator:read:followers';
+// stored token lets the follower gate ask "does this viewer follow me?" per !ask and Plum
+// open a native poll (Affiliate and Partner channels only).
+export const twitchPollScope = 'channel:manage:polls';
+const twitchScopes = `moderator:read:followers ${twitchPollScope}`;
+
+export type HelixResult = { status: number; data?: unknown; message?: string };
 
 type DeviceCodeResponse = {
   device_code?: string;
@@ -26,6 +30,7 @@ type DeviceCodeResponse = {
 type TokenResponse = {
   access_token?: string;
   refresh_token?: string;
+  scope?: string[];
   message?: string;
 };
 
@@ -49,7 +54,61 @@ export class TwitchAuthService {
 
   getStatus(): TwitchAuthStatus {
     const stored = this.ctx.settings.twitchAuth;
-    return { loggedIn: Boolean(stored.accessToken && stored.broadcasterId), login: stored.login };
+    const loggedIn = Boolean(stored.accessToken && stored.broadcasterId);
+    return { loggedIn, login: stored.login, pollsAllowed: loggedIn && this.pollsAllowed() };
+  }
+
+  // A login from before the poll scope existed stored no scopes: it cannot open polls
+  pollsAllowed(): boolean {
+    return (this.ctx.settings.twitchAuth.scopes ?? []).includes(twitchPollScope);
+  }
+
+  // One Helix call as the connected account, refreshing the token once on a 401. Status 0 =
+  // no account connected or Twitch unreachable.
+  async helix(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<HelixResult> {
+    const clientId = this.ctx.settings.twitchClientId;
+    const { accessToken } = this.ctx.settings.twitchAuth;
+    if (!clientId || !accessToken) {
+      return { status: 0, message: 'no Twitch account is connected (Settings, Twitch tab)' };
+    }
+    let result = await this.helixOnce(clientId, accessToken, method, path, body);
+    if (result.status === 401) {
+      const refreshedToken = await this.refresh(clientId);
+      if (refreshedToken) {
+        result = await this.helixOnce(clientId, refreshedToken, method, path, body);
+      }
+    }
+    return result;
+  }
+
+  private async helixOnce(
+    clientId: string,
+    accessToken: string,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<HelixResult> {
+    try {
+      const response = await fetch(`${twitchHelixUrl}${path}`, {
+        method,
+        headers: {
+          ...TwitchAuthService.helixHeaders(clientId, accessToken),
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const text = await response.text();
+      let parsed: { data?: unknown; message?: string } = {};
+      try {
+        parsed = text ? (JSON.parse(text) as { data?: unknown; message?: string }) : {};
+      } catch {
+        parsed = { message: text };
+      }
+      return { status: response.status, data: parsed.data, message: parsed.message };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { status: 0, message: `could not reach Twitch: ${message}` };
+    }
   }
 
   logout() {
@@ -150,7 +209,7 @@ export class TwitchAuthService {
           const data = (await response.json()) as TokenResponse;
           if (response.ok && data.access_token) {
             this.stopPolling();
-            await this.completeLogin(clientId, data.access_token, data.refresh_token);
+            await this.completeLogin(clientId, data.access_token, data.refresh_token, data.scope);
             return;
           }
           // 400 authorization_pending just means the code has not been entered yet
@@ -166,7 +225,7 @@ export class TwitchAuthService {
     }, intervalMs);
   }
 
-  private async completeLogin(clientId: string, accessToken: string, refreshToken?: string) {
+  private async completeLogin(clientId: string, accessToken: string, refreshToken?: string, scopes?: string[]) {
     try {
       const response = await fetch(`${twitchHelixUrl}/users`, {
         headers: TwitchAuthService.helixHeaders(clientId, accessToken),
@@ -178,7 +237,7 @@ export class TwitchAuthService {
         this.onChanged?.();
         return;
       }
-      this.setStored({ accessToken, refreshToken, broadcasterId: user.id, login: user.login });
+      this.setStored({ accessToken, refreshToken, broadcasterId: user.id, login: user.login, scopes });
       log.info(`Twitch account connected: ${user.login ?? user.id}`);
     } catch (err) {
       log.error('Twitch login completion failed', err);
@@ -246,6 +305,7 @@ export class TwitchAuthService {
         ...stored,
         accessToken: data.access_token,
         refreshToken: data.refresh_token ?? stored.refreshToken,
+        scopes: data.scope ?? stored.scopes,
       });
       return data.access_token;
     } catch (err) {

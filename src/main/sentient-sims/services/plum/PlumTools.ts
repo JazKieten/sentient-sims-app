@@ -20,8 +20,9 @@ export type AppTool = {
   definition: ModToolDef;
   run(args: Record<string, unknown>): Promise<unknown>;
   // Offered only when the context has this tier slot (the scripted whisper tools need the
-  // director): PlumService filters by it when it builds the catalogue
-  onlyWith?: 'director';
+  // director, the chat poll the stream tier): PlumService filters by it when it builds the
+  // catalogue
+  onlyWith?: 'director' | 'chatPoll';
 };
 
 export type CatalogueEntry = {
@@ -178,6 +179,8 @@ export function readSummary(name: string, args: Record<string, unknown>): string
       return 'setting a wake-up';
     case 'whisper':
       return `whispering to ${sim ?? 'a Sim'}`;
+    case 'hand_off':
+      return 'handing over to the player';
     default:
       return `ran ${name}`;
   }

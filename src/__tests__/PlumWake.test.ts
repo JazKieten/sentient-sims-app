@@ -1059,4 +1059,50 @@ describe('PlumWakeService', () => {
     expect(got.pushes).toBe(1);
     expect(client.requests).toHaveLength(1);
   });
+
+  it('a chat poll result wakes Plum through wakeWith, outlives wake_me cancel, and the open poll rides the live block', async () => {
+    ctx.ext.chatPoll = {
+      open: vi.fn(),
+      cancel: vi.fn(),
+      current: () => ({
+        id: 'poll-1',
+        question: 'Does Anker move in?',
+        mode: 'chat',
+        options: [
+          { title: 'Move in', votes: 3 },
+          { title: 'Not yet', votes: 1 },
+        ],
+        secondsLeft: 20,
+      }),
+    };
+    plum.onModMessage({ kind: 'catalogue', tier: 'stream', enabled: true, tools: [pushAction] });
+    client.queue.push(message([text('Chat is voting.')], 'end_turn'));
+    const turn = plum.runTurn('how is the vote going?');
+    // The result lands mid-turn: it waits, and a wake_me cancel leaves it queued
+    plum.wake.set({ kind: 'game_time', at: '18:00', note: 'dinner' });
+    plum.wake.wakeWith('<chat_poll id="poll-1">\nWinner: "Move in".\n</chat_poll>');
+    expect(plum.wake.cancelAll()).toBe(1);
+    await turn;
+    const live = (client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[])[0].text;
+    expect(live).toContain('poll: "Does Anker move in?" (chat vote, 20 s left): 1. Move in 3, 2. Not yet 1');
+    const offered = client.requests[0].tools.map((entry) => (entry as { name: string }).name);
+    expect(offered).toContain('poll_chat');
+    expect(offered).toContain('hand_off');
+
+    client.queue.push(message([text('Moving him in.')], 'end_turn'));
+    ctx.simStateCache.ingest(report(2, 'cook'));
+    await flush();
+    expect(client.requests).toHaveLength(2);
+    expect(lastUserText(client.requests[1])).toContain('Winner: "Move in"');
+    expect(eventsOfKind('player')).toHaveLength(0);
+  });
+
+  it('poll_chat is left out of the catalogue without the stream slot', async () => {
+    client.queue.push(message([text('Hello.')], 'end_turn'));
+    await plum.runTurn('hi');
+    const offered = client.requests[0].tools.map((entry) => (entry as { name: string }).name);
+    expect(offered).not.toContain('poll_chat');
+    expect(offered).not.toContain('cancel_poll');
+    expect(offered).toContain('hand_off');
+  });
 });

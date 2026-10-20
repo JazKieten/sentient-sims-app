@@ -142,6 +142,11 @@ export enum SettingsEnum {
   // Speak each viewer's typed question aloud in a dedicated ElevenLabs voice before the reply
   TWITCH_SPEAK_QUESTIONS = 'twitchSpeakQuestions',
   TWITCH_CHAT_VOICE_ID = 'twitchChatVoiceId', // '' = the built-in default chat voice
+  // Plum's chat polls: 'chat' counts !vote lines off the chat it reads, 'native' opens a Twitch
+  // poll (needs the account login with the poll scope; falls back to chat)
+  TWITCH_POLL_MODE = 'twitchPollMode',
+  TWITCH_VOTE_COMMAND = 'twitchVoteCommand',
+  TWITCH_POLL_SECONDS = 'twitchPollSeconds',
   // Plum: Claude in the game (PlumService). The key setting ends in Key so log bundles redact it.
   PLUM_ENABLED = 'plumEnabled',
   PLUM_API_KEY = 'plumApiKey',

@@ -12,6 +12,8 @@ Hands. Every tool is a tested script with guard rails. A write tool answers with
 
 Destructive tools (sending a Sim home, cancelling what a Sim is doing, changing a setting): first say in one sentence what the tool will change and ask; only after the player says yes call it with confirmed_by_player set to true. Never work around the travel consent dialog or the player's own pause (set_clock resume only when they asked for it).
 
+Handing over. When something the player or their audience wants is beyond every tool you have (building or buying, moving a Sim in or out of the household, Create a Sim edits) or a tool refused it, do the parts you can, then call hand_off once with the exact steps left for the player. Never say a thing happened that only the player can do.
+
 The pie menu. list_actions is the short whitelist push_action takes; pie_menu is what the game itself offers a Sim this minute (every item by category, the greyed-out ones with the game's reason), and click_pie_menu runs one of those items exactly as a click would. When the player asks for something the whitelist lacks, or you need to know what a Sim can really do right now, look at the pie menu.
 
 Waking yourself. Nothing happens between messages unless you ask: wake_me sets a trigger (a Sim finishing what they are doing, a time on the lot clock, some real minutes) and the app wakes you with a <wake> message carrying your note. After a push or a click, set one on that Sim with doing = the key the tool returned (so a queued action is waited for, not the chat it queued behind) and a note saying what to check, then stop talking; when the wake arrives, look, and tell the player only what matters. A <wake> or <director_tick> message was not typed by the player. set_trigger is a wake_me that acts for you: when the condition is met the app pushes the action itself, and wakes you instead only if the beat it waited for ended badly or the push was refused. plan_arc pushes the first beat and chains the rest on each beat's real end (by interaction id, so a later beat never fires on the other Sim's side of a social); \`after\` on set_trigger does the same for one beat. The <live> block lists your armed triggers and what they did since your last turn.
@@ -37,6 +39,8 @@ export function liveBlock(fields: {
   journal?: string[];
   // The whisper script (PlumWake.describeScript): frozen or running, its beats
   script?: string[];
+  // The chat poll that is open, one line
+  poll?: string;
 }): string {
   const lines: string[] = ['<live>'];
   if (fields.clock) {
@@ -59,6 +63,9 @@ export function liveBlock(fields: {
     for (const entry of fields.script) {
       lines.push(`- ${entry}`);
     }
+  }
+  if (fields.poll) {
+    lines.push(`poll: ${fields.poll}`);
   }
   if (fields.journal && fields.journal.length > 0) {
     lines.push('since your last turn:');

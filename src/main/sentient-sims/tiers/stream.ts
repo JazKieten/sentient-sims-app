@@ -1,6 +1,7 @@
-// The STREAM tier's entry module (release 4.5): Twitch !ask, the moodlet a closed scene
-// leaves (SceneMoodletService), the game ending a conversation when its sims walk apart
-// (scene_control), and the AI exchange log persisted in the save (decision 16). Listed in
+// The STREAM tier's entry module (release 4.5): Twitch !ask, Plum's chat polls
+// (ChatPollService), the moodlet a closed scene leaves (SceneMoodletService), the game ending
+// a conversation when its sims walk apart (scene_control), and the AI exchange log persisted
+// in the save (decision 16). Listed in
 // tiers.json, so the core build deletes it and the generated index.ts never names it.
 import type { Express, Request, Response } from 'express';
 import type { IpcMain } from 'electron';
@@ -10,6 +11,7 @@ import type { TierRegistration } from './types';
 import { handleTierInvoke } from './ipc';
 import { TwitchAuthService } from '../services/TwitchAuthService';
 import { TwitchChatService } from '../services/TwitchChatService';
+import { ChatPollService } from '../services/ChatPollService';
 import { SceneMoodletService } from '../services/SceneMoodletService';
 import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import type { SceneControl } from '../models/ModLogWebsocketMessage';
@@ -17,6 +19,7 @@ import type { SceneControl } from '../models/ModLogWebsocketMessage';
 export interface StreamServices {
   twitchAuth: TwitchAuthService;
   twitchChat: TwitchChatService;
+  chatPoll: ChatPollService;
   sceneMoodlets: SceneMoodletService;
   aiExchangeRepository: AIExchangeRepository;
 }
@@ -33,14 +36,17 @@ export function streamOf(ctx: ApiContext): StreamServices {
 
 function construct(ctx: ApiContext) {
   const twitchAuth = new TwitchAuthService(ctx);
+  // Built here, connected only by start() (the main process): tests build contexts too
+  const twitchChat = new TwitchChatService(ctx, twitchAuth);
   const stream: StreamServices = {
     twitchAuth,
-    // Built here, connected only by start() (the main process): tests build contexts too
-    twitchChat: new TwitchChatService(ctx, twitchAuth),
+    twitchChat,
+    chatPoll: new ChatPollService(ctx, twitchChat, twitchAuth),
     sceneMoodlets: new SceneMoodletService(ctx),
     aiExchangeRepository: new AIExchangeRepository(ctx.db),
   };
   services.set(ctx, stream);
+  ctx.ext.chatPoll = stream.chatPoll;
   // F4: the exchange log persists in the loaded save (the dev tier reads it back)
   ctx.aiExchangeLog.attachPersistence(stream.aiExchangeRepository);
 }
@@ -67,8 +73,43 @@ function injectTwitchMessage(ctx: ApiContext) {
   };
 }
 
+// A chat poll without Plum (the result still wakes Plum): open, read or cancel it.
+// curl -X POST /debug/twitch-poll -d '{"question":"...","options":["A","B"],"seconds":30}'
+function debugPoll(ctx: ApiContext) {
+  return async (req: Request, res: Response) => {
+    const { chatPoll } = streamOf(ctx);
+    const body = req.body as {
+      question?: string;
+      options?: string[];
+      seconds?: number;
+      note?: string;
+      cancel?: boolean;
+    };
+    try {
+      if (body.cancel) {
+        res.json({ cancelled: await chatPoll.cancel() });
+        return;
+      }
+      if (body.question && Array.isArray(body.options)) {
+        const opened = await chatPoll.open({
+          question: body.question,
+          options: body.options,
+          seconds: body.seconds ?? 0,
+          note: body.note ?? '',
+        });
+        res.json({ opened, current: chatPoll.current() });
+        return;
+      }
+      res.json({ current: chatPoll.current() ?? null });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+}
+
 function routes(app: Express, ctx: ApiContext) {
   app.post('/debug/twitch-message', injectTwitchMessage(ctx));
+  app.post('/debug/twitch-poll', debugPoll(ctx));
 }
 
 function ipc(ipcMain: IpcMain, ctx: ApiContext) {
@@ -98,6 +139,7 @@ export const streamTier: TierRegistration = {
     void streamOf(ctx).sceneMoodlets.appraise(closed);
   },
   shutdown: (ctx) => {
+    streamOf(ctx).chatPoll.shutdown();
     streamOf(ctx).twitchChat.shutdown();
   },
 };

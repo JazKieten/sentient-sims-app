@@ -26,7 +26,7 @@ import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/P
 import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
 import { costOf, formatDollars } from './plum/plumPricing';
-import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
+import { buildAppTools, describePoll, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
 import {
   AppTool,
@@ -696,6 +696,7 @@ export class PlumService {
       funds: lot?.funds,
       triggers: this.wake.list().map((trigger) => `${trigger.id} ${describeTrigger(trigger)}`),
       script: this.wake.describeScript(),
+      poll: describePoll(this.ctx.ext.chatPoll?.current()),
       journal: this.wake.takeJournal(),
     });
   }

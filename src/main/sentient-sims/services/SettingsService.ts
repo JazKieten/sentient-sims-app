@@ -44,6 +44,8 @@ import {
   defaultVoiceInputModel,
   defaultTwitchCommandWord,
   defaultTwitchChatVoiceId,
+  defaultTwitchVoteCommand,
+  defaultTwitchPollSeconds,
   defaultPlumModel,
   defaultSceneEventMaxAgeMs,
 } from '../constants';
@@ -478,6 +480,18 @@ export function defaultStore(cwd?: string) {
       [SettingsEnum.TWITCH_CHAT_VOICE_ID.toString()]: {
         type: 'string',
         default: '',
+      },
+      [SettingsEnum.TWITCH_POLL_MODE.toString()]: {
+        type: 'string',
+        default: 'chat',
+      },
+      [SettingsEnum.TWITCH_VOTE_COMMAND.toString()]: {
+        type: 'string',
+        default: defaultTwitchVoteCommand,
+      },
+      [SettingsEnum.TWITCH_POLL_SECONDS.toString()]: {
+        type: 'number',
+        default: defaultTwitchPollSeconds,
       },
       // Items validated by sanitizeProviderConfigs on read/write so malformed
       // entries degrade gracefully instead of throwing out of electron-store
@@ -1526,6 +1540,19 @@ export class SettingsService {
 
   get twitchChatVoiceId(): string {
     return (this.get(SettingsEnum.TWITCH_CHAT_VOICE_ID) as string).trim() || defaultTwitchChatVoiceId;
+  }
+
+  get twitchPollMode(): 'native' | 'chat' {
+    return this.get(SettingsEnum.TWITCH_POLL_MODE) === 'native' ? 'native' : 'chat';
+  }
+
+  get twitchVoteCommand(): string {
+    return (this.get(SettingsEnum.TWITCH_VOTE_COMMAND) as string).trim() || defaultTwitchVoteCommand;
+  }
+
+  get twitchPollSeconds(): number {
+    const raw = Number(this.get(SettingsEnum.TWITCH_POLL_SECONDS));
+    return Math.min(600, Math.max(30, Number.isFinite(raw) ? Math.round(raw) : defaultTwitchPollSeconds));
   }
 
   get prefetchMaxQueueDepth(): number {

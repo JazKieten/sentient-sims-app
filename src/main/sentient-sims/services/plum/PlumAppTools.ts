@@ -15,6 +15,16 @@ import {
   WakeKind,
 } from './PlumWake';
 import { PlumWhisperService, WhisperItem } from './PlumWhisper';
+import { sendModNotification } from '../../websocketServer';
+import { ModWebsocketMessageType, ModWebsocketNotificationType } from '../../models/ModWebsocketMessage';
+import type { ChatPollView } from '../../tiers/types';
+
+// Twitch's own poll limits (Helix POST /polls), kept for the chat vote too
+export const MAX_POLL_QUESTION_CHARS = 60;
+export const MAX_POLL_OPTION_CHARS = 25;
+export const MAX_POLL_OPTIONS = 5;
+export const MIN_POLL_SECONDS = 30;
+export const MAX_POLL_SECONDS = 600;
 
 const MEMORY_TEXT_CHARS = 400;
 const DEFAULT_MEMORIES = 10;
@@ -822,6 +832,151 @@ export function buildAppTools(
     },
   };
 
+  // The stream's chat votes on a crossroads (stream tier: ChatPollService behind ctx.ext.chatPoll)
+  const pollChat: AppTool = {
+    definition: {
+      name: 'poll_chat',
+      description:
+        "Let the stream's Twitch chat vote on a real crossroads for the household: a choice that changes the " +
+        'save for good (a Sim moving in or out, a proposal or a breakup, quitting or switching a career, a big ' +
+        'purchase, adopting, a baby, moving house, a trip to another world). Never a passing beat (who talks ' +
+        'first, whether to wake someone): it has changed before the votes are in, and the Sims settle those ' +
+        'well on their own. When you see such a crossroads, offer the poll to the player in one sentence and ' +
+        'open it only after they say yes. 2-5 options, each a concrete outcome you can carry out or hand off; ' +
+        "the question at most 60 characters and each option at most 25 (Twitch's limits). When the vote " +
+        'closes the app wakes you with a <chat_poll> message carrying the votes and the winner, and you carry ' +
+        'it out then. One poll at a time; the <live> block shows the open one.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'What chat decides, at most 60 characters' },
+          options: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '2-5 outcomes, each at most 25 characters',
+          },
+          seconds: {
+            type: 'integer',
+            description: `How long the vote runs, ${MIN_POLL_SECONDS}-${MAX_POLL_SECONDS} seconds; 0 = the streamer's default`,
+          },
+          note: {
+            type: 'string',
+            description: 'What each outcome means you should do, one line: it comes back to you with the result',
+          },
+          confirmed_by_player: { type: 'boolean', description: 'True only after the player said yes to this poll' },
+        },
+        required: ['question', 'options', 'seconds', 'note', 'confirmed_by_player'],
+        additionalProperties: false,
+      },
+      risk: 'destructive',
+      timeout_ms: 20000,
+      tier: 'stream',
+    },
+    onlyWith: 'chatPoll',
+    run: async (args) => {
+      const chatPoll = ctx.ext.chatPoll;
+      if (!chatPoll) {
+        throw new Error('chat polls are not part of this build');
+      }
+      if (args.confirmed_by_player !== true) {
+        throw new Error('ask the player first: open a chat poll only after they say yes');
+      }
+      const question = typeof args.question === 'string' ? args.question.trim() : '';
+      const options = Array.isArray(args.options)
+        ? args.options.filter((option): option is string => typeof option === 'string').map((option) => option.trim())
+        : [];
+      if (!question || question.length > MAX_POLL_QUESTION_CHARS) {
+        throw new Error(`the question must be 1-${MAX_POLL_QUESTION_CHARS} characters`);
+      }
+      if (options.length < 2 || options.length > MAX_POLL_OPTIONS) {
+        throw new Error(`a poll needs 2-${MAX_POLL_OPTIONS} options`);
+      }
+      const long = options.find((option) => !option || option.length > MAX_POLL_OPTION_CHARS);
+      if (long !== undefined) {
+        throw new Error(`each option must be 1-${MAX_POLL_OPTION_CHARS} characters ('${long}' is not)`);
+      }
+      const seconds = typeof args.seconds === 'number' ? Math.round(args.seconds) : 0;
+      if (seconds !== 0 && (seconds < MIN_POLL_SECONDS || seconds > MAX_POLL_SECONDS)) {
+        throw new Error(`seconds must be ${MIN_POLL_SECONDS}-${MAX_POLL_SECONDS}, or 0 for the default`);
+      }
+      const note = typeof args.note === 'string' ? args.note.trim() : '';
+      const opened = await chatPoll.open({ question, options, seconds, note });
+      const how = opened.mode === 'native' ? 'a Twitch poll' : 'a chat vote (!vote)';
+      return {
+        changed: `opened ${how} for ${opened.seconds} s: ${question}`,
+        id: opened.id,
+        mode: opened.mode,
+        seconds: opened.seconds,
+        ...(opened.fellBack ? { fell_back: opened.fellBack } : {}),
+      };
+    },
+  };
+
+  const cancelPoll: AppTool = {
+    definition: {
+      name: 'cancel_poll',
+      description:
+        'Close the open chat poll without a result (the choice was settled another way, or the player asked). ' +
+        'Nothing is carried out and no <chat_poll> wake comes.',
+      input_schema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      risk: 'write',
+      timeout_ms: 10000,
+      tier: 'stream',
+    },
+    onlyWith: 'chatPoll',
+    run: async () => {
+      const chatPoll = ctx.ext.chatPoll;
+      if (!chatPoll) {
+        throw new Error('chat polls are not part of this build');
+      }
+      const cancelled = await chatPoll.cancel();
+      return { changed: cancelled ? 'cancelled the chat poll' : 'no chat poll was open' };
+    },
+  };
+
+  // What only the player can do: a tab row and an in-game notification. Read risk, because
+  // it moves nothing in the game and must still reach the player while writes are off.
+  const handOff: AppTool = {
+    definition: {
+      name: 'hand_off',
+      description:
+        'Hand the player what you cannot do yourself: no tool of yours reaches it (building or buying, moving ' +
+        'a Sim in or out of the household, Create a Sim) or a tool refused it. Shows in the tab and as an ' +
+        'in-game notification. Do the parts you can first; call this once, with the exact steps left.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: 'What the player should do, as short concrete steps (who, what, where)',
+          },
+          why: { type: 'string', description: 'Why it is theirs: the missing tool or what refused, one short clause' },
+        },
+        required: ['task', 'why'],
+        additionalProperties: false,
+      },
+      risk: 'read',
+      timeout_ms: 5000,
+      tier: 'core',
+    },
+    run: (args) => {
+      const task = typeof args.task === 'string' ? args.task.trim() : '';
+      if (!task) {
+        return Promise.reject(new Error('a hand-off needs the task'));
+      }
+      const why = typeof args.why === 'string' ? args.why.trim() : '';
+      sendModNotification({
+        type: ModWebsocketMessageType.NOTIFICATION,
+        notification: {
+          title: 'Plum: over to you',
+          message: task,
+          message_type: ModWebsocketNotificationType.MESSAGE,
+        },
+      });
+      return Promise.resolve({ changed: `over to you: ${task}`, ...(why ? { why } : {}) });
+    },
+  };
+
   return [
     recentMemories,
     simFacts,
@@ -834,5 +989,21 @@ export function buildAppTools(
     whisper,
     planScript,
     script,
+    pollChat,
+    cancelPoll,
+    handOff,
   ];
+}
+
+// The open chat poll as one <live> line; undefined when none is open. A Twitch poll's votes
+// are Twitch's until it closes, so only a chat vote shows its running count.
+export function describePoll(view: ChatPollView | undefined): string | undefined {
+  if (!view) {
+    return undefined;
+  }
+  const native = view.mode === 'native';
+  const options = view.options
+    .map((option, index) => `${index + 1}. ${option.title}${native ? '' : ` ${option.votes}`}`)
+    .join(', ');
+  return `"${view.question}" (${native ? 'Twitch poll' : 'chat vote'}, ${view.secondsLeft} s left): ${options}`;
 }

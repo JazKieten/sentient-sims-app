@@ -44,7 +44,8 @@
     "test:unit": "cross-env NODE_ENV=test ELECTRON_RUN_AS_NODE=true ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run --exclude '**/*.it.test.ts' --exclude '**/*.e2e.test.ts'",
     "test:watch": "cross-env NODE_ENV=test ELECTRON_RUN_AS_NODE=true ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs --exclude '**/*.it.test.ts' --exclude '**/*.e2e.test.ts'",
     "as-electron": "ELECTRON_RUN_AS_NODE=true electron",
-    "check": "npm run lint && npm run compile && npm run test"
+    "check": "npm run lint && npm run compile && npm run test",
+    "plum:claude": "node scripts/plum-claude/launch.mjs"
   },
   "browserslist": [],
   "prettier": {

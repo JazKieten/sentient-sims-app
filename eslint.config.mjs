@@ -65,6 +65,17 @@ export default defineConfig([
       '@typescript-eslint/no-require-imports': 'off',
     },
   },
+  {
+    // The same for the ES-module dev scripts (scripts/plum-claude: Plum's Claude Code session)
+    files: ['scripts/**/*.mjs'],
+    extends: [tseslintConfigs.disableTypeChecked, eslintReact.configs['disable-type-checked']],
+    languageOptions: {
+      sourceType: 'module',
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
   globalIgnores([
     'logs',
     '*.log',

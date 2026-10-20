@@ -113,6 +113,31 @@ describe('classifyRoom', () => {
     expect(classifyRoom({ object_tableDining: 1, object_chair_dining: 4 }, home).label?.[0]).toBe('a dining room');
     expect(classifyRoom({ object_tableDining: 1, object_chair_dining: 4 }, venue).label?.[0]).toBe('a dining area');
   });
+
+  // Pectoral Fitness and Burners & Builders, 2026-10-18: lockers along the workout floor, one
+  // in the office, a microwave in the gym's lobby, a reception with chairs only
+  it("reads a venue room by its gym gear or office desk, and a venue's chairs alone as nothing", () => {
+    const floor = classifyRoom({ object_treadmill: 4, object_Locker_GP01: 6 }, venue);
+    expect(floor.label?.[0]).toBe('a workout room');
+    expect(floor.hidden).toEqual([]);
+    expect(classifyRoom({ object_treadmill: 2, object_microwave_Med: 1, object_sofa: 1 }, venue).label?.[0]).toBe(
+      'a workout room',
+    );
+    expect(classifyRoom({ object_desk: 1, object_computer: 1, object_Locker_GP01: 1 }, venue).label?.[0]).toBe(
+      'an office',
+    );
+    expect(classifyRoom({ object_desk: 1, object_computer: 1 }, home).label?.[0]).toBe('a study');
+    expect(classifyRoom({ object_chair_dining: 6 }, venue).label).toBeUndefined();
+    expect(classifyRoom({ object_chair_dining: 4 }, home).label?.[0]).toBe('a dining room');
+    expect(classifyRoom({ object_treadmill: 1, object_Locker_GP01: 2 }, home).label?.[0]).toBe('a home gym');
+    expect(classifyRoom({ object_stove: 1, object_treadmill: 1 }, home).label?.[0]).toBe('a kitchen');
+  });
+
+  // Alder Residence, 2026-10-19: a corner whirlpool tub made the bathroom "an indoor pool"
+  it('reads a whirlpool tub as a bathtub, never a pool', () => {
+    expect(classifyRoom({ object_whirlpool_CornerJets: 1, object_toilet: 1 }, home).label?.[0]).toBe('a bathroom');
+    expect(classifyRoom({ object_whirlpool_CornerJets: 1 }, venue).label?.[0]).toBe('a bathroom');
+  });
 });
 
 describe('floorRoomsPhrase', () => {

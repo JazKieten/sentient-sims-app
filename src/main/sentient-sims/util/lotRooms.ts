@@ -19,7 +19,7 @@ const BEDROOM_FURNITURE = signal(['dresser', 'nightstand']);
 const CRIB = signal(['crib', 'bassinet', 'changingtable', 'changing_table']);
 const TOILET = signal(['toilet', 'urinal']);
 const SHOWER = signal(['shower']);
-const BATHTUB = signal(['bathtub']);
+const BATHTUB = signal(['bathtub', 'whirlpool']);
 const LOCKER = signal(['locker']);
 const KITCHEN = signal([
   'fridge',
@@ -63,10 +63,11 @@ const STUDIO = signal([
   'djmixer',
 ]);
 const SAUNA = signal(['sauna']);
-const POOL = signal(['swimmingpool', 'pool'], ['pooltable']);
+const POOL = signal(['swimmingpool', 'pool'], ['pooltable', 'whirlpool']);
+const DINING_TABLE = signal(['tabledining', 'diningtable']);
 const DINING = signal(['tabledining', 'diningtable', 'chair_dining', 'diningchair', 'sitdining']);
 const PATIO = signal(['grill', 'bbq', 'barbecue', 'picnic', 'firepit', 'campfire', 'tabledining', 'diningtable']);
-const PLANTER = signal(['planter', 'gardenplot', 'gardeningsoil']);
+const PLANTER = signal(['planter', 'gardenplot', 'gardeningsoil', 'gardeningpatch']);
 
 function matches(lowered: string, { any, not }: Signal): boolean {
   return (
@@ -91,17 +92,27 @@ export function classifyRoom(kinds: Record<string, number>, options: Options): R
   const total = (which: Signal) =>
     Object.entries(kinds).reduce((sum, [name, count]) => (matches(name.toLowerCase(), which) ? sum + count : sum), 0);
   const living = has(SOFA) && has(LIVING);
+  const gym: RoomLabel = options.isHome ? ['a home gym', 'home gyms'] : ['a workout room', 'workout rooms'];
   if (has(BED)) {
     return { label: ['a bedroom', 'bedrooms'], hidden: [BED, BEDROOM_FURNITURE] };
   }
   if (has(CRIB)) {
     return { label: ['a nursery', 'nurseries'], hidden: [CRIB, BEDROOM_FURNITURE] };
   }
-  // Lockers along a pool hall's wall do not make it a locker room (Pectoral Fitness, live 2026-10-18)
+  // Lockers along a pool hall's or a workout floor's wall do not make it a locker room
   if (has(POOL)) {
     return { label: ['an indoor pool', 'indoor pools'], hidden: [POOL] };
   }
-  if (has(LOCKER)) {
+
+  // At a venue the gym gear and the office desk say what a room is for, whatever kitchen
+  // corner or locker shares it
+  if (!options.isHome && has(GYM)) {
+    return { label: gym, hidden: [] };
+  }
+  if (!options.isHome && has(DESK) && has(COMPUTER)) {
+    return { label: ['an office', 'offices'], hidden: [DESK, COMPUTER] };
+  }
+  if (has(LOCKER) && !has(GYM)) {
     return { label: ['a locker room', 'locker rooms'], hidden: [LOCKER] };
   }
   if (has(TOILET) || has(SHOWER) || has(BATHTUB)) {
@@ -134,7 +145,7 @@ export function classifyRoom(kinds: Record<string, number>, options: Options): R
     return { label: ['a library', 'libraries'], hidden: [BOOKSHELF] };
   }
   if (has(GYM)) {
-    return { label: options.isHome ? ['a home gym', 'home gyms'] : ['a workout room', 'workout rooms'], hidden: [] };
+    return { label: gym, hidden: [] };
   }
   if (has(STUDIO)) {
     return { label: ['a studio', 'studios'], hidden: [] };
@@ -142,7 +153,8 @@ export function classifyRoom(kinds: Record<string, number>, options: Options): R
   if (has(SAUNA)) {
     return { label: ['a sauna', 'saunas'], hidden: [SAUNA] };
   }
-  if (has(DINING)) {
+  // A venue's chairs alone are a waiting area, not a dining area
+  if (has(options.isHome ? DINING : DINING_TABLE)) {
     return {
       label: options.isHome ? ['a dining room', 'dining rooms'] : ['a dining area', 'dining areas'],
       hidden: [DINING],
@@ -206,6 +218,7 @@ const ROOM_ORDER = [
   'a bedroom',
   'a nursery',
   'a study',
+  'an office',
   'a library',
   'a home gym',
   'a workout room',

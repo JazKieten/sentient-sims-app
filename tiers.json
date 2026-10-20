@@ -90,6 +90,8 @@
     "src/main/sentient-sims/rendererLogSocket.ts",
     "src/main/sentient-sims/services/LotWordsService.ts",
     "src/renderer/components/LotWordsCard.tsx",
+    "src/renderer/settings/PlumBrainSettingsComponent.tsx",
+    "src/main/sentient-sims/services/plum/ClaudeCodeBrain.ts",
     "src/__tests__/Tier0.test.ts",
     "src/__tests__/SelfKnowledgeBattery.test.ts",
     "src/__tests__/MemoryTrace.test.ts",
@@ -98,6 +100,7 @@
     "src/__tests__/PlayerThreadMetric.test.ts",
     "src/__tests__/BenchRoutes.test.ts",
     "src/__tests__/CognitionTrace.test.ts",
-    "src/__tests__/LotWords.test.ts"
+    "src/__tests__/LotWords.test.ts",
+    "src/__tests__/ClaudeCodeBrain.test.ts"
   ]
 }

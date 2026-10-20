@@ -556,9 +556,12 @@ export class PlumService {
       },
     });
     this.thread.lastReplyAt = this.now();
+    if (result.error) {
+      this.emitError(result.error.message);
+    }
     log.info(
       `[Plum] external turn kind=${kind} tools=${tools} ms=${this.now() - startedAt}` +
-        `${result.error ? ` error=${result.error.status ?? ''} ${result.error.message}` : ''}`,
+        (result.error ? ` error=${result.error.status ?? ''} ${result.error.message}` : ''),
     );
     return result;
   }

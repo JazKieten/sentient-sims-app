@@ -1,11 +1,13 @@
 // The DEV tier's entry module (release 4.5): the measurement and debugging surface that
 // ships in neither player build. Memory traces (the Memories window's pipeline view), the
 // bench routes, the AI exchange reader, the trait/mood mapping export, the directed-scene
-// tester route, the Lot Words panel's routes, the Ctrl+Shift+D debug toggle and the 25146
-// log socket for the log viewer.
+// tester route, the Lot Words panel's routes, the Ctrl+Shift+D debug toggle, the 25146
+// log socket for the log viewer, and Plum's brain through a local Claude Code session.
 // Listed in tiers.json, so both player builds delete it and their generated index.ts never
 // names it. Dev builds always carry stream and autonomy too, so this tier may read them.
+import path from 'path';
 import type { Express, Request, Response } from 'express';
+import { app as electronApp } from 'electron';
 import log from 'electron-log';
 import type { ApiContext } from '../services/ApiContext';
 import type { TierRegistration } from './types';
@@ -20,6 +22,7 @@ import { DirectedSceneRequest } from '../models/DirectedSceneRequest';
 import { sendChatGeneration } from '../util/notifyRenderer';
 import { CatchErrors } from '../controllers/decorators/CatchError';
 import { LotWordsService } from '../services/LotWordsService';
+import { ClaudeCodeBrain, claudeCodeRoutes } from '../services/plum/ClaudeCodeBrain';
 
 export interface DevServices {
   memoryTraceRepository: MemoryTraceRepository;
@@ -29,6 +32,7 @@ export interface DevServices {
   bench: BenchController;
   devRoutes: DevRoutes;
   lotWords: LotWordsService;
+  claudeCode: ClaudeCodeBrain;
 }
 
 const services = new WeakMap<ApiContext, DevServices>();
@@ -100,6 +104,7 @@ function construct(ctx: ApiContext) {
   const mapping = new MappingService();
   const lotWords = new LotWordsService(ctx);
   lotWords.load();
+  const claudeCode = new ClaudeCodeBrain(ctx);
   services.set(ctx, {
     memoryTraceRepository,
     memoryTrace,
@@ -108,7 +113,9 @@ function construct(ctx: ApiContext) {
     bench: new BenchController(ctx),
     devRoutes: new DevRoutes(ctx),
     lotWords,
+    claudeCode,
   });
+  ctx.ext.plumBrain = claudeCode;
   ctx.ext.trace = {
     recordPending: (contents, trace) => {
       memoryTrace.recordPending(contents, trace);
@@ -139,6 +146,7 @@ function routes(app: Express, ctx: ApiContext) {
   app.post('/ai/v2/event/directed-scene', devRoutes.directedSceneEvent);
   app.get('/lot-words', devRoutes.getLotWords);
   app.put('/lot-words', devRoutes.saveLotWords);
+  claudeCodeRoutes(app, devOf(ctx).claudeCode);
 }
 
 export const devTier: TierRegistration = {
@@ -148,6 +156,8 @@ export const devTier: TierRegistration = {
   start: (ctx) => {
     registerDebugToggleHotkey();
     startRendererLogSocket(ctx);
+    // scripts/plum-claude/launch.mjs reads the same file
+    devOf(ctx).claudeCode.loadToken(path.join(electronApp.getPath('userData'), 'plum-claude'));
   },
   onMemoryUpserted: (ctx, memory) => {
     devOf(ctx).memoryTrace.attach(memory);

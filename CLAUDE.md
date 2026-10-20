@@ -132,6 +132,10 @@ Activities, Conversation Topics, Types of Sims...), pets inside "Household Membe
 from the romantic-Divorced bit. The dialog adds only `note` facts (shown as "Custom (Player Added)"); the route still
 takes any predicate for the bench. Skills: every one the mod sends (its top 8), level 1 included, and the prompt has a
 "your skills:" line since 2026-10-13. NLS = Natural Living (factWords ABBREVIATIONS).
+Home (2026-10-19): the mod's dossier household carries `home` {lot_id, name, world} from household.home_zone_id
+(ss_sim_dossier.build_home; mod builds from 2026-10-19). dossierFacts.homeText makes the single-valued `home` fact
+'Inner Circle, Mirage Park, Del Sol Valley' (neighborhood from descriptions/lotNeighborhoods, else the reported world);
+it is the FIRST line of the prompt's "About you" ("your home is ...") and a Home tag on the Facts dialog's summary.
 Traits beyond Create a Sim (2026-10-13): the dossier's `reward_traits` (aspiration rewards like Business Savvy, child
 skill rewards, Top-Notch Infant/Toddler) become `reward_trait` facts and ride the prompt's personality line; `phases`
 (childhood phases and a child's confidence level, mod builds from 2026-10-13) become `phase` facts and a "right now:"

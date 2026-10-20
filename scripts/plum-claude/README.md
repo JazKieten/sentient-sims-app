@@ -91,5 +91,14 @@ Found with `-p` on Claude Code 2.1.301:
 - `prompt_id` rides UserPromptSubmit, PreToolUse and Stop.
 - The session context still carries the account's email address; Plum has no reason to say it.
 
-Interactive results (channel registration, whether UserPromptSubmit fires for a channel
-event and what its `prompt` holds, `/mcp`, `/status`): see below.
+Found interactively (same layout, Max account):
+
+- `/status` says "Channels: Listening for messages from server:plum", "Login method: Claude
+  Max account" and "Setting sources: Command line arguments".
+- `/mcp` lists exactly one server: `plum`, with 2 tools.
+- A channel event fires UserPromptSubmit. Its `prompt` is the wrapped event,
+  `<channel source="plum" turn="p1" kind="chat">\n[plum turn p1 kind=chat]\n...</channel>`, and
+  its `prompt_id` is the same on the PreToolUse hooks and the Stop that follow. So turns bind
+  by marker plus `prompt_id`. The fallback (first tool call or reply acks a turn) stays in the
+  code but is not needed.
+- The tools ran with no permission prompt.

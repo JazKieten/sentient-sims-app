@@ -76,20 +76,17 @@ const TRAITS: Record<string, Entry> = {
   // Get Famous
   celebrityhomelottrait: ['Celebrity Home', 'a celebrity home on the tour routes, with restricted access at the door'],
   celebrityhome: ['Celebrity Home', 'a celebrity home on the tour routes, with restricted access at the door'],
-  celebrityhangouthighfame: [
-    'Hottest Spot in Town',
-    'the hottest spot in town, for superstars and VIPs, at hyperinflated prices',
-  ],
+  celebrityhangouthighfame: ['Hottest Spot in Town', 'the hottest spot in town, where superstars and VIPs go'],
   celebrityhangoutlowfame: [
     'Up-and-Coming Hotspot',
-    'an up-and-coming hotspot, cool before it was cool, with cheap drinks for the famous',
+    'an up-and-coming hotspot, cool before it was cool, where rising celebrities hang out',
   ],
   // Island Living
   islandspirits: ['Island Spirits', 'ancient island spirits visit the lot'],
   oceanicparadise: ['Oceanic Paradise', 'the sea here teems with dolphins and rare fish'],
   // Discover University
   studyspot: ['Study Spot', 'a good place to study, quiet and focused'],
-  universitystudenthangout: ['University Student Hang Out', 'cheap food and drink; university students flock here'],
+  universitystudenthangout: ['University Student Hang Out', 'university students flock here'],
   // Eco Lifestyle
   ecolot: ['Eco Lot', 'an eco-friendly lot'],
   geothermal: ['Geothermal', 'natural heat from the ground warms the pool and powers the place'],

@@ -10,6 +10,7 @@
 const FURNISHING_WORDS: Array<[string[], string, string]> = [
   [['pooltable', 'billiard'], 'a pool table', 'pool tables'],
   [['hottub'], 'a hot tub', 'hot tubs'],
+  [['whirlpool'], 'a bathtub', 'bathtubs'],
   [['swimmingpool', 'pool'], 'a swimming pool', 'swimming pools'],
   [['treadmill'], 'a treadmill', 'treadmills'],
   [['weightbench', 'workout', 'exercise', 'weightmachine', 'ellipt'], 'a workout machine', 'workout machines'],
@@ -84,6 +85,28 @@ const FURNISHING_WORDS: Array<[string[], string, string]> = [
   [['object_bed', 'beddouble', 'bedsingle', 'bunkbed'], 'a bed', 'beds'],
   [['dresser'], 'a dresser', 'dressers'],
   [['nightstand'], 'a nightstand', 'nightstands'],
+  [['vanitytable'], 'a vanity', 'vanities'],
+  [['hairmakeupchair', 'makeupchair'], 'a hair and make-up chair', 'hair and make-up chairs'],
+  [['directorchair'], "a director's chair", "director's chairs"],
+  [['dollycamera'], 'a camera dolly', 'camera dollies'],
+  [['camerafilm'], 'a film camera', 'film cameras'],
+  [['videostation'], 'a video station', 'video stations'],
+  [['cateringtable'], 'a catering table', 'catering tables'],
+  [['tablegame', 'dontwakellama'], 'a game table', 'game tables'],
+  [['canvas'], 'art supplies', 'art supplies'],
+  [['familyportrait'], 'a family portrait', 'family portraits'],
+  [['stuffedanimal'], 'a stuffed animal', 'stuffed animals'],
+  [['examstation'], 'a vet exam station', 'vet exam stations'],
+  [['medicinestation'], 'a vet medicine station', 'vet medicine stations'],
+  [['catcondo'], 'a cat tree', 'cat trees'],
+  [['scratchingpost'], 'a cat scratching post', 'cat scratching posts'],
+  [['petbed'], 'a pet bed', 'pet beds'],
+  [['petbowl', 'autopetfeeder'], 'a pet bowl', 'pet bowls'],
+  [['pet_toybox'], 'a pet toybox', 'pet toyboxes'],
+  [['litterbox'], 'a litterbox', 'litterboxes'],
+  [['wild_rabbit'], 'a wild rabbit', 'wild rabbits'],
+  [['gardeningfruit_money'], 'a money tree', 'money trees'],
+  [['gardeningpatch'], 'a garden', 'gardens'],
 ];
 
 // Structure, lighting, appliances and small decor: on every lot, so they say nothing about
@@ -137,6 +160,32 @@ const STRUCTURAL = [
   'chair_dining',
   'diningchair',
   'sitdining',
+  'fairydust',
+  'carrywingproxy',
+  'chimney',
+  'object_crate',
+  'crossstitch',
+  'cuttingboard',
+  'bulletinboard',
+  'friendshipbracelet',
+  'fryingpan',
+  'futurecube',
+  'gardeningfruit',
+  'starterpack',
+  'rarepack',
+  'uncommonpack',
+  'nonretail',
+  'greenscreen',
+  'hairpile',
+  'knitting_yarn',
+  'microwave',
+  'poop',
+  'lattice',
+  'stagemark',
+  'stagefocus',
+  'tablehallway',
+  'tarot',
+  'juicetray',
 ];
 
 // What a lot has one of as a rule, so a bare list (no counts) reads it in the singular
@@ -339,6 +388,43 @@ export function floorLines(
       return words.length > 0 ? `${floorName(level)}: ${words.join(', ')}` : '';
     })
     .filter(Boolean);
+}
+
+/** How a furnishing's singular starts: "a sofa", "an easel", or no article ("art supplies"). */
+export type Article = 'a' | 'an' | 'none';
+
+/** "a" or "an" by how the noun sounds, with the usual exceptions (a unicorn, an hour). */
+export function articleFor(noun: string): 'a' | 'an' {
+  const word = noun.trim().toLowerCase();
+  if (/^(hour|honest|honou?r|heir)/.test(word)) {
+    return 'an';
+  }
+  if (/^(uni|use|usu|uti|ure|eu|ewe|one\b|once)/.test(word)) {
+    return 'a';
+  }
+  return /^[aeiou]/.test(word) ? 'an' : 'a';
+}
+
+/** "a dish rack" -> a + "dish rack"; a singular with no article reads as a mass noun. */
+export function splitArticle(one: string): { article: Article; noun: string } {
+  const match = /^(a|an)\s+(.+)$/i.exec(one.trim());
+  return match ? { article: match[1].toLowerCase() as Article, noun: match[2] } : { article: 'none', noun: one.trim() };
+}
+
+export function withArticle(noun: string, article: Article): string {
+  return article === 'none' ? noun.trim() : `${article} ${noun.trim()}`;
+}
+
+/** A plain English plural of a noun phrase's last word: benches, camera dollies, sofas. */
+export function pluralOf(noun: string): string {
+  const trimmed = noun.trim();
+  if (/(s|x|z|ch|sh)$/i.test(trimmed)) {
+    return `${trimmed}es`;
+  }
+  if (/[^aeiou]y$/i.test(trimmed)) {
+    return `${trimmed.slice(0, -1)}ies`;
+  }
+  return trimmed ? `${trimmed}s` : '';
 }
 
 export function plainName(name: string, prefix: RegExp): string {

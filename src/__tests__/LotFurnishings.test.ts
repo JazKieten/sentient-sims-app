@@ -148,6 +148,73 @@ describe('furnishingWords', () => {
       ).unmapped,
     ).toEqual([]);
   });
+
+  it('knows the furnishings Jaz mapped in the Lot Words panel (2026-10-18)', () => {
+    const worded: Record<string, string> = {
+      catCondo_2x1_High: 'a cat tree',
+      catCondo_2x1_Med: 'a cat tree',
+      object_animalObjects_wild_rabbit: 'a wild rabbit',
+      object_AutoPetFeeder: 'a pet bowl',
+      object_PetBowl: 'a pet bowl',
+      object_CameraFilm_Stationary: 'a film camera',
+      object_Canvas_large: 'art supplies',
+      object_Canvas_small: 'art supplies',
+      object_CateringTable_Nice: 'a catering table',
+      object_DirectorChair: "a director's chair",
+      object_DollyCamera: 'a camera dolly',
+      object_DontWakeLlama_Game_Pub: 'a game table',
+      object_tableGame_PubTable: 'a game table',
+      object_FamilyPortrait: 'a family portrait',
+      object_GardeningFruit_Money: 'a money tree',
+      object_GardeningPatch: 'a garden',
+      object_HairMakeUpChair: 'a hair and make-up chair',
+      object_litterbox_enclosed: 'a litterbox',
+      object_pet_toybox: 'a pet toybox',
+      object_PetBed_Large: 'a pet bed',
+      object_scratchingPost: 'a cat scratching post',
+      object_stuffedAnimalDragonGEN_01: 'a stuffed animal',
+      object_vanityTable_GENSP09: 'a vanity',
+      object_vet_ExamStation: 'a vet exam station',
+      object_vetMedicineStation: 'a vet medicine station',
+      object_VideoStation: 'a video station',
+      object_whirlpool_CornerJets: 'a bathtub',
+    };
+    Object.entries(worded).forEach(([name, word]) => {
+      expect(furnishingWords({ [name]: 1 }, venue).words, name).toEqual([word]);
+    });
+    const silent = [
+      'object_CarryWingProxy',
+      'object_Chimney_SGHigh_01',
+      'object_Crate_2x1',
+      'object_CrossStitch_Hoop_Medium',
+      'object_CrossStitch_Kit',
+      'object_CuttingBoard_Dough',
+      'Object_FairyDust',
+      'object_familyBulletinBoard',
+      'object_FamilyBulletinBoard_Drawing_1',
+      'object_FriendshipBracelet_Kit',
+      'object_FryingPan_ChickenBreast',
+      'object_FutureCube',
+      'object_GardeningFruit_BellPepper',
+      'object_generic_nonretail',
+      'object_GreenScreen_HomeLot',
+      'object_hairPile',
+      'object_Knitting_YarnBall',
+      'object_Knitting_YarnBasket',
+      'object_Microwave_DS',
+      'Object_Pet_Poop_Small',
+      'object_RarePack',
+      'object_SitSP08WOODlattice',
+      'object_StageFocus',
+      'object_StageMark_Group_Large',
+      'object_StarterPack_Deluxe_VegetableHerb',
+      'object_tableHallway2x1_bm',
+      'object_Tarot_Deck',
+      'object_UncommonPack',
+      'object_VillaJuiceTray',
+    ];
+    expect(furnishingWords(silent, venue)).toEqual({ words: [], unmapped: [] });
+  });
 });
 
 // The dev build's Lot Words panel: a player's words for an exact tuning name win over the table

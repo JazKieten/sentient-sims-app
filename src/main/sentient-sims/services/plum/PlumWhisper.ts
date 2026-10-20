@@ -17,7 +17,6 @@
 import log from 'electron-log';
 import type { ApiContext } from '../ApiContext';
 import type { PlumService } from '../PlumService';
-import type { SentientSim } from '../../models/SentientSim';
 import type { MemoryEntity } from '../../db/entities/MemoryEntity';
 import { AIActionType } from '../../models/AIActionType';
 import { StageId } from '../../pipeline/stages';
@@ -227,8 +226,8 @@ export class PlumWhisperService {
     }
     try {
       if (this.ctx.settings.plumWhisperVoiced) {
-        const cast: SentientSim[] = [];
-        this.ctx.ai.playTtsLines([{ speaker, text: thought, simId: request.simId }], cast, {
+        // No cast: playTtsLines finds the speaker by simId among the sims the game has sent
+        this.ctx.ai.playTtsLines([{ speaker, text: thought, simId: request.simId }], undefined, {
           paced: true,
           pacedText: finalText,
         });

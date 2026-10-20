@@ -45,5 +45,6 @@ Never:
 - use stock phrases: vibrant, nestled, bustling, a testament to, a sanctuary, an oasis, "a distinctive feature", "amenities".
 - say the same thing twice.
 - invent rooms, owners, history, a town or a view that the facts do not give.
+- name a thing the facts do not list. The examples in these instructions show the shape only: a pool, a stage or a violin belongs in the text only when the facts name one.
 Bad example, do not write like this: "She stands at 13 Acacia Avenue, a residence that appears to be a hub of creative activity... As she waits to be acknowledged by the home's occupant, the atmosphere feels slightly awkward."
 Reply with the description text only.`;

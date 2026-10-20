@@ -316,9 +316,7 @@ export class DirectorService implements DirectorSlot {
         this.backoffUntil = this.now() + holdMs;
         this.backoffReason = result.error.message;
         this.backoffStatus = status;
-        log.warn(
-          `[Director] the turn failed (${status}); holding ${holdMs / 60_000} min: ${result.error.message}`,
-        );
+        log.warn(`[Director] the turn failed (${status}); holding ${holdMs / 60_000} min: ${result.error.message}`);
       }
     } catch (error) {
       log.warn('[Director] tick failed', error);

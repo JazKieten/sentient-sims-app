@@ -514,6 +514,8 @@ export class PlumService {
       return { error: { status: 503, message: reason } };
     }
     const kind = PlumService.kindOf(options);
+    // The seed is the conversation BEFORE this turn (the turn's own text rides after it)
+    const priorRows = this.thread.rows.slice(-SEED_ROWS);
     if (!options.director && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
@@ -536,7 +538,7 @@ export class PlumService {
             log.warn('[Plum] could not read the notes', error);
           }
         }
-        return this.renderSeed(notes, this.thread.rows.slice(-SEED_ROWS));
+        return this.renderSeed(notes, priorRows);
       },
       text,
       runTool: async (name, args) => {

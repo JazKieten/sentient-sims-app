@@ -576,4 +576,64 @@ describe('DirectorService', () => {
     await vi.advanceTimersByTimeAsync(TICK_MS);
     expect(client.requests).toHaveLength(3);
   });
+
+  describe('on the Claude Code brain', () => {
+    let down: string | undefined;
+    let results: { error?: { status?: number; message: string } }[];
+    let turns: number;
+
+    beforeEach(() => {
+      down = undefined;
+      results = [];
+      turns = 0;
+      ctx.settings.set(SettingsEnum.PLUM_BRAIN, 'claude-code');
+      ctx.ext.plumBrain = {
+        unavailable: () => down,
+        runTurn: (port) => {
+          turns += 1;
+          port.say('ARC: Brainy');
+          return Promise.resolve(results.shift() ?? {});
+        },
+      };
+    });
+
+    it('holds the tick while the brain is down, without an error row', async () => {
+      down = 'Claude Code session is not running';
+      director.start();
+      await flush();
+      expect(turns).toBe(0);
+      expect(director.status().suspended).toContain('not running');
+      expect(eventsOfKind('error')).toEqual([]);
+      down = undefined;
+      ctx.simStateCache.ingest(report(2));
+      now += TICK_MS;
+      await vi.advanceTimersByTimeAsync(TICK_MS);
+      expect(turns).toBe(1);
+      expect(client.requests).toHaveLength(0);
+    });
+
+    it('a plan limit (429) holds ten minutes, a lost session (503) one', async () => {
+      results.push({ error: { status: 429, message: 'Claude plan limit reached' } });
+      director.start();
+      await flush();
+      expect(turns).toBe(1);
+      for (let minute = 0; minute < 9; minute += 1) {
+        ctx.simStateCache.ingest(report(10 + minute));
+        now += TICK_MS;
+        await vi.advanceTimersByTimeAsync(TICK_MS);
+      }
+      expect(turns).toBe(1);
+      expect(director.status().suspended).toContain('plan limit');
+      results.push({ error: { status: 503, message: 'the Claude Code session closed mid-turn' } });
+      ctx.simStateCache.ingest(report(30));
+      now += 2 * TICK_MS;
+      await vi.advanceTimersByTimeAsync(TICK_MS);
+      expect(turns).toBe(2);
+      // One minute later it runs again
+      ctx.simStateCache.ingest(report(31));
+      now += TICK_MS + 1;
+      await vi.advanceTimersByTimeAsync(TICK_MS);
+      expect(turns).toBe(3);
+    });
+  });
 });

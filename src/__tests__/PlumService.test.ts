@@ -660,6 +660,80 @@ describe('PlumService', () => {
       '<live>\nclock: 9:05 day 12 (paused)\nlot: Goth Manor (Residential)\nfunds: §12,340\n</live>',
     );
   });
+  describe('on an external brain (plumBrain = claude-code)', () => {
+    let down: string | undefined;
+    let ports: { kind: string; live: string; text: string }[];
+
+    beforeEach(() => {
+      down = undefined;
+      ports = [];
+      ctx.settings.set(SettingsEnum.PLUM_API_KEY, '');
+      ctx.settings.set(SettingsEnum.PLUM_BRAIN, 'claude-code');
+      ctx.ext.plumBrain = {
+        unavailable: () => down,
+        runTurn: async (port) => {
+          ports.push({ kind: port.kind, live: port.live, text: port.text });
+          await port.runTool('look_at_lot', {});
+          port.say('All quiet.');
+          return {};
+        },
+      };
+    });
+
+    it('needs no API key, runs tools through the guarded runner and says rows', async () => {
+      const turn = plum.runTurn('how is it going?');
+      await flush();
+      const [call] = toolCalls();
+      expect(call.name).toBe('look_at_lot');
+      plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: {} });
+      expect(await turn).toEqual({});
+      expect(client.requests).toHaveLength(0);
+      expect(ports[0].kind).toBe('chat');
+      expect(ports[0].live.startsWith('<live>')).toBe(true);
+      expect(ports[0].text).toBe('how is it going?');
+      expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'tool', 'plum']);
+      expect(eventsOfKind('error')).toEqual([]);
+      const status = eventsOfKind('status').pop();
+      expect(status?.text).toContain('via Claude Code');
+    });
+
+    it('while the brain is down a turn answers 503 before it builds the live block', async () => {
+      down = 'Claude Code session is not running';
+      const live = vi.spyOn(plum, 'liveContextBlock');
+      const result = await plum.runTurn('hello?');
+      expect(result.error?.status).toBe(503);
+      expect(live).not.toHaveBeenCalled();
+      expect(ports).toEqual([]);
+      expect(plum.brainUnavailable()).toBe(down);
+      expect(eventsOfKind('error').map((event) => event.text)).toEqual([down]);
+    });
+
+    it('a long thread does not roll (the session keeps its own context)', async () => {
+      (plum as unknown as { thread: { contextTokens: number } }).thread.contextTokens = THREAD_ROLL_TOKENS * 2;
+      const roll = vi.spyOn(plum, 'startNewThread');
+      const turn = plum.runTurn('still there?');
+      await flush();
+      const [call] = toolCalls();
+      plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: {} });
+      await turn;
+      expect(roll).not.toHaveBeenCalled();
+    });
+
+    it('a loose tool (typed in the terminal) is never destructive', async () => {
+      const outcome = await plum.looseTool('send_sim_home', { sim: 'Bella', confirmed_by_player: true });
+      expect(outcome.ok).toBe(false);
+      expect(toolCalls()).toEqual([]);
+    });
+
+    it('with the setting on API the slot is ignored', async () => {
+      ctx.settings.set(SettingsEnum.PLUM_BRAIN, 'api');
+      ctx.settings.set(SettingsEnum.PLUM_API_KEY, 'sk-test');
+      client.queue.push(message([text('API here.')], 'end_turn'));
+      await plum.runTurn('hi');
+      expect(ports).toEqual([]);
+      expect(client.requests).toHaveLength(1);
+    });
+  });
 });
 
 describe('Plum tool catalogue', () => {

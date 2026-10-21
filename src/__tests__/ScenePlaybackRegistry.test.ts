@@ -43,6 +43,23 @@ describe('ScenePlaybackRegistry', () => {
     expect(notifySceneEnded).toHaveBeenCalledWith(SCENE, 'finished');
   });
 
+  it('names the live conversation between exactly these sims, in any order', () => {
+    const { registry } = harness;
+    registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.', 'Hi.'));
+
+    expect(registry.liveSceneFor(['2', '1'])).toBe(SCENE);
+    expect(registry.liveSceneFor(['1', '2', '3'])).toBeUndefined();
+    expect(registry.liveSceneFor(['1'])).toBeUndefined();
+
+    // A stopped or finished conversation frees the pair
+    registry.stop(SCENE, 'walked_away', 'soft');
+    expect(registry.liveSceneFor(PARTICIPANTS)).toBeUndefined();
+    registry.roundQueued('scene-2', PARTICIPANTS, 1, lines('Again.'));
+    expect(registry.liveSceneFor(PARTICIPANTS)).toBe('scene-2');
+    registry.playbackEnded('scene-2', true);
+    expect(registry.liveSceneFor(PARTICIPANTS)).toBeUndefined();
+  });
+
   it('aborts the signal a generating round holds when the scene stops', () => {
     const { registry } = harness;
     registry.roundQueued(SCENE, PARTICIPANTS, 1, lines('Hello.', 'Hi.'));

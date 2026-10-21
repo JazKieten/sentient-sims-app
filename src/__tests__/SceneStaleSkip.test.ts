@@ -214,6 +214,53 @@ describe('a scene the game has moved on from', () => {
     expect(roundQueued.mock.calls[0][7]).toBe(claimedAt);
   });
 
+  it('is skipped before any model call while a conversation between the same sims is airing', async () => {
+    // 2026-10-20: a greeting and the chat it opened each became a scene, and the two
+    // aired with their lines interleaved
+    const { ctx, labels } = scene('scene-pair-already-airing');
+    ctx.scenePlayback.roundQueued('earlier-scene', ['2', '1'], 1, [{ speaker: 'Travis Scott', text: 'Hey.' }]);
+
+    const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt: Date.now() });
+
+    expect(result.status).toEqual(InteractionEventStatus.NOOP);
+    expect(labels).toEqual([]);
+  });
+
+  it('still generates for a bigger group that holds the airing pair', async () => {
+    const { ctx, labels } = scene('scene-group-around-airing-pair');
+    ctx.settings.set(SettingsEnum.SCENE_MAX_ROUNDS, 1);
+    ctx.scenePlayback.roundQueued('earlier-scene', ['1', '2', '3'], 1, [{ speaker: 'Dirk Dreamer', text: 'Hey.' }]);
+
+    const result = await ctx.ai.runDirectedGeneration(sceneEvent(), { action: 'chat', eventAt: Date.now() });
+
+    expect(result.status).toEqual(InteractionEventStatus.GENERATED);
+    expect(labels).toContain('Director Briefing');
+  });
+
+  it('declines to air a prefetched scene once a conversation between its sims has begun', async () => {
+    const { ctx, roundQueued } = scene('scene-pair-airing-at-play');
+    ctx.settings.set(SettingsEnum.SCENE_MAX_ROUNDS, 1);
+    let play: ScenePlay = () => true;
+    const result = await ctx.ai.runDirectedGeneration(
+      sceneEvent(),
+      { action: 'chat' },
+      {
+        deferPlayback: true,
+        onPlaybackReady: (ready) => {
+          play = ready;
+        },
+      },
+    );
+    expect(result.status).toEqual(InteractionEventStatus.GENERATED);
+
+    // The pair's other scene reached the renderer while this one waited for its claim
+    ctx.scenePlayback.roundQueued('earlier-scene', ['1', '2'], 1, [{ speaker: 'Travis Scott', text: 'Hey.' }]);
+    roundQueued.mockClear();
+
+    expect(play(Date.now())).toBe(false);
+    expect(roundQueued).not.toHaveBeenCalled();
+  });
+
   it('does not continue a conversation the game has moved on from', async () => {
     const ref: { ctx?: ApiContext } = {};
     let briefings = 0;

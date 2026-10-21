@@ -85,6 +85,10 @@ type SceneEntry = {
   closed: boolean;
 };
 
+function castKey(participantSimIds: string[]): string {
+  return [...new Set(participantSimIds)].sort().join('|');
+}
+
 export type ScenePlaybackDeps = {
   // Tell the renderer to drop this scene's remaining playback
   notifyStop: (payload: { sceneId: string; mode: SceneStopMode }) => void;
@@ -265,6 +269,24 @@ export class ScenePlaybackRegistry {
     if (!sceneId) return false;
     const entry = this.scenes.get(sceneId);
     return Boolean(entry?.stopped);
+  }
+
+  /**
+   * The conversation between exactly these sims that is airing or still writing its
+   * next round, if there is one. The game fires socials between the same two sims
+   * seconds apart (a greeting, then the chat it opens) and each became its own scene,
+   * so two conversations between the same pair aired with their lines interleaved
+   * (live 2026-10-20). One conversation per cast at a time; a bigger group holding
+   * the pair is a different conversation.
+   */
+  liveSceneFor(participantSimIds: string[]): string | undefined {
+    const wanted = castKey(participantSimIds);
+    for (const [sceneId, entry] of this.scenes) {
+      if (!entry.stopped && !entry.closed && castKey(entry.participantSimIds) === wanted) {
+        return sceneId;
+      }
+    }
+    return undefined;
   }
 
   /**

@@ -240,8 +240,9 @@ export class PlumWakeService {
 
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // Fired triggers whose wake could not run yet (Plum mid-turn, director holding)
-  private readonly fired: { trigger: WakeTrigger; text: string }[] = [];
+  // Fired triggers whose wake could not run yet (Plum mid-turn, director holding); no
+  // trigger = a wake from outside the trigger list (wakeWith)
+  private readonly fired: { trigger?: WakeTrigger; text: string }[] = [];
 
   // Whisper triggers that fired under the player's pause: they act on the unpause
   private readonly deferred: { trigger: WakeTrigger; because: string }[] = [];
@@ -449,7 +450,8 @@ export class PlumWakeService {
     for (const trigger of this.triggers.splice(0)) {
       this.clearTimer(trigger);
     }
-    this.fired.splice(0);
+    const outside = this.fired.filter((entry) => !entry.trigger);
+    this.fired.splice(0, this.fired.length, ...outside);
     this.deferred.splice(0);
     if (this.frozen) {
       this.frozen = undefined;
@@ -1351,6 +1353,13 @@ export class PlumWakeService {
     this.drain();
   }
 
+  // A wake that no trigger of Plum's set (a chat poll's result): queued behind the fired
+  // triggers and run the same way, director tick or plain wake turn
+  wakeWith(text: string) {
+    this.fired.push({ text });
+    this.drain();
+  }
+
   // Runs the fired wakes the moment Plum can take them. A director that is holding (pause,
   // stale report, emergency, cap) keeps its wake for the next evaluation.
   private drain() {
@@ -1368,7 +1377,7 @@ export class PlumWakeService {
         }
         // A script's or an arc's wake with the director off is still the director's business:
         // its model and its roll threshold (PlumService.isDirectorTurn)
-        const script = Boolean(next.trigger.script || next.trigger.then);
+        const script = Boolean(next.trigger?.script || next.trigger?.then);
         void this.plum.runTurn(next.text, { wake: true, ...(script ? { script: true } : {}) });
       }
       this.fired.shift();

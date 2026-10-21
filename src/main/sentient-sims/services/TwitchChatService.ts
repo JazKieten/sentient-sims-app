@@ -105,6 +105,10 @@ export class TwitchChatService {
 
   private readonly twitchAuth: TwitchAuthService;
 
+  // An open chat poll (ChatPollService) sees every message before the command parse; true
+  // means the message was a vote and goes no further
+  voteSink?: (voter: { key: string; name: string }, text: string) => boolean;
+
   constructor(ctx: ApiContext, twitchAuth: TwitchAuthService, socketFactory?: TwitchSocketFactory) {
     this.twitchAuth = twitchAuth;
     this.ctx = ctx;
@@ -142,6 +146,15 @@ export class TwitchChatService {
       // Cooldowns/permission/command word are read live per message; just refresh the panel
       this.pushStatus();
     }
+  }
+
+  isConnected(): boolean {
+    return this.state === 'connected';
+  }
+
+  // A line for the settings panel from another stream service (the chat poll)
+  noteEvent(event: string) {
+    this.setEvent(event);
   }
 
   getStatus(): TwitchChatStatus {
@@ -277,9 +290,13 @@ export class TwitchChatService {
         this.seenMessageIds.shift();
       }
     }
-    const commandWord = this.ctx.settings.twitchCommandWord;
     // Twitch's reply feature prefixes "@username " — strip it or those asks vanish silently
-    const question = extractCommand(stripLeadingMention(stripAction(text)), commandWord);
+    const plain = stripLeadingMention(stripAction(text));
+    if (this.voteSink?.({ key: tags['user-id'] || viewer.toLowerCase(), name: viewer }, plain)) {
+      return;
+    }
+    const commandWord = this.ctx.settings.twitchCommandWord;
+    const question = extractCommand(plain, commandWord);
     if (question === undefined) {
       if (text.toLowerCase().includes(commandWord.toLowerCase())) {
         log.info(`Twitch: message from ${viewer} contains ${commandWord} but did not parse as a command: ${text}`);

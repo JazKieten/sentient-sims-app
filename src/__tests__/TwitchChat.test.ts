@@ -306,6 +306,25 @@ describe('TwitchChatService', () => {
     service.shutdown();
   });
 
+  it('an open chat poll takes its votes before the !say parse', () => {
+    const { sockets, service, runDirectedGeneration } = twitchContext();
+    connectSocket(sockets[0]);
+    expect(service.isConnected()).toBe(true);
+    const votes: [string, string][] = [];
+    service.voteSink = (voter, text) => {
+      if (!text.startsWith('!vote')) {
+        return false;
+      }
+      votes.push([voter.key, text]);
+      return true;
+    };
+    privmsg(sockets[0], '@streamer !vote 2', '@display-name=Nova;user-id=77 ');
+    privmsg(sockets[0], '!say hello');
+    expect(votes).toEqual([['77', '!vote 2']]);
+    expect(runDirectedGeneration).toHaveBeenCalledTimes(1);
+    service.shutdown();
+  });
+
   it('answers PING with PONG', () => {
     const { sockets, service } = twitchContext();
     connectSocket(sockets[0]);

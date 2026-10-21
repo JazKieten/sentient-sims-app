@@ -45,7 +45,7 @@ import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, directorNoteBlock, liveBlock } from './plum/plumPrompt';
 import { describeLiveSims } from './plum/plumLiveSims';
 import { costOf } from './plum/plumPricing';
-import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
+import { buildAppTools, describePoll, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
 import type { PlumBrainSlot } from '../tiers/types';
 import {
@@ -966,6 +966,7 @@ export class PlumService {
       ...describeLiveSims(report),
       triggers: this.wake.list().map((trigger) => `${trigger.id} ${describeTrigger(trigger)}`),
       script: this.wake.describeScript(),
+      poll: describePoll(this.ctx.ext.chatPoll?.current()),
       journal: this.wake.takeJournal(),
       ...(!detached && this.directorNote && this.ctx.ext.director?.status().active
         ? { director: this.directorNote }

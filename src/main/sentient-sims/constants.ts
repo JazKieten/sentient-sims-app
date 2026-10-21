@@ -288,6 +288,9 @@ export const defaultTwitchCommandWord = '!say';
 // Voice the app speaks viewer !ask questions with when none is configured (ElevenLabs
 // premade "Charlie": energetic, casual — distinct from the drama-cast sim voices)
 export const defaultTwitchChatVoiceId = 'IKne3meq5aSn9XLyUdCD';
+// A chat poll Plum opens (ChatPollService): how chat votes in chat mode, how long by default
+export const defaultTwitchVoteCommand = '!vote';
+export const defaultTwitchPollSeconds = 90;
 
 // A sim's inner voice is only written down when the salience stage says the moment was
 // worth remembering. Every tick used to file its monologue as a row, which buried the

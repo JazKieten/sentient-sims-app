@@ -174,8 +174,38 @@ export interface PlumBrainSlot {
   onThreadReset?(): void;
 }
 
+// STREAM: a vote Twitch chat casts for Plum (ChatPollService), one at a time. The result
+// wakes Plum with a <chat_poll> turn (PlumWakeService.wakeWith).
+export type ChatPollMode = 'native' | 'chat';
+
+export type ChatPollRequest = { question: string; options: string[]; seconds: number; note: string };
+
+export type ChatPollOpened = {
+  id: string;
+  mode: ChatPollMode;
+  seconds: number;
+  // Why a native poll became a chat vote
+  fellBack?: string;
+};
+
+export type ChatPollView = {
+  id: string;
+  question: string;
+  mode: ChatPollMode;
+  options: { title: string; votes: number }[];
+  secondsLeft: number;
+};
+
+export interface ChatPollSlot {
+  open(request: ChatPollRequest): Promise<ChatPollOpened>;
+  // False when no poll was open
+  cancel(): Promise<boolean>;
+  current(): ChatPollView | undefined;
+}
+
 export interface TierExtensions {
   director?: DirectorSlot;
+  chatPoll?: ChatPollSlot;
   plumPush?: PlumPushRegistration;
   plumCognition?: (simId: string) => PlumCognitionView;
   trace?: TraceSlot;

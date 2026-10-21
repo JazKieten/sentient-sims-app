@@ -8,7 +8,7 @@ vi.mock('main/sentient-sims/websocketServer', () => ({
 
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
-import { buildAppTools, resolveSimId } from 'main/sentient-sims/services/plum/PlumAppTools';
+import { buildAppTools, describePoll, resolveSimId } from 'main/sentient-sims/services/plum/PlumAppTools';
 import { mockApiContext } from './util';
 
 const BELLA = '100';
@@ -333,5 +333,62 @@ describe('Plum app-side tools', () => {
     });
     expect(names).toContain('plan_arc');
     expect(names).toContain('director_note');
+  });
+
+  it('poll_chat is gated on the stream slot, asks the player first and keeps to Twitch limits', async () => {
+    const ctx = mockApiContext({ tiers: [] });
+    const pollChat = tool(ctx, 'poll_chat');
+    expect(pollChat.onlyWith).toBe('chatPoll');
+    expect(pollChat.definition.risk).toBe('destructive');
+    const base = { question: 'Does Anker move in?', options: ['Move in', 'Not yet'], seconds: 0, note: 'move him' };
+    await expect(pollChat.run({ ...base, confirmed_by_player: true })).rejects.toThrow('not part of this build');
+
+    const open = vi.fn().mockResolvedValue({ id: 'poll-1', mode: 'chat', seconds: 90 });
+    ctx.ext.chatPoll = { open, cancel: vi.fn(), current: () => undefined };
+    await expect(pollChat.run({ ...base, confirmed_by_player: false })).rejects.toThrow('ask the player first');
+    await expect(pollChat.run({ ...base, options: ['Only one'], confirmed_by_player: true })).rejects.toThrow(
+      '2-5 options',
+    );
+    await expect(
+      pollChat.run({ ...base, options: ['Move in', 'Not yet, give it a few more weeks'], confirmed_by_player: true }),
+    ).rejects.toThrow('1-25 characters');
+    await expect(pollChat.run({ ...base, seconds: 5, confirmed_by_player: true })).rejects.toThrow('seconds must be');
+
+    const result = (await pollChat.run({ ...base, confirmed_by_player: true })) as { changed: string; id: string };
+    expect(open).toHaveBeenCalledWith({ question: base.question, options: base.options, seconds: 0, note: 'move him' });
+    expect(result.changed).toBe('opened a chat vote (!vote) for 90 s: Does Anker move in?');
+  });
+
+  it('hand_off shows the task in the game and the tab', async () => {
+    const { sendModNotification } = await import('main/sentient-sims/websocketServer');
+    vi.mocked(sendModNotification).mockClear();
+    const ctx = mockApiContext({ tiers: [] });
+    const handOff = tool(ctx, 'hand_off');
+    expect(handOff.definition.risk).toBe('read');
+    const result = (await handOff.run({ task: 'Move Anker into the Calloway household', why: 'no move-in tool' })) as {
+      changed: string;
+    };
+    expect(result.changed).toBe('over to you: Move Anker into the Calloway household');
+    expect(vi.mocked(sendModNotification).mock.calls[0][0]).toMatchObject({
+      type: 'notification',
+      notification: { title: 'Plum: over to you', message: 'Move Anker into the Calloway household' },
+    });
+    await expect(handOff.run({ task: ' ', why: '' })).rejects.toThrow('needs the task');
+  });
+
+  it('describePoll renders the open poll for the live block', () => {
+    expect(describePoll(undefined)).toBeUndefined();
+    expect(
+      describePoll({
+        id: 'poll-1',
+        question: 'Q?',
+        mode: 'chat',
+        options: [
+          { title: 'A', votes: 2 },
+          { title: 'B', votes: 0 },
+        ],
+        secondsLeft: 41,
+      }),
+    ).toBe('"Q?" (chat vote, 41 s left): 1. A 2, 2. B 0');
   });
 });

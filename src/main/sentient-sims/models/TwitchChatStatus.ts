@@ -4,6 +4,8 @@ export type TwitchAuthStatus = {
   loggedIn: boolean;
   // Twitch login name of the connected (broadcaster) account
   login?: string;
+  // The login granted the poll scope (Plum's native polls)
+  pollsAllowed?: boolean;
 };
 
 // Pushed to the renderer over 'twitch-status' whenever anything changes; the settings

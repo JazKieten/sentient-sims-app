@@ -3,7 +3,7 @@
 // and a native poll that cannot open, counts !vote lines off the chat TwitchChatService already
 // reads. One poll at a time. When it closes, the votes and the winner wake Plum with a
 // <chat_poll> turn to carry out, the result is kept as a Plum note, and the game shows a
-// notification at open and at close.
+// notification at open and at close. overlay() feeds the OBS page (util/pollOverlayPage).
 import log from 'electron-log';
 import type { ApiContext } from './ApiContext';
 import type { TwitchChatService } from './TwitchChatService';
@@ -18,6 +18,9 @@ const NATIVE_SETTLE_MS = 2000;
 const NATIVE_READ_RETRY_MS = 3000;
 const NATIVE_READ_ATTEMPTS = 5;
 
+// An open Twitch poll's running votes are read at most this often, and only while the overlay asks
+const NATIVE_LIVE_MS = 3000;
+
 type OpenPoll = {
   id: string;
   question: string;
@@ -29,7 +32,39 @@ type OpenPoll = {
   // chat mode: voter key -> option index (a later vote replaces an earlier one)
   ballots: Map<string, number>;
   nativeId?: string;
+  // native: the running votes, last read from Twitch
+  liveCounts?: number[];
   timer?: ReturnType<typeof setTimeout>;
+};
+
+export type PollOverlayOption = { title: string; votes: number };
+
+export type PollOverlayOutcome = 'decided' | 'no_votes' | 'unreadable' | 'cancelled';
+
+// What the OBS overlay shows: the open poll, and the last one's result (the page decides how
+// long to keep it up). Times are this machine's epoch ms; `now` lets the page correct its clock.
+export type PollOverlayState = {
+  now: number;
+  poll?: {
+    id: string;
+    question: string;
+    mode: ChatPollMode;
+    seconds: number;
+    endsAt: number;
+    options: PollOverlayOption[];
+    total: number;
+  };
+  result?: {
+    id: string;
+    question: string;
+    mode: ChatPollMode;
+    closedAt: number;
+    outcome: PollOverlayOutcome;
+    options: PollOverlayOption[];
+    total: number;
+    winner?: number;
+    tied?: number[];
+  };
 };
 
 export type PollTally = {
@@ -164,6 +199,10 @@ export class ChatPollService implements ChatPollSlot {
 
   private poll?: OpenPoll;
 
+  private lastResult?: PollOverlayState['result'];
+
+  private nativeReadAt = 0;
+
   private sequence = 0;
 
   constructor(ctx: ApiContext, twitchChat: TwitchChatService, twitchAuth: TwitchAuthService, deps: ChatPollDeps = {}) {
@@ -231,6 +270,7 @@ export class ChatPollService implements ChatPollSlot {
       return false;
     }
     this.finish(poll);
+    this.keepResult(poll, 'cancelled', this.countsOf(poll));
     if (poll.nativeId) {
       // ARCHIVED ends it and hides the results on Twitch
       const result = await this.twitchAuth.helix('PATCH', '/polls', {
@@ -253,14 +293,39 @@ export class ChatPollService implements ChatPollSlot {
     if (!poll) {
       return undefined;
     }
-    const counts = this.chatCounts(poll);
+    const counts = this.countsOf(poll);
     return {
       id: poll.id,
       question: poll.question,
       mode: poll.mode,
-      // A native poll's votes are Twitch's until it closes
       options: poll.options.map((title, index) => ({ title, votes: counts[index] })),
       secondsLeft: Math.max(0, Math.ceil((poll.endsAt - this.now()) / 1000)),
+    };
+  }
+
+  overlay(): PollOverlayState {
+    const now = this.now();
+    const poll = this.poll;
+    if (!poll) {
+      return { now, ...(this.lastResult ? { result: this.lastResult } : {}) };
+    }
+    if (poll.mode === 'native' && now - this.nativeReadAt >= NATIVE_LIVE_MS) {
+      this.nativeReadAt = now;
+      void this.readNativeLive(poll);
+    }
+    const counts = this.countsOf(poll);
+    return {
+      now,
+      poll: {
+        id: poll.id,
+        question: poll.question,
+        mode: poll.mode,
+        seconds: poll.seconds,
+        endsAt: poll.endsAt,
+        options: poll.options.map((title, index) => ({ title, votes: counts[index] })),
+        total: counts.reduce((sum, count) => sum + count, 0),
+      },
+      ...(this.lastResult ? { result: this.lastResult } : {}),
     };
   }
 
@@ -307,12 +372,48 @@ export class ChatPollService implements ChatPollSlot {
     return true;
   }
 
-  private chatCounts(poll: OpenPoll): number[] {
+  // Chat: the ballots. Native: Twitch's running votes, zeros until the overlay has read them.
+  private countsOf(poll: OpenPoll): number[] {
+    if (poll.mode === 'native') {
+      return poll.liveCounts ?? poll.options.map(() => 0);
+    }
     const counts = poll.options.map(() => 0);
     for (const index of poll.ballots.values()) {
       counts[index] += 1;
     }
     return counts;
+  }
+
+  private async readNativeLive(poll: OpenPoll) {
+    const params = new URLSearchParams({
+      broadcaster_id: this.ctx.settings.twitchAuth.broadcasterId ?? '',
+      id: poll.nativeId ?? '',
+    });
+    const result = await this.twitchAuth.helix('GET', `/polls?${params.toString()}`);
+    const found = Array.isArray(result.data)
+      ? (result.data[0] as { choices?: { votes?: number }[] } | undefined)
+      : undefined;
+    if (result.status !== 200 || !found?.choices || this.poll !== poll) {
+      return;
+    }
+    poll.liveCounts = poll.options.map((_, index) => {
+      const votes = found.choices?.[index]?.votes;
+      return typeof votes === 'number' ? votes : 0;
+    });
+  }
+
+  private keepResult(poll: OpenPoll, outcome: PollOverlayOutcome, counts: number[], tally?: PollTally) {
+    this.lastResult = {
+      id: poll.id,
+      question: poll.question,
+      mode: poll.mode,
+      closedAt: this.now(),
+      outcome,
+      options: poll.options.map((title, index) => ({ title, votes: counts[index] ?? 0 })),
+      total: counts.reduce((sum, count) => sum + count, 0),
+      ...(tally?.winner !== undefined ? { winner: tally.winner } : {}),
+      ...(tally?.tied ? { tied: tally.tied } : {}),
+    };
   }
 
   private async close(poll: OpenPoll) {
@@ -332,7 +433,7 @@ export class ChatPollService implements ChatPollSlot {
         unreadable = counts;
       }
     } else {
-      tally = tallyVotes(this.chatCounts(poll), this.random);
+      tally = tallyVotes(this.countsOf(poll), this.random);
     }
     this.finish(poll);
     this.announce(poll, tally, unreadable);
@@ -392,12 +493,15 @@ export class ChatPollService implements ChatPollSlot {
   private announce(poll: OpenPoll, tally: PollTally | undefined, unreadable: string | undefined) {
     let message: string;
     if (!tally) {
+      this.keepResult(poll, 'unreadable', this.countsOf(poll));
       message = `The vote on "${poll.question}" closed, but its result could not be read.`;
       log.warn(`[ChatPoll] ${poll.id} closed unreadable: ${unreadable}`);
     } else if (tally.winner === undefined) {
+      this.keepResult(poll, 'no_votes', tally.counts, tally);
       message = `Nobody voted on "${poll.question}".`;
       log.info(`[ChatPoll] ${poll.id} closed with no votes`);
     } else {
+      this.keepResult(poll, 'decided', tally.counts, tally);
       const winner = poll.options[tally.winner];
       const votes = tally.counts[tally.winner];
       message = `Chat picked "${winner}" (${votes} of ${tally.total} vote${tally.total === 1 ? '' : 's'}${tally.tied ? ', a tie drawn by lot' : ''}).`;

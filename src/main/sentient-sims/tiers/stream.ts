@@ -1,5 +1,5 @@
 // The STREAM tier's entry module (release 4.5): Twitch !ask, Plum's chat polls
-// (ChatPollService), the moodlet a closed scene leaves (SceneMoodletService), the game ending
+// (ChatPollService, and their OBS overlay at /overlay/poll), the moodlet a closed scene leaves (SceneMoodletService), the game ending
 // a conversation when its sims walk apart (scene_control), and the AI exchange log persisted
 // in the save (decision 16). Listed in
 // tiers.json, so the core build deletes it and the generated index.ts never names it.
@@ -12,6 +12,7 @@ import { handleTierInvoke } from './ipc';
 import { TwitchAuthService } from '../services/TwitchAuthService';
 import { TwitchChatService } from '../services/TwitchChatService';
 import { ChatPollService } from '../services/ChatPollService';
+import { POLL_OVERLAY_HTML } from '../util/pollOverlayPage';
 import { SceneMoodletService } from '../services/SceneMoodletService';
 import { AIExchangeRepository } from '../db/AIExchangeRepository';
 import type { SceneControl } from '../models/ModLogWebsocketMessage';
@@ -110,6 +111,14 @@ function debugPoll(ctx: ApiContext) {
 function routes(app: Express, ctx: ApiContext) {
   app.post('/debug/twitch-message', injectTwitchMessage(ctx));
   app.post('/debug/twitch-poll', debugPoll(ctx));
+
+  // The OBS Browser Source for Plum's polls, and the state it reads twice a second
+  app.get('/overlay/poll', (_req: Request, res: Response) => {
+    res.type('html').send(POLL_OVERLAY_HTML);
+  });
+  app.get('/overlay/poll/state', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(streamOf(ctx).chatPoll.overlay());
+  });
 }
 
 function ipc(ipcMain: IpcMain, ctx: ApiContext) {

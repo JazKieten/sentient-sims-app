@@ -13,6 +13,7 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { ChatPollService, chatPollWakeText, parseVote, tallyVotes } from 'main/sentient-sims/services/ChatPollService';
 import type { TwitchChatService } from 'main/sentient-sims/services/TwitchChatService';
 import type { HelixResult, TwitchAuthService } from 'main/sentient-sims/services/TwitchAuthService';
+import { POLL_OVERLAY_HTML } from 'main/sentient-sims/util/pollOverlayPage';
 import { mockEnvironment } from './util';
 
 const OPTIONS = ['Move in', 'Not yet'];
@@ -183,5 +184,73 @@ describe('ChatPollService', () => {
     expect(opened.mode).toBe('chat');
     expect(opened.fellBack).toContain('Affiliate and Partner only');
     expect(chat.voteSink).toBeDefined();
+  });
+
+  it('shows the overlay the open poll, then the result it closed with', async () => {
+    const { service, vote } = harness();
+    expect(service.overlay().poll).toBeUndefined();
+    await service.open({ question: 'Does Anker move in?', options: OPTIONS, seconds: 30, note: '' });
+    vote('a', '1');
+    vote('b', '2');
+    vote('c', '2');
+    const open = service.overlay();
+    expect(open.poll).toMatchObject({
+      id: 'poll-1',
+      mode: 'chat',
+      seconds: 30,
+      endsAt: open.now + 30_000,
+      total: 3,
+      options: [
+        { title: 'Move in', votes: 1 },
+        { title: 'Not yet', votes: 2 },
+      ],
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const closed = service.overlay();
+    expect(closed.poll).toBeUndefined();
+    expect(closed.result).toMatchObject({ id: 'poll-1', outcome: 'decided', winner: 1, total: 3 });
+    expect(closed.result?.closedAt).toBe(closed.now);
+  });
+
+  it('shows a cancelled poll and one nobody voted on as such', async () => {
+    const { service, vote } = harness();
+    await service.open({ question: 'Q?', options: OPTIONS, seconds: 30, note: '' });
+    vote('a', '1');
+    await service.cancel();
+    expect(service.overlay().result).toMatchObject({ outcome: 'cancelled', total: 1 });
+
+    await service.open({ question: 'Again?', options: OPTIONS, seconds: 30, note: '' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(service.overlay().result).toMatchObject({ id: 'poll-2', outcome: 'no_votes', total: 0 });
+    expect(service.overlay().result?.winner).toBeUndefined();
+  });
+
+  it("reads a Twitch poll's running votes for the overlay, at most every 3 s", async () => {
+    const { service, helix } = harness({
+      mode: 'native',
+      helix: (method) =>
+        method === 'POST'
+          ? { status: 200, data: [{ id: 'tw-1' }] }
+          : { status: 200, data: [{ status: 'ACTIVE', choices: [{ votes: 3 }, { votes: 1 }] }] },
+    });
+    await service.open({ question: 'Q?', options: OPTIONS, seconds: 45, note: '' });
+    expect(service.overlay().poll?.total).toBe(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(service.overlay().poll?.options.map((option) => option.votes)).toEqual([3, 1]);
+    expect(helix).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    service.overlay();
+    expect(helix).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('POLL_OVERLAY_HTML', () => {
+  it('carries a script that parses', () => {
+    const script = /<script>([\s\S]*)<\/script>/.exec(POLL_OVERLAY_HTML)?.[1];
+    expect(script).toBeTruthy();
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    expect(() => new Function(script ?? '')).not.toThrow();
   });
 });

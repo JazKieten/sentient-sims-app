@@ -7,6 +7,7 @@
     "src/main/sentient-sims/services/TwitchAuthService.ts",
     "src/main/sentient-sims/services/TwitchChatService.ts",
     "src/main/sentient-sims/services/ChatPollService.ts",
+    "src/main/sentient-sims/util/pollOverlayPage.ts",
     "src/main/sentient-sims/services/SceneMoodletService.ts",
     "src/main/sentient-sims/util/twitchIrc.ts",
     "src/main/sentient-sims/util/twitchSimTarget.ts",

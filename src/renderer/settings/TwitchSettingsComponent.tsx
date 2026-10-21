@@ -22,6 +22,7 @@ import {
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ApiType } from 'main/sentient-sims/models/ApiType';
 import {
+  appApiPort,
   defaultTwitchChatVoiceId,
   defaultTwitchCommandWord,
   defaultTwitchPollSeconds,
@@ -33,6 +34,8 @@ import HelpButton from 'renderer/components/HelpButton';
 import { useElevenLabsVoices } from 'renderer/hooks/useElevenLabsVoices';
 import { useAISettings } from 'renderer/providers/AISettingsProvider';
 import { TestVoiceButton } from 'renderer/components/VoiceTestButton';
+
+const pollOverlayUrl = `http://127.0.0.1:${appApiPort}/overlay/poll`;
 
 function stateChip(status?: TwitchChatStatus) {
   if (!status || status.state === 'disabled') {
@@ -74,6 +77,13 @@ export default function TwitchSettingsComponent() {
   const [status, setStatus] = useState<TwitchChatStatus>();
   const [loginStart, setLoginStart] = useState<TwitchDeviceLoginStart>();
   const [loginBusy, setLoginBusy] = useState(false);
+  const [overlayCopied, setOverlayCopied] = useState(false);
+
+  const copyOverlayUrl = async () => {
+    await navigator.clipboard.writeText(pollOverlayUrl);
+    setOverlayCopied(true);
+  };
+
   // A dev hot-reload can pair this component with an app whose preload predates the
   // tier bridge; computed at render so the settings route degrades instead of crashing
   const staleBridge = typeof (window.electron as Partial<typeof window.electron>).tierInvoke !== 'function';
@@ -316,6 +326,23 @@ export default function TwitchSettingsComponent() {
             {nativePolls
               ? 'Opens a real Twitch poll on your channel (Affiliate and Partner only) and needs the account login below. If the poll cannot open, chat votes by command instead.'
               : `Viewers type ${voteCommand.value || defaultTwitchVoteCommand} 1, ${voteCommand.value || defaultTwitchVoteCommand} 2 (or just the number); a later vote replaces an earlier one. The options show in-game as a notification.`}
+          </FormHelperText>
+          <Stack spacing={2} direction="row" sx={{ alignItems: 'center' }}>
+            <Typography sx={{ minWidth: 130 }}>OBS overlay:</Typography>
+            <TextField
+              size="small"
+              sx={{ width: 320 }}
+              value={pollOverlayUrl}
+              slotProps={{ htmlInput: { readOnly: true } }}
+            />
+            <Button variant="outlined" onClick={() => void copyOverlayUrl()}>
+              {overlayCopied ? 'Copied' : 'Copy'}
+            </Button>
+          </Stack>
+          <FormHelperText>
+            In OBS, add a Browser Source, paste this link as its URL and set it to 600 wide by 700 high. It stays
+            invisible until a poll opens, then shows the question, a countdown and the votes, and the winner when it
+            closes. Add ?scale=1.3 to the end of the link to make it bigger.
           </FormHelperText>
           <Divider />
           <FormControlLabel

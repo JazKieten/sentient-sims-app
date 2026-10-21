@@ -57,6 +57,7 @@ export enum StageId {
   DESCRIPTION_DEFAULT = 'description_default',
   // Plain words for the furnishing names the dev build's Lot Words panel has none for (JSON)
   LOT_WORDS = 'lot_words',
+  MAPPING_REVIEW = 'mapping_review',
   CLASSIFICATION = 'classification',
   BUFF = 'buff',
   // Not a brain part — the world. Turn order, round caps, pacing. No LLM.
@@ -246,6 +247,14 @@ export const STAGES: StageDefinition[] = [
     job: 'Plain words for furnishing names a lot description has none for',
     legacyActionType: AIActionType.DESCRIPTION_DEFAULT,
     defaultMaxResponseTokens: 2400,
+    usesLLM: true,
+  },
+  {
+    id: StageId.MAPPING_REVIEW,
+    brainName: 'Utility',
+    job: 'Feedback on a tested interaction or animation mapping',
+    legacyActionType: AIActionType.MAPPING_REVIEW,
+    defaultMaxResponseTokens: 600,
     usesLLM: true,
   },
   {

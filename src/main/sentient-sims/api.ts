@@ -96,6 +96,8 @@ export function runApi(ctx: ApiContext) {
 
   expressApp.get('/interactions/semantic-search', ctx.controller.interactionDescription.semanticSearchInteractions);
 
+  expressApp.post('/mappings/review', ctx.controller.mappingReview.reviewMapping);
+
   expressApp.post('/interactions/save-locally', ctx.controller.interactionDescription.saveInteractionLocally);
   expressApp.delete('/interactions/local', ctx.controller.interactionDescription.deleteLocalInteraction);
 

@@ -8,6 +8,7 @@ import { DbController } from '../controllers/DbController';
 import { DebugController } from '../controllers/DebugController';
 import { FileController } from '../controllers/FileController';
 import { InteractionDescriptionController } from '../controllers/InteractionDescriptionController';
+import { MappingReviewController } from '../controllers/MappingReviewController';
 import { LocationsController } from '../controllers/LocationsController';
 import { LoginController } from '../controllers/LoginController';
 import { MemoriesController } from '../controllers/MemoriesController';
@@ -43,6 +44,7 @@ import { SceneFreshness } from './SceneFreshness';
 import { AIService } from './AIService';
 import { AnimationsService } from './AnimationsService';
 import { DbService } from './DbService';
+import { MappingReviewService } from './MappingReviewService';
 import { DirectoryService } from './DirectoryService';
 import { ElevenLabsVoicesService } from './ElevenLabsVoicesService';
 import { EmbeddingProviderConfigService } from './EmbeddingProviderConfigService';
@@ -131,6 +133,7 @@ class ControllerContext {
   private readonly _dossierController: DossierController;
   private readonly _simFactsController: SimFactsController;
   private readonly _paintingsController: PaintingsController;
+  private readonly _mappingReviewController: MappingReviewController;
 
   constructor(ctx: ApiContext) {
     this._versionController = new VersionController(ctx);
@@ -155,6 +158,7 @@ class ControllerContext {
     this._dossierController = new DossierController(ctx);
     this._simFactsController = new SimFactsController(ctx);
     this._paintingsController = new PaintingsController(ctx);
+    this._mappingReviewController = new MappingReviewController(ctx);
   }
 
   get version(): VersionController {
@@ -244,6 +248,10 @@ class ControllerContext {
   get paintings(): PaintingsController {
     return this._paintingsController;
   }
+
+  get mappingReview(): MappingReviewController {
+    return this._mappingReviewController;
+  }
 }
 
 export class ApiContext {
@@ -271,6 +279,7 @@ export class ApiContext {
   private readonly _playerConversationService: PlayerConversationService;
 
   private _defaultDescriptionService?: DefaultDescriptionService;
+  private _mappingReviewService?: MappingReviewService;
   private readonly _simStateCache: SimStateCache;
 
   private readonly _plum: PlumService;
@@ -580,6 +589,13 @@ export class ApiContext {
       this._defaultDescriptionService = new DefaultDescriptionService(this);
     }
     return this._defaultDescriptionService;
+  }
+
+  get mappingReview(): MappingReviewService {
+    if (!this._mappingReviewService) {
+      this._mappingReviewService = new MappingReviewService(this);
+    }
+    return this._mappingReviewService;
   }
 
   get simStateCache(): SimStateCache {

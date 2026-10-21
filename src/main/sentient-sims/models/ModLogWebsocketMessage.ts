@@ -67,6 +67,13 @@ export type PlumModInteractionEnded = {
   name: string;
   outcome: 'finished' | 'canceled';
   source?: string;
+  // The game's FinishingType (the finisher's first move: NATURAL, USER_CANCEL, DISPLACED...),
+  // whether the interaction ever RAN, whether the player cancelled it, and whether the end
+  // came from the game's event ('event') or the mod's fallback poll ('poll'); since 2026-10-20
+  finishing?: string;
+  ran?: boolean;
+  user_canceled?: boolean;
+  via?: string;
 };
 
 export type PlumModMessage =

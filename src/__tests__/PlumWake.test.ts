@@ -495,6 +495,39 @@ describe('PlumWakeService', () => {
     expect(plum.wake.list()).toHaveLength(0);
   });
 
+  it("the mod's end names the game's finishing type, and an end that never ran says so", async () => {
+    plum.wake.set({ kind: 'sim_finishes', simId: '1', simName: 'Bella Goth', doing: '9001', note: 'by id' });
+    client.queue.push(message([text('Cut short.')], 'end_turn'));
+    plum.onModMessage({
+      kind: 'interaction_ended',
+      interaction_id: '9001',
+      sim_id: '1',
+      name: 'Solo_Stargazing',
+      outcome: 'canceled',
+      finishing: 'TRANSITION_FAILURE',
+      ran: false,
+      via: 'event',
+    });
+    await flush();
+    expect(lastUserText(client.requests[0])).toContain(
+      `Bella Goth's "Solo_Stargazing" ended: never started (TRANSITION_FAILURE)`,
+    );
+    plum.wake.set({ kind: 'sim_finishes', simId: '1', simName: 'Bella Goth', doing: '9002', note: 'by id' });
+    client.queue.push(message([text('Done.')], 'end_turn'));
+    plum.onModMessage({
+      kind: 'interaction_ended',
+      interaction_id: '9002',
+      sim_id: '1',
+      name: 'Solo_Stargazing',
+      outcome: 'finished',
+      finishing: 'NATURAL',
+      ran: true,
+      via: 'poll',
+    });
+    await flush();
+    expect(lastUserText(client.requests[1])).toContain(`Bella Goth's "Solo_Stargazing" ended: finished (NATURAL)`);
+  });
+
   it('a running mixer is still the super the trigger waits on: no fire until idle or another super', async () => {
     // Live 2026-10-17: a chat's TellJoke mixer took the head and the trigger fired at once
     const trigger = plum.wake.set({

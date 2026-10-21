@@ -796,6 +796,32 @@ describe('the whisper script (PlumWake)', () => {
     expect(plum.wake.describeScript()).toEqual([]);
   });
 
+  it('a beat the player cancelled (USER_CANCEL) is not clicked again: the script freezes at once', async () => {
+    answers.push(agreed('100'), agreed('200', 'mixer_social_Flirt'));
+    await plum.wake.planScript({ name: 'Snack Fight', beats: BEATS, recapNote: 'recap it' });
+    const [w2] = plum.wake.list();
+    client.queue.push(message([text('The player stepped in.')], 'end_turn'));
+    plum.onModMessage({
+      kind: 'interaction_ended',
+      interaction_id: '100',
+      sim_id: '1',
+      name: 'super_GrabSnack',
+      outcome: 'canceled',
+      finishing: 'USER_CANCEL',
+      ran: true,
+      via: 'event',
+    });
+    await flush();
+    await flush();
+    expect(toolCalls()).toHaveLength(0);
+    expect(w2.fromWhisper?.retried).toBe(false);
+    expect(plum.wake.isFrozen()).toBe(true);
+    expect(plum.wake.frozenReason()).toContain('ended: canceled (USER_CANCEL)');
+    expect(client.requests).toHaveLength(1);
+    expect(lastUserText(client.requests[0])).toContain('"super_GrabSnack" ended: canceled (USER_CANCEL)');
+    expect(whisperedLines()).toHaveLength(1);
+  });
+
   it('an accepted beat that ends canceled is clicked again once; a second cancel or a refused retry freezes', async () => {
     answers.push(agreed('100'), agreed('200', 'mixer_social_Flirt'));
     await plum.wake.planScript({ name: 'Snack Fight', beats: BEATS, recapNote: 'recap it' });

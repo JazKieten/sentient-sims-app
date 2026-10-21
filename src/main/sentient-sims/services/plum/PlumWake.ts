@@ -115,7 +115,7 @@ export type WakeTrigger = {
 
 // How the end that fired a trigger went; absent when the state report fired it (no outcome
 // there, and it counts as good)
-export type WakeEnd = { outcome: string };
+export type WakeEnd = { outcome: string; finishing?: string };
 
 const GOOD_OUTCOMES = new Set(['finished', 'success']);
 
@@ -1057,7 +1057,12 @@ export class PlumWakeService {
     sim_name?: string;
     name: string;
     outcome: string;
+    finishing?: string;
+    ran?: boolean;
   }) {
+    const finishing = event.finishing?.trim().toUpperCase() || undefined;
+    const how = event.ran === false ? `never started` : event.outcome;
+    const why = finishing && finishing !== 'UNKNOWN' ? ` (${finishing})` : '';
     this.watched.delete(event.interaction_id);
     for (const trigger of [...this.triggers]) {
       if (trigger.after || trigger.kind !== 'sim_finishes' || trigger.simId !== event.sim_id) {
@@ -1081,13 +1086,10 @@ export class PlumWakeService {
       ) {
         continue;
       }
-      this.fire(
-        trigger,
-        `${trigger.simName ?? event.sim_name ?? 'the Sim'}'s "${event.name}" ended: ${event.outcome}`,
-        {
-          outcome: event.outcome,
-        },
-      );
+      this.fire(trigger, `${trigger.simName ?? event.sim_name ?? 'the Sim'}'s "${event.name}" ended: ${how}${why}`, {
+        outcome: event.outcome,
+        finishing,
+      });
     }
     this.drain();
   }
@@ -1140,7 +1142,10 @@ export class PlumWakeService {
     if (!endedWell(ended)) {
       const outcome = ended?.outcome ?? 'badly';
       const retry = trigger.fromWhisper;
-      if (retry && !retry.retried && outcome.trim().toLowerCase() === 'canceled') {
+      // The one behaviour change of 2026-10-20: a beat the PLAYER cancelled (the game's
+      // USER_CANCEL) is not clicked again; re-clicking would fight the player
+      const playerCancelled = ended?.finishing === 'USER_CANCEL';
+      if (retry && !retry.retried && !playerCancelled && outcome.trim().toLowerCase() === 'canceled') {
         log.info(`[PlumWake] ${trigger.id}: ${because}; clicking ${retry.simName}'s "${retry.item.label}" again`);
         void this.retryWhisper(trigger, retry, because);
         return;

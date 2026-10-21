@@ -1328,9 +1328,10 @@ export class SettingsService {
     return this.get(SettingsEnum.PLUM_WHISPER_VOICED) !== false;
   }
 
-  // The camera goes to the actor of every push, click and whisper that took (PlumService.followActor)
+  // The camera goes to the actor of every push, click and whisper that took (PlumService.followActor).
+  // Off by default (Scott, 2026-10-20): the camera is the player's unless they opt in.
   get plumCameraFollows(): boolean {
-    return this.get(SettingsEnum.PLUM_CAMERA_FOLLOWS) !== false;
+    return this.get(SettingsEnum.PLUM_CAMERA_FOLLOWS) === true;
   }
 
   // Where Plum thinks: the API (default) or a local Claude Code session (dev tier)

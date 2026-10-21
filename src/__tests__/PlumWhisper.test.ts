@@ -294,6 +294,7 @@ describe('PlumWhisperService', () => {
         additionalProperties: false,
       },
     };
+    ctx.settings.set(SettingsEnum.PLUM_CAMERA_FOLLOWS, true);
     plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [clickPieMenu, cameraFocus] });
     sendModNotification.mockClear();
     const pending = plum.whisper.whisper({

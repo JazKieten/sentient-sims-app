@@ -1200,6 +1200,7 @@ export class PlumWakeService {
         if (typeof result.interaction_id === 'string' && result.interaction_id) {
           this.noteWatched(retry.simId, result.interaction_id, retry.item.key);
         }
+        this.plum.followActor(retry.simId);
         if (this.triggers.includes(trigger)) {
           this.resolveFrom(trigger, retry.simId, retry.simName, retry.item.key, outcome.result);
         }

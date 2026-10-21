@@ -394,18 +394,19 @@ export class DirectorService implements DirectorSlot {
     );
     if (planning) {
       lines.push(
-        'Survey the lot (look_at_lot, then relationships for the awake Sims; sleeping Sims are set dressing; ' +
-          'pie_menu for the actors you will use). Plan a named script of three to seven beats, each one line ' +
-          'to one Sim and one pie-menu item (key or label) with its target. Start your reply with ' +
-          '"ARC: <name>" on its own line, list the beats in one short line each, then call plan_script ONCE ' +
-          'with the beats in order: it whispers the first beat, whispers each later beat when the previous ' +
-          "one's interaction actually ends, and wakes you to recap.",
+        'The <live> block has the cast: every household Sim on the lot, awake or asleep, what they are doing, ' +
+          'their mood, low needs and wants (sleeping Sims are set dressing; no look_at_lot needed). Call ' +
+          'relationships only for the pair you will use and pie_menu only for the actor of the first beat. Plan ' +
+          'a named script of three to seven beats, each one line to one Sim and one pie-menu item (key or ' +
+          'label) with its target. Start your reply with "ARC: <name>" on its own line, list the beats in one ' +
+          'short line each, then call plan_script ONCE with the beats in order: it whispers the first beat, ' +
+          "whispers each later beat when the previous one's interaction actually ends, and wakes you to recap.",
       );
     } else {
       lines.push(`Current arc: ${this.arc ?? 'none yet'}.`);
       lines.push(
-        'Look at the lot and verify how the actors played the last beat (what they are doing, recent_memories ' +
-          'for the lines; the <live> block says what your triggers did and shows the script). If a Sim refused ' +
+        'The <live> block says what the cast is doing now, what your triggers did and shows the script; judge ' +
+          'the last beat from it (recent_memories only when you want the lines themselves). If a Sim refused ' +
           'a beat the script is FROZEN and the wake carries their reply: read it, then decide with the script ' +
           'tool (resume = go on from the next beat; replace_from = rewrite from a beat on; cancel = drop it). ' +
           'If the script is finished or has collapsed (cast asleep or gone, premise overtaken), recap it in two ' +
@@ -426,13 +427,16 @@ export class DirectorService implements DirectorSlot {
       'Narrate in one to three sentences like a director watching dailies; quote a good line when there is one. ' +
         'Never cancel what a Sim is doing, never travel, never touch the clock or the settings while directing.',
     );
-    // The tick is detached: nothing of this turn survives it but the note
+    // The tick is detached: nothing of this turn survives it but the note. One response: the
+    // tool calls together, the narration beside them, director_note last (2026-10-17: 3.3
+    // model calls a turn, every one of them ending in a separate narration call)
     lines.push(
-      'This tick is a fresh request: the next one sees only the <live> block, your <director_note> and its own ' +
-        'tick text, nothing you read or said here. Finish by calling director_note with the updated note ' +
-        `(at most ${DIRECTOR_NOTE_MAX_CHARS} characters): the arc's name and premise, the cast in a line each, ` +
+      'Do everything this turn needs in ONE response: the tool calls together, your narration in the same ' +
+        'response, and director_note last. This tick is a fresh request: the next one sees only the <live> ' +
+        'block, your <director_note> and its own tick text, nothing you read or said here. The note (at most ' +
+        `${DIRECTOR_NOTE_MAX_CHARS} characters) holds the arc's name and premise, the cast in a line each, ` +
         'which beats landed and how the Sims played them, and what the player said about the show. A tick ' +
-        'that does not call it keeps the old note.',
+        'that does not call director_note keeps the old note.',
     );
     lines.push('</director_tick>');
     return lines.join('\n');

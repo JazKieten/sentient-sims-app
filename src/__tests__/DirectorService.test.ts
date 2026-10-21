@@ -182,7 +182,11 @@ describe('DirectorService', () => {
     const first = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
     expect(first[first.length - 1].text).toContain('<director_tick n="1">');
     expect(first[first.length - 1].text).toContain('something tense');
-    expect(first[first.length - 1].text).toContain('Finish by calling director_note');
+    // One response a tick, the cast from <live> (roadmap C2), the note last
+    expect(first[first.length - 1].text).toContain('ONE response');
+    expect(first[first.length - 1].text).toContain('director_note last');
+    expect(first[first.length - 1].text).toContain('The <live> block has the cast');
+    expect(first[first.length - 1].text).not.toContain('Survey the lot');
     const [call] = toolCalls();
     expect(call.name).toBe('push_action');
     plum.onModMessage({

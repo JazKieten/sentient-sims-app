@@ -26,28 +26,11 @@ import { memoryRecallText } from '../util/memoryRecallText';
 import { deniedConversationActions } from '../util/conversationActions';
 import { speciesWord } from '../util/alsoPresent';
 
-// A sleeping sim has no tick. The gate used to compare `activity.running` to the bare
-// word 'sleep', but the mod reports the running interaction's tuning name — measured
-// live 2026-09-21: a sim asleep in bed runs `sleep_Passive` over `bed_sleep` — so it
-// never matched, and low energy kept the sim deliberation-eligible all night ("just want
-// to keep sleeping", four ticks in five minutes on the 09-21 log). The mod's whitelist
-// mapping of the same interaction (`running_action_key`) and the game's own `sim.sleeping`
-// flag (`self.asleep`) are the reliable reads; the name match is the fallback for an
-// older mod that sends neither.
-const SLEEP_ACTION_KEYS = new Set(['sleep', 'nap']);
-const SLEEP_INTERACTION_NAME = /(^|[_\s])(sleep|sleeping|nap|napping)([_\s]|$)|energyfailure|passout|pass_out/i;
+// A sleeping sim has no tick. isAsleep lives in util/simSleep.ts (core: Plum's <live> block
+// reads it too) and is re-exported here for the tier's own callers.
+import { isAsleep } from '../util/simSleep';
 
-export function isAsleep(entry: SimStateEntry): boolean {
-  if (entry.self?.asleep) {
-    return true;
-  }
-  const key = entry.activity?.running_action_key;
-  if (key && SLEEP_ACTION_KEYS.has(key)) {
-    return true;
-  }
-  const running = entry.activity?.running ?? '';
-  return running.length > 0 && SLEEP_INTERACTION_NAME.test(running);
-}
+export { isAsleep };
 
 // Per-sim lifecycle. PENDING_OUTCOME is the never-re-push rule made structural: a sim
 // with an intent in flight cannot deliberate again until the outcome POST closes it or

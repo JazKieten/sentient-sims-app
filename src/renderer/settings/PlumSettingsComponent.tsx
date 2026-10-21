@@ -13,6 +13,7 @@ export default function PlumSettingsComponent() {
   const directorModel = useSetting(SettingsEnum.PLUM_DIRECTOR_MODEL, '');
   const allowWrites = useSetting(SettingsEnum.PLUM_ALLOW_WRITES, true);
   const whisperVoiced = useSetting(SettingsEnum.PLUM_WHISPER_VOICED, true);
+  const cameraFollows = useSetting(SettingsEnum.PLUM_CAMERA_FOLLOWS, true);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', marginBottom: 2, gap: 1 }}>
@@ -85,6 +86,21 @@ export default function PlumSettingsComponent() {
       <FormHelperText>
         Plum can whisper to a Sim as a voice in their head; a Sim who agrees has a thought about it that shows in the
         game. On, the thought is spoken in their voice; off, it is only shown.
+      </FormHelperText>
+      <FormControlLabel
+        label="Camera follows the action"
+        control={
+          <Checkbox
+            checked={cameraFollows.value}
+            onChange={(change) => {
+              void cameraFollows.setSetting(change.target.checked);
+            }}
+          />
+        }
+      />
+      <FormHelperText>
+        Every Sim Plum moves (a push, a pie-menu click, a whisper they went along with) gets the camera, so a directed
+        scene stays on screen. Off: the camera moves only when you or Plum ask for it.
       </FormHelperText>
     </Box>
   );

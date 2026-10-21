@@ -13,7 +13,12 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ModWebsocketMessageType } from 'main/sentient-sims/models/ModWebsocketMessage';
 import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { MAX_ITERATIONS, PlumService, THREAD_ROLL_TOKENS } from 'main/sentient-sims/services/PlumService';
+import {
+  CAMERA_FOCUS_TIMEOUT_MS,
+  MAX_ITERATIONS,
+  PlumService,
+  THREAD_ROLL_TOKENS,
+} from 'main/sentient-sims/services/PlumService';
 import { buildAppTools } from 'main/sentient-sims/services/plum/PlumAppTools';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
 import {
@@ -115,6 +120,38 @@ const sendHome: PlumModToolDef = {
   risk: 'destructive',
   timeout_ms: 20000,
   tier: 'core',
+};
+
+// A fire-and-forget mod tool (FIRE_AND_FORGET_TOOLS): its result tells the model nothing
+const notify: PlumModToolDef = {
+  ...giveMoney,
+  name: 'notify',
+  input_schema: {
+    type: 'object',
+    properties: { text: { type: 'string' } },
+    required: ['text'],
+    additionalProperties: false,
+  },
+};
+const cameraFocus: PlumModToolDef = {
+  ...giveMoney,
+  name: 'camera_focus',
+  input_schema: {
+    type: 'object',
+    properties: { sim: { type: 'string' } },
+    required: ['sim'],
+    additionalProperties: false,
+  },
+};
+const pushActionTool: PlumModToolDef = {
+  ...giveMoney,
+  name: 'push_action',
+  input_schema: {
+    type: 'object',
+    properties: { sim: { type: 'string' }, action: { type: 'string' }, target: { type: ['string', 'null'] } },
+    required: ['sim', 'action', 'target'],
+    additionalProperties: false,
+  },
 };
 
 function sentOfType(type: ModWebsocketMessageType): Record<string, unknown>[] {
@@ -743,6 +780,209 @@ describe('PlumService', () => {
       '<live>\nclock: 9:05 day 12 (paused)\nlot: Goth Manor (Residential)\nfunds: §12,340\n</live>',
     );
   });
+
+  it('the live block carries the Sims: the household one line each, needs below the band only, three wants, the rest as a count', () => {
+    ctx.simStateCache.ingest({
+      type: 'state_report',
+      seq: 1,
+      active_sim_id: '1',
+      sims: [
+        {
+          sim_id: '1',
+          sim_name: 'Corinne Stiles',
+          sims: [],
+          objects: [],
+          self: {
+            mood: 'tense',
+            needs: { hunger: -40, fun: -10, energy: 20, bladder: -30 },
+            wants: ['play_chess', 'tell_joke', 'cook', 'dance'],
+          },
+          activity: { running: 'counter_MakeFood_Staging_Basic', running_action_key: 'cook_meal' },
+        },
+        {
+          sim_id: '2',
+          sim_name: 'Duane Miles',
+          sims: [],
+          objects: [],
+          self: { asleep: true, mood: 'fine' },
+          activity: { running: 'bed_sleep' },
+        },
+        { sim_id: '3', sim_name: 'Seth Hairston', sims: [], objects: [], activity: { running: null } },
+        {
+          sim_id: '4',
+          sim_name: 'Nancy Landgraab',
+          sims: [],
+          objects: [],
+          is_household: false,
+          activity: { running: 'sim_Chat' },
+        },
+      ],
+      lot: { clock: { hour: 23, minute: 10 } },
+    });
+    expect(plum.liveContextBlock()).toBe(
+      [
+        '<live>',
+        'clock: 23:10',
+        'sims:',
+        '- Corinne Stiles (sim 1, ACTIVE): awake, cook meal (counter_MakeFood_Staging_Basic), tense; ' +
+          'low: hunger -40, bladder -30; wants: play chess, tell joke, cook',
+        '- Duane Miles (sim 2): asleep (bed_sleep), fine',
+        '- Seth Hairston (sim 3): awake, idle',
+        'others on the lot: 1 (Nancy Landgraab)',
+        '</live>',
+      ].join('\n'),
+    );
+  });
+
+  it('a reply whose only tools are fire-and-forget ends the turn; a chat turn carries their results at the head of its next message', async () => {
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [lookAtLot, notify] });
+    sendModNotification.mockClear();
+    client.queue.push(
+      message([text('Will do; I will tell you when.'), toolUse('tu_1', 'notify', { text: 'hi' })], 'tool_use'),
+    );
+    const turn = plum.runTurn('tell me when dinner is ready');
+    await flush();
+    const [call] = toolCalls();
+    expect(call.name).toBe('notify');
+    plum.onModMessage({
+      kind: 'tool_result',
+      request_id: call.request_id as string,
+      ok: true,
+      result: { changed: 'notified' },
+    });
+    await turn;
+    // No second model call to say "done"; the row still landed
+    expect(client.requests).toHaveLength(1);
+    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'tool']);
+    expect(plum.rows[2]).toMatchObject({ done: true, ok: true });
+    // The thread ends on the assistant's tool_use: the result is owed to the next request
+    expect(plum.messages).toHaveLength(2);
+    client.queue.push(message([text('Soon.')], 'end_turn'));
+    await plum.runTurn('how long?');
+    const { messages } = client.requests[1];
+    expect(messages).toHaveLength(3);
+    const content = messages[2].content as Anthropic.Beta.Messages.BetaContentBlockParam[];
+    expect(content[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'tu_1' });
+    expect((content[1] as { text: string }).text.startsWith('<live>')).toBe(true);
+    expect((content[2] as { text: string }).text).toBe('how long?');
+    // Carried once: the turn after owes nothing
+    client.queue.push(message([text('Done.')], 'end_turn'));
+    await plum.runTurn('thanks');
+    const last = client.requests[2].messages[4].content as Anthropic.Beta.Messages.BetaContentBlockParam[];
+    expect(last[0].type).toBe('text');
+  });
+
+  it('a detached turn ending on fire-and-forget tools drops the results; calls with no words beside them keep the loop going', async () => {
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [lookAtLot, notify] });
+    sendModNotification.mockClear();
+    client.queue.push(message([text('Cued.'), toolUse('tu_1', 'notify', { text: 'x' })], 'tool_use'));
+    let turn = plum.runTurn('<director_tick/>', { director: true });
+    await flush();
+    let [call] = toolCalls();
+    plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: {} });
+    await turn;
+    expect(client.requests).toHaveLength(1);
+    expect(plum.messages).toHaveLength(0);
+    sendModNotification.mockClear();
+    // A tool_use with no text is not the end of a turn: the model is called again, and the
+    // next detached request is one user message with no tool_result in it
+    client.queue.push(message([toolUse('tu_2', 'notify', { text: 'y' })], 'tool_use'));
+    client.queue.push(message([text('Now a word.')], 'end_turn'));
+    turn = plum.runTurn('<director_tick/>', { director: true });
+    await flush();
+    [call] = toolCalls();
+    plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: {} });
+    await turn;
+    expect(client.requests).toHaveLength(3);
+    expect(client.requests[1].messages).toHaveLength(1);
+    const opening = client.requests[1].messages[0].content as Anthropic.Beta.Messages.BetaContentBlockParam[];
+    expect(opening.every((block) => block.type === 'text')).toBe(true);
+    expect(client.requests[2].messages).toHaveLength(3);
+  });
+
+  it('a roll after a fire-and-forget turn hands the summary call the results the thread still owes', async () => {
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [lookAtLot, notify] });
+    sendModNotification.mockClear();
+    client.queue.push(message([text('One.')], 'end_turn'));
+    await plum.runTurn('first');
+    client.queue.push(
+      message([text('Noted.'), toolUse('tu_1', 'notify', { text: 'x' })], 'tool_use', {
+        input_tokens: THREAD_ROLL_TOKENS + 1,
+      }),
+    );
+    client.queue.push(message([text('A note to my future self.')], 'end_turn'));
+    const turn = plum.runTurn('remember this');
+    await flush();
+    const [call] = toolCalls();
+    plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: {} });
+    await turn;
+    expect(client.requests).toHaveLength(3);
+    const summary = client.requests[2];
+    expect(summary.effort).toBe('low');
+    const last = summary.messages[summary.messages.length - 1]
+      .content as Anthropic.Beta.Messages.BetaContentBlockParam[];
+    expect(last[0]).toMatchObject({ type: 'tool_result', tool_use_id: 'tu_1' });
+    expect((last[1] as { text: string }).text).toContain('new conversation');
+    // The fresh thread owes nothing
+    client.queue.push(message([text('Hi again.')], 'end_turn'));
+    await plum.runTurn('hello');
+    const fresh = client.requests[3].messages[0].content as Anthropic.Beta.Messages.BetaContentBlockParam[];
+    expect(fresh[0].type).toBe('text');
+  });
+
+  it('a push that took points the camera at its actor with no row; a refused push or the setting off moves nothing', async () => {
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [pushActionTool, cameraFocus] });
+    sendModNotification.mockClear();
+    const pending = plum.runScheduledTool('push_action', { sim: '1', action: 'gossip', target: null }, 'trigger w1');
+    await flush();
+    const [push] = toolCalls();
+    plum.onModMessage({
+      kind: 'tool_result',
+      request_id: push.request_id as string,
+      ok: true,
+      result: { changed: 'pushed' },
+    });
+    await pending;
+    await flush();
+    const calls = toolCalls();
+    expect(calls.map((call) => call.name)).toEqual(['push_action', 'camera_focus']);
+    expect(calls[1].args).toEqual({ sim: '1' });
+    expect(calls[1].timeout_ms).toBe(CAMERA_FOCUS_TIMEOUT_MS);
+    expect(plum.rows).toHaveLength(1);
+    // A focus the game refuses is a log line, nothing more
+    plum.onModMessage({
+      kind: 'tool_result',
+      request_id: calls[1].request_id as string,
+      ok: false,
+      error: 'no such sim',
+    });
+    await flush();
+    expect(plum.rows).toHaveLength(1);
+    expect(eventsOfKind('error')).toEqual([]);
+
+    sendModNotification.mockClear();
+    const refused = plum.runScheduledTool('push_action', { sim: '1', action: 'gossip', target: null }, 'trigger w2');
+    await flush();
+    plum.onModMessage({
+      kind: 'tool_result',
+      request_id: toolCalls()[0].request_id as string,
+      ok: false,
+      error: 'busy',
+    });
+    await refused;
+    await flush();
+    expect(toolCalls().map((call) => call.name)).toEqual(['push_action']);
+
+    ctx.settings.set(SettingsEnum.PLUM_CAMERA_FOLLOWS, false);
+    sendModNotification.mockClear();
+    const quiet = plum.runScheduledTool('push_action', { sim: '1', action: 'gossip', target: null }, 'trigger w3');
+    await flush();
+    plum.onModMessage({ kind: 'tool_result', request_id: toolCalls()[0].request_id as string, ok: true, result: {} });
+    await quiet;
+    await flush();
+    expect(toolCalls().map((call) => call.name)).toEqual(['push_action']);
+  });
+
   describe('on an external brain (plumBrain = claude-code)', () => {
     let down: string | undefined;
     let ports: { kind: string; live: string; text: string }[];

@@ -21,6 +21,14 @@
 // land on the shared thread.rows for the tab; its only memory across ticks is the note it
 // rewrites with the director_note tool, kept per save in plum_note (kind 'director').
 //
+// Fewer calls per turn (roadmap C2, 2026-10-20): the <live> block carries the household Sims
+// (plumLiveSims.ts), so a turn need not open with look_at_lot; every push, click and whisper
+// that took points the camera at its actor (followActor, the mod's camera_focus, result
+// ignored) so the show is on screen while chained beats fire with no model turn; and an
+// iteration whose tool calls are ALL fire-and-forget (FIRE_AND_FORGET_TOOLS) beside a text
+// block ENDS the turn: a detached turn drops the results (the journal says what happened), a
+// chat turn carries them at the head of its next user message, where the API wants them.
+//
 // Destructive tools, defence in depth: the prompt (ask, then confirmed_by_player), every call
 // a visible row, the plumAllowWrites switch, and the ask-answer-act rule here: a destructive
 // call is forwarded only when the player's latest line arrived after a reply of Plum's.
@@ -35,6 +43,7 @@ import { AnthropicPlumClient, describeModelError, PlumEffort, PlumModelClient } 
 import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/PlumWake';
 import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, directorNoteBlock, liveBlock } from './plum/plumPrompt';
+import { describeLiveSims } from './plum/plumLiveSims';
 import { costOf, formatDollars } from './plum/plumPricing';
 import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
@@ -53,6 +62,20 @@ import {
 export const MAX_ITERATIONS = 12;
 export const DEFAULT_TOOL_TIMEOUT_MS = 20000;
 export const MAX_TOKENS = 4096;
+// Tools whose result tells the model nothing it needs this turn: an iteration made only of
+// these (with words beside them) ends the turn instead of buying a model call to say "done"
+// (2026-10-17: 24 wake_me-only, 11 remember-only, 7 set_trigger-only, 5 camera_focus-only
+// iterations in a day, each followed by one more call)
+export const FIRE_AND_FORGET_TOOLS: ReadonlySet<string> = new Set([
+  'wake_me',
+  'set_trigger',
+  'remember',
+  'director_note',
+  'camera_focus',
+  'notify',
+]);
+// The implicit camera focus after a push, click or whisper: fire and forget, short leash
+export const CAMERA_FOCUS_TIMEOUT_MS = 5000;
 
 // whisper: Plum's line to a Sim (name = the Sim); reply: the Sim's answer (name, ok, summary
 // = agreed | declined | why the click did not take). PlumWhisper.ts adds both.
@@ -125,6 +148,9 @@ type Thread = {
   seed?: string;
   // The whole context of the last request (input + cache read + cache write), for the roll
   contextTokens?: number;
+  // Results of the fire-and-forget tools that ended the last chat turn, owed to the API at
+  // the head of the next user message (a tool_use without its tool_result is a 400)
+  pendingResults?: Anthropic.Beta.Messages.BetaToolResultBlockParam[];
 };
 
 export const HISTORY_ROWS = 30;
@@ -450,7 +476,10 @@ export class PlumService {
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
     }
-    const content = this.turnPrefix(detached);
+    // The tool results the last chat turn ended on come first, then <live> and the text
+    const carried = detached ? undefined : this.thread.pendingResults;
+    this.thread.pendingResults = undefined;
+    const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [...(carried ?? []), ...this.turnPrefix(detached)];
     content.push({ type: 'text', text });
     // A detached turn's messages live and die with the turn; a chat turn's are the thread's.
     // Where this turn starts in them: a refusal rolls back to here, or the flagged text would
@@ -502,6 +531,10 @@ export class PlumService {
         const details = response.stop_details;
         log.warn(`[Plum] refusal details: ${JSON.stringify(details ?? null)}`);
         messages.length = turnStart;
+        // The rolled-back message carried the results owed from the last turn: owe them again
+        if (carried) {
+          this.thread.pendingResults = carried;
+        }
         const category = details?.category ? ` [${details.category}]` : '';
         const why = details?.explanation ? ` ${details.explanation}` : '';
         this.emitError(
@@ -539,6 +572,17 @@ export class PlumService {
       const results: Anthropic.Beta.Messages.BetaToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
         results.push(await this.runToolUse(toolUse, options));
+      }
+      // Fire and forget: nothing in these results changes what Plum would say, and it already
+      // said it. The turn ends here; a chat thread still owes the API the results.
+      const spoke = response.content.some((block) => block.type === 'text' && block.text.trim());
+      if (spoke && toolUses.every((toolUse) => FIRE_AND_FORGET_TOOLS.has(toolUse.name))) {
+        if (!detached) {
+          this.thread.pendingResults = results;
+        }
+        log.info(`[Plum] turn ended on fire-and-forget tools (${toolUses.map((toolUse) => toolUse.name).join(', ')})`);
+        this.thread.lastReplyAt = this.now();
+        return {};
       }
       messages.push({ role: 'user', content: results });
     }
@@ -802,6 +846,9 @@ export class PlumService {
     if (isPush && options.maxPushes !== undefined) {
       this.turnPushes += 1;
     }
+    if ((name === 'push_action' || name === 'click_pie_menu') && actorId) {
+      this.followActor(actorId);
+    }
     if (name === 'push_action') {
       // The autonomy tier grades the push's outcome like one of cognition's
       const requestId = (result as { request_id?: unknown }).request_id;
@@ -820,6 +867,25 @@ export class PlumService {
     // A read tool that still reports a `changed` line (wake_me) shows it like a write
     const summary = changed ?? (risk === 'read' ? readSummary(name, args) : `ran ${name}`);
     return finish(true, summary, result, JSON.stringify(result), result);
+  }
+
+  // The camera goes to the Sim a push, click or whisper just moved (Scott, 2026-10-17: "I would
+  // love to really see the action"; chained beats fire with no Plum turn, so no tool call of
+  // Plum's would move it). Through the mod's camera_focus tool, no row, result ignored; off
+  // with plumCameraFollows, and never when writes are off or the mod has no such tool.
+  followActor(simId: string) {
+    if (!this.ctx.settings.plumCameraFollows || !this.ctx.settings.plumAllowWrites) {
+      return;
+    }
+    if (!this.modTools.some((tool) => tool.name === 'camera_focus')) {
+      return;
+    }
+    void this.callMod('camera_focus', { sim: simId }, CAMERA_FOCUS_TIMEOUT_MS).then((outcome) => {
+      if (!outcome.ok) {
+        log.info(`[Plum] camera did not follow sim ${simId}: ${outcome.error ?? 'unknown error'}`);
+      }
+      return outcome;
+    });
   }
 
   // Ask, answer, act: the player's latest line must be newer than Plum's last finished reply
@@ -857,7 +923,8 @@ export class PlumService {
   // block; a chat turn while the director is running gets the note inside <live> instead, so
   // the two Plums agree about the show
   liveContextBlock({ detached = false }: { detached?: boolean } = {}): string {
-    const lot = this.ctx.simStateCache.getReport()?.lot;
+    const report = this.ctx.simStateCache.getReport();
+    const lot = report?.lot;
     const clock = lot?.clock;
     let clockText: string | undefined;
     if (clock && typeof clock.hour === 'number') {
@@ -874,6 +941,8 @@ export class PlumService {
       lot: lot?.lot_name,
       venue: lot?.venue,
       funds: lot?.funds,
+      // The cast: who is up, doing what, in what mood, with what wants (no look_at_lot needed)
+      ...describeLiveSims(report),
       triggers: this.wake.list().map((trigger) => `${trigger.id} ${describeTrigger(trigger)}`),
       script: this.wake.describeScript(),
       journal: this.wake.takeJournal(),
@@ -1116,7 +1185,11 @@ export class PlumService {
         model,
         system,
         tools: toApiTools(this.catalogue),
-        messages: [...thread.messages, { role: 'user', content: this.summaryPrompt() }],
+        // The results the thread still owes ride first, or the request is refused
+        messages: [
+          ...thread.messages,
+          { role: 'user', content: [...(thread.pendingResults ?? []), { type: 'text', text: this.summaryPrompt() }] },
+        ],
         maxTokens: 600,
         effort: 'low',
       });

@@ -199,6 +199,8 @@ export class PlumWhisperService {
       clicked.interaction_id = result.interaction_id;
       this.plum.wake.noteWatched(request.simId, result.interaction_id, clicked.key);
     }
+    // The show is where the Sim is: the camera follows a click that took
+    this.plum.followActor(request.simId);
     return { clicked };
   }
 

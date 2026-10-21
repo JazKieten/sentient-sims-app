@@ -283,6 +283,35 @@ describe('PlumWhisperService', () => {
     expect(client.requests).toHaveLength(0);
   });
 
+  it('a click that took points the camera at the Sim (when the mod has camera_focus)', async () => {
+    const cameraFocus: PlumModToolDef = {
+      ...clickPieMenu,
+      name: 'camera_focus',
+      input_schema: {
+        type: 'object',
+        properties: { sim: { type: 'string' } },
+        required: ['sim'],
+        additionalProperties: false,
+      },
+    };
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [clickPieMenu, cameraFocus] });
+    sendModNotification.mockClear();
+    const pending = plum.whisper.whisper({
+      simId: '1',
+      simName: 'Bella Goth',
+      line: 'Snack?',
+      item: SNACK,
+      origin: 'chat',
+    });
+    await answerClick(true, { changed: 'clicked', key: 'super_GrabSnack', interaction_id: '4242' });
+    await pending;
+    await flush();
+    expect(toolCalls().map((call) => call.name)).toEqual(['click_pie_menu', 'camera_focus']);
+    expect(toolCalls()[1].args).toEqual({ sim: '1' });
+    // The camera is not a row of the conversation
+    expect(plum.rows.map((row) => row.kind)).toEqual(['whisper', 'reply']);
+  });
+
   it('a decline runs nothing, stores nothing and airs nothing; an unusable answer counts as a decline', async () => {
     answer = '{"willing": false, "reply": "I am not hungry, and I do not take orders."}';
     const result = await plum.whisper.whisper({

@@ -558,6 +558,10 @@ export function defaultStore(cwd?: string) {
         type: 'boolean',
         default: true,
       },
+      [SettingsEnum.PLUM_CAMERA_FOLLOWS.toString()]: {
+        type: 'boolean',
+        default: true,
+      },
       [SettingsEnum.PLUM_BRAIN.toString()]: {
         type: 'string',
         default: 'api',
@@ -1322,6 +1326,11 @@ export class SettingsService {
   // A whispered Sim's accepting thought airs as a voiced "(to self)" line (PlumWhisper.ts)
   get plumWhisperVoiced(): boolean {
     return this.get(SettingsEnum.PLUM_WHISPER_VOICED) !== false;
+  }
+
+  // The camera goes to the actor of every push, click and whisper that took (PlumService.followActor)
+  get plumCameraFollows(): boolean {
+    return this.get(SettingsEnum.PLUM_CAMERA_FOLLOWS) !== false;
   }
 
   // Where Plum thinks: the API (default) or a local Claude Code session (dev tier)

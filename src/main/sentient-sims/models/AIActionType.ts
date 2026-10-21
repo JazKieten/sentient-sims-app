@@ -37,9 +37,6 @@ export enum AIActionType {
   // The salience tag written onto every stored memory. It had no action type of its own,
   // so it fell into the GENERATE slot and was routed by whatever the chat tab was set to.
   MEMORY_IMPORTANCE = 'memory_importance',
-  // Plum whispering to a Sim as the voice in their head: the Sim answers in character and
-  // decides (PlumWhisper.ts, core); the actor's cheap model, like a scene line
-  PLUM_WHISPER = 'plum_whisper',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -67,7 +64,6 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.ASK_ACTION_MATCH,
   AIActionType.ASK_DECISION,
   AIActionType.MEMORY_IMPORTANCE,
-  AIActionType.PLUM_WHISPER,
 ];
 
 // The stages only the autonomy tier runs (release 4.5). The enum and the settings stay whole
@@ -135,8 +131,6 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Ask: Decision';
     case AIActionType.MEMORY_IMPORTANCE:
       return 'Memory Importance';
-    case AIActionType.PLUM_WHISPER:
-      return 'Plum: Whisper';
     default:
       return actionType;
   }
@@ -192,8 +186,6 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'The sim decides in character whether to do what was asked, and why';
     case AIActionType.MEMORY_IMPORTANCE:
       return 'Rates how memorable each stored memory is, for retrieval (cheap model recommended)';
-    case AIActionType.PLUM_WHISPER:
-      return 'A Sim answering Plum, the voice in their head, in character: will they do it, and the thought that goes with it';
     default:
       return '';
   }

@@ -236,8 +236,8 @@ describe('ClaudeCodeBrain', () => {
     brain.reply(id, 'ARC: Rivals');
     brain.onHook({ hook_event_name: 'Stop', prompt_id: 'p1' });
     await done;
-    expect(ctx.plum.rows.map((row) => row.kind)).toEqual(['director']);
-    expect(eventsOfKind('director')).toHaveLength(1);
+    expect(ctx.plum.rows.map((row) => `${row.kind}:${row.hidden}`)).toEqual(['director:true']);
+    expect(eventsOfKind('director')).toHaveLength(0);
     // A reply to a turn that is over reaches nobody
     expect(brain.reply(id, 'late').ok).toBe(false);
   });

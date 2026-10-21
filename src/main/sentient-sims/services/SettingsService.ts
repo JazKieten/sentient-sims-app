@@ -554,13 +554,9 @@ export function defaultStore(cwd?: string) {
         type: 'number',
         default: 30,
       },
-      [SettingsEnum.PLUM_WHISPER_VOICED.toString()]: {
-        type: 'boolean',
-        default: true,
-      },
       [SettingsEnum.PLUM_CAMERA_FOLLOWS.toString()]: {
         type: 'boolean',
-        default: true,
+        default: false,
       },
       [SettingsEnum.PLUM_BRAIN.toString()]: {
         type: 'string',
@@ -1321,11 +1317,6 @@ export class SettingsService {
   get plumDirectorMaxTicksPerHour(): number {
     const ticks = this.get(SettingsEnum.PLUM_DIRECTOR_MAX_TICKS_PER_HOUR);
     return typeof ticks === 'number' && ticks > 0 ? Math.floor(ticks) : 30;
-  }
-
-  // A whispered Sim's accepting thought airs as a voiced "(to self)" line (PlumWhisper.ts)
-  get plumWhisperVoiced(): boolean {
-    return this.get(SettingsEnum.PLUM_WHISPER_VOICED) !== false;
   }
 
   // The camera goes to the actor of every push, click and whisper that took (PlumService.followActor).

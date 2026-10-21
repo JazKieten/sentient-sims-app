@@ -4,10 +4,10 @@
 // Plum surveys the lot, casts the awake Sims as improv actors, plans a named script of three
 // to seven beats from their traits, relationships and moods, and hands the whole script to
 // plan_script (PlumWake.planScript): every beat is a WHISPER, a line Plum says to one Sim as
-// the voice in their head plus the pie-menu item it hopes they pick (PlumWhisper.ts: the
-// Sim's own actor model answers in character and may refuse). The app whispers the first
+// the voice in their head plus the pie-menu item they pick (PlumWhisper.ts clicks it as the
+// Sim's own choice; no model is asked, nothing is said back). The app whispers the first
 // beat, whispers each later beat itself when the one before it actually ends (by
-// interaction id), and wakes Plum only when a Sim refuses or an agreed click is refused (the
+// interaction id), and wakes Plum only when a click is refused by the game (the
 // script FREEZES until Plum decides: script resume / replace_from / cancel), on a hard stop
 // (fire, death, a cast Sim gone, a stale report), or when the script completes; then Plum
 // recaps, plans the next one, and never stops on its own. plan_arc (pushes, no say) stays
@@ -375,9 +375,9 @@ export class DirectorService implements DirectorSlot {
     }
     lines.push(
       'You are directing an improv episode with the Sims as the actors: you plan a story and WHISPER beats. ' +
-        'Each beat is a line you say to one Sim as the voice in their head plus the pie-menu item you hope ' +
-        'they choose (pie_menu shows what they can do right now). They answer in character and may refuse; ' +
-        'the script bends to what they do.',
+        'Each beat is a line you say to one Sim as the voice in their head plus the pie-menu item they then ' +
+        'choose (pie_menu shows what they can do right now). The game may still refuse an item (greyed, or ' +
+        'the player clicked something); the script bends to what actually happens.',
     );
     if (this.brief) {
       lines.push(`The player's brief: ${this.brief}`);
@@ -420,8 +420,8 @@ export class DirectorService implements DirectorSlot {
       );
     }
     lines.push(
-      'plan_script arms the whole chain. Then stop: the app whispers the beats, and a wake comes when a Sim ' +
-        'refuses, an agreed click is refused, something stops the show, or the script completes. Never ' +
+      'plan_script arms the whole chain. Then stop: the app whispers the beats, and a wake comes when a beat ' +
+        'does not take, something stops the show, or the script completes. Never ' +
         'push_action while directing unless the player asked for that beat; whispers only.',
     );
     lines.push(

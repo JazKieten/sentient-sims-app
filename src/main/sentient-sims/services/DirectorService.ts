@@ -395,8 +395,9 @@ export class DirectorService implements DirectorSlot {
     if (planning) {
       lines.push(
         'The <live> block has the cast: every household Sim on the lot, awake or asleep, what they are doing, ' +
-          'their mood, low needs and wants (sleeping Sims are set dressing; no look_at_lot needed). Call ' +
-          'relationships only for the pair you will use and pie_menu only for the actor of the first beat. Plan ' +
+          'their mood, low needs and wants (sleeping Sims are set dressing). Do NOT call look_at_lot: it tells ' +
+          'you nothing <live> does not. Call relationships only for the pair you will use and pie_menu only ' +
+          'for the actor of the first beat. Plan ' +
           'a named script of three to seven beats, each one line to one Sim and one pie-menu item (key or ' +
           'label) with its target. Start your reply with "ARC: <name>" on its own line, list the beats in one ' +
           'short line each, then call plan_script ONCE with the beats in order: it whispers the first beat, ' +
@@ -432,7 +433,10 @@ export class DirectorService implements DirectorSlot {
     // model calls a turn, every one of them ending in a separate narration call)
     lines.push(
       'Do everything this turn needs in ONE response: the tool calls together, your narration in the same ' +
-        'response, and director_note last. This tick is a fresh request: the next one sees only the <live> ' +
+        'response, and director_note last. Your narration and the director_note call go in the SAME message: ' +
+        'write the narration, then call director_note (and any wake_me) right there. A message that is only ' +
+        'director_note or only wake_me, with the narration in a later one, is a wasted round trip; nothing ' +
+        'comes back from those calls that you need to see. This tick is a fresh request: the next one sees only the <live> ' +
         'block, your <director_note> and its own tick text, nothing you read or said here. The note (at most ' +
         `${DIRECTOR_NOTE_MAX_CHARS} characters) holds the arc's name and premise, the cast in a line each, ` +
         'which beats landed and how the Sims played them, and what the player said about the show. A tick ' +

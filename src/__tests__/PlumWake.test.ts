@@ -178,8 +178,11 @@ describe('PlumWakeService', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].name).toBe('push_action');
     expect(calls[0].args).toEqual({ sim: '1', action: 'gossip', target: '2', preempt: false });
-    const started = eventsOfKind('tool_call_started')[0].row as { summary: string; name: string };
+    // A trigger's push is a hidden row: in the thread, never sent to the tab
+    const started = plum.rows.find((row) => row.kind === 'tool') as { summary: string; hidden?: boolean };
     expect(started.summary).toBe(`trigger ${trigger.id}: push_action`);
+    expect(started.hidden).toBe(true);
+    expect(eventsOfKind('tool_call_started')).toEqual([]);
     plum.onModMessage({
       kind: 'tool_result',
       request_id: calls[0].request_id as string,
@@ -189,10 +192,10 @@ describe('PlumWakeService', () => {
     await flush();
     expect(client.requests).toHaveLength(0);
     expect(registered).toEqual([{ requestId: 'plum-xyz', action: 'gossip' }]);
-    const finished = eventsOfKind('tool_call_finished')[0] as { ok: boolean; summary: string };
-    expect(finished.ok).toBe(true);
-    expect(finished.summary).toBe(`trigger ${trigger.id}: pushed gossip on Bella Goth (with Don)`);
-    expect(plum.rows.map((row) => row.kind)).toEqual(['tool']);
+    // The row finished in the thread, hidden; the tab heard nothing
+    expect(eventsOfKind('tool_call_finished')).toEqual([]);
+    expect(plum.rows.map((row) => `${row.kind}:${row.hidden}:${row.ok}`)).toEqual(['tool:true:true']);
+    expect(plum.rows[0].summary).toBe(`trigger ${trigger.id}: pushed gossip on Bella Goth (with Don)`);
     expect(plum.wake.list()).toHaveLength(0);
     const journal = plum.wake.takeJournal();
     expect(journal).toHaveLength(1);
@@ -821,7 +824,7 @@ describe('PlumWakeService', () => {
     await flush();
     expect(toolCalls()).toHaveLength(1);
     expect(toolCalls()[0].args).toEqual({ sim: '1', action: 'insult', target: '2', preempt: false });
-    const started = eventsOfKind('tool_call_started')[0].row as { summary: string };
+    const started = plum.rows.find((row) => row.kind === 'tool') as { summary: string };
     expect(started.summary).toBe('arc "The Cold Shoulder" beat 1: push_action');
     result(toolCalls()[0], {
       changed: 'pushed insult on Bella Goth (with Don Lothario)',

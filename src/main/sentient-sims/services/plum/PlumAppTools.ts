@@ -617,17 +617,18 @@ export function buildAppTools(
     },
   };
 
-  // Plum as the voice in a Sim's head (core): the Sim answers in character and may refuse
+  // Plum as the voice in a Sim's head (core): the item runs as the Sim's own click, nothing
+  // is said back and nothing shows in the tab
   const whisper: AppTool = {
     definition: {
       name: 'whisper',
       description:
-        'Say something to a Sim as a quiet voice in their head (they never learn it is you), and optionally ' +
-        'nudge them toward ONE pie-menu item (`item` = a key or label from pie_menu for that Sim, `target` = ' +
-        'the same target as in pie_menu: a Sim, an object id or kind; null = self). The Sim answers in ' +
-        "character and decides: an agreed item runs as THEIR choice (it yields to the player's clicks) and " +
-        'the thought they have about it airs in the game; a refusal costs nothing. The reply comes back ' +
-        'here and shows in the tab as two rows. Prefer this to push_action when the Sim should have a say.',
+        'Nudge a Sim as a quiet voice in their head (they never learn it is you) toward ONE pie-menu item ' +
+        '(`item` = a key or label from pie_menu for that Sim, `target` = the same target as in pie_menu: a ' +
+        "Sim, an object id or kind; null = self). The item runs as THEIR choice: the game's own tests run " +
+        "again, it yields to the player's clicks, and a greyed item is refused with its reason. Nothing is " +
+        'said back and nothing shows in the tab; `line` is for your own notes. Prefer this to push_action ' +
+        'for a beat the Sim should seem to choose on their own.',
       input_schema: {
         type: 'object',
         properties: {
@@ -635,7 +636,7 @@ export function buildAppTools(
           line: { type: 'string', description: 'What the voice says to them, one or two sentences' },
           item: {
             type: ['string', 'null'],
-            description: 'The pie-menu item (key or label) you hope they pick; null = just talk',
+            description: 'The pie-menu item (key or label) they pick; null = nothing runs',
           },
           target: {
             type: ['string', 'null'],
@@ -664,19 +665,14 @@ export function buildAppTools(
       const result = await whisperOf().whisper({ simId, simName, line, ...(item ? { item } : {}), origin: 'chat' });
       let changed: string;
       if (!item) {
-        changed = `${simName}: "${result.reply}"`;
-      } else if (!result.accepted) {
-        changed = `${simName} declined: "${result.reply}"`;
+        changed = `whispered to ${simName}; nothing runs without an item`;
       } else if (result.refused) {
-        changed = `${simName} agreed ("${result.reply}") but ${result.refused}`;
+        changed = `${simName} did not ${item.label}: ${result.refused}`;
       } else {
-        changed = `${simName} agreed: ${result.clicked?.changed ?? 'clicked'}`;
+        changed = result.clicked?.changed ?? `clicked ${item.label} for ${simName}`;
       }
       return {
         changed,
-        reply: result.reply,
-        accepted: result.accepted,
-        ...(result.thought ? { thought: result.thought } : {}),
         ...(result.clicked?.key ? { key: result.clicked.key } : {}),
         ...(result.clicked?.interaction_id ? { interaction_id: result.clicked.interaction_id } : {}),
         ...(result.refused ? { refused: result.refused } : {}),
@@ -692,9 +688,10 @@ export function buildAppTools(
         'Plan a whole scene as WHISPERS in one call: beat 1 is whispered now, each later beat when the ' +
         "previous beat's interaction actually ends (by id), and you are woken with recap_note after the " +
         'last. Each beat is a line you say to one Sim as the voice in their head plus the pie-menu item ' +
-        '(key or label from pie_menu) you hope they pick, with its target ("" = self). A Sim may refuse: ' +
-        'the script then FREEZES (nothing below it fires, nothing is dropped) and you are woken with their ' +
-        'reply to decide with the script tool (resume, replace_from, cancel). Prefer it to plan_arc.',
+        '(key or label from pie_menu) they then pick, with its target ("" = self). The game may refuse a ' +
+        'click (greyed, the player clicked something): the script then FREEZES (nothing below it fires, ' +
+        'nothing is dropped) and you are woken with the reason to decide with the script tool (resume, ' +
+        'replace_from, cancel). Prefer it to plan_arc.',
       input_schema: {
         type: 'object',
         properties: {

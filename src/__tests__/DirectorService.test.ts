@@ -193,13 +193,21 @@ describe('DirectorService', () => {
     await flush();
     expect(registered).toEqual([{ requestId: 'plum-abc', action: 'insult' }]);
     expect(director.status()).toMatchObject({ active: true, arc: 'The Cold Shoulder', ticks: 1 });
-    // Narration is director rows, not player or plum rows
-    expect(eventsOfKind('director').map((event) => (event.row as { text: string }).text)).toEqual([
+    // Narration is hidden director rows in the thread; the tab hears nothing of the tick
+    expect(plum.rows.map((row) => `${row.kind}:${row.hidden}`)).toEqual([
+      'director:true',
+      'tool:true',
+      'director:true',
+    ]);
+    expect(plum.rows.map((row) => row.text)).toEqual([
       'ARC: The Cold Shoulder\n1. Bella insults Don',
+      '',
       'Beat one is cued.',
     ]);
-    expect(eventsOfKind('player')).toEqual([]);
-    expect(plum.rows.map((row) => row.kind)).toEqual(['director', 'tool', 'director']);
+    for (const kind of ['director', 'assistant', 'player', 'tool_call_started', 'tool_call_finished']) {
+      expect(eventsOfKind(kind)).toEqual([]);
+    }
+    expect(eventsOfKind('status').map((event) => event.state)).not.toContain('thinking');
   });
 
   it('a second push in one tick is refused without a send', async () => {
@@ -346,10 +354,11 @@ describe('DirectorService', () => {
     await vi.advanceTimersByTimeAsync(TICK_MS);
     expect(client.requests).toHaveLength(1);
     expect(director.status().active).toBe(true);
-    // The status line while directing names the armed trigger
+    // The status says the director is on and nothing of what it is doing
     plum.emitStatus('idle');
-    const status = eventsOfKind('status').pop() as { text?: string };
-    expect(status.text).toContain('waiting when Bella Goth finishes "insult"');
+    const status = eventsOfKind('status').pop() as { text?: string; director_active: boolean };
+    expect(status.director_active).toBe(true);
+    expect(status.text).toBeUndefined();
     // The beat is cancelled: the trigger wakes the director, which runs at once
     client.queue.push(message([text('Bella walked away; re-planning.')], 'end_turn'));
     plum.onModMessage({

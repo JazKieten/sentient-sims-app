@@ -28,13 +28,12 @@
 // and wakes Plum. planArc builds such a chain in one call for the director.
 //
 // WHISPERS (plan merry-conjuring-dahl, 2026-10-17): a trigger may instead WHISPER (then =
-// whisper): Plum's line to a Sim plus the pie-menu item it hopes they pick, answered by the
-// Sim's own actor model (PlumWhisper.ts), so the Sim has a say. An accepted beat runs as the
-// Sim's choice and chains on like a push; a decline, an agreed click the world refused, or
-// a cast Sim gone from the lot FREEZES the script (nothing below it fires, nothing is
-// dropped) and wakes Plum once to decide: resume, replace_from, or cancel (the script tool).
-// A beat whose accepted interaction ends canceled is clicked again once, with no new
-// decision; a second cancel freezes. The player's pause defers a whisper to the unpause
+// whisper): Plum's line to a Sim plus the pie-menu item they then pick, clicked as the Sim's
+// own choice (PlumWhisper.ts; no model is asked). A beat that took chains on like a push; a
+// click the world refused or a cast Sim gone from the lot FREEZES the script (nothing below
+// it fires, nothing is dropped) and wakes Plum once to decide: resume, replace_from, or
+// cancel (the script tool). A beat whose interaction ends canceled is clicked again once; a
+// second cancel freezes. The player's pause defers a whisper to the unpause
 // (the balloon is dropped under pause), it does not freeze. planScript builds a whisper
 // chain in one call; describeScript renders it into the <live> block.
 import log from 'electron-log';
@@ -43,7 +42,7 @@ import type { ApiContext } from '../ApiContext';
 import type { SimStateReport } from '../../models/SimStateReport';
 import type { PlumService, PlumToolOutcome } from '../PlumService';
 import { getModClockState } from '../../websocketServer';
-import { describeOutcome, NO_ANSWER, WhisperItem, WhisperRequest, WhisperResult } from './PlumWhisper';
+import { describeOutcome, WhisperItem, WhisperRequest, WhisperResult } from './PlumWhisper';
 
 export type WakeKind = 'sim_finishes' | 'game_time' | 'real_minutes';
 
@@ -67,8 +66,8 @@ export type WhisperAction = {
 // What a trigger does when it fires instead of waking Plum
 export type WakeAction = PushAction | WhisperAction;
 
-// The whisper whose accepted click a chained trigger waits on: a canceled end clicks it
-// again once (decision 7), with no new decision call
+// The whisper whose click a chained trigger waits on: a canceled end clicks it again once
+// (decision 7)
 export type FromWhisper = { simId: string; simName: string; item: WhisperItem; retried: boolean };
 
 export type WakeTrigger = {
@@ -739,8 +738,8 @@ export class PlumWakeService {
 
   // The whisper script in one call: beat 1 is whispered now, beat 2 waits on the click that
   // whisper made, beats 3..N each wait on the trigger before them, and a closing wake waits
-  // on the last. A beat 1 the Sim declined (or the world refused) freezes the script at
-  // once with beat 2 armed on that Sim: Plum reads the reply in the result and decides.
+  // on the last. A beat 1 the world refused freezes the script at once with beat 2 armed on
+  // that Sim: Plum reads why in the result and decides.
   async planScript(args: {
     name: string;
     beats: ScriptBeat[];
@@ -778,11 +777,11 @@ export class PlumWakeService {
       beats: rows,
       pending: this.triggers.length,
     };
-    if (!(result.accepted && result.clicked)) {
+    if (!result.clicked) {
       const reason = freezeReason(first.simName, 1, result);
       this.freeze(reason, { simId: first.simId, simName: first.simName, nextIds: armed.nextIds });
       view.frozen = reason;
-      view.changed += `; FROZEN: ${reason}. Read the reply, then script resume | replace_from | cancel`;
+      view.changed += `; FROZEN: ${reason}. Then script resume | replace_from | cancel`;
     }
     return view;
   }
@@ -807,7 +806,7 @@ export class PlumWakeService {
     const nextIds: string[] = [];
     let previous: WakeTrigger | undefined = anchor;
     const resolveFirst = (trigger: WakeTrigger) => {
-      if (fromAct?.result.accepted && fromAct.result.clicked) {
+      if (fromAct?.result.clicked) {
         this.resolveFrom(
           trigger,
           onSim.simId,
@@ -915,11 +914,11 @@ export class PlumWakeService {
       beats: [{ n: from, sim: first.simName, line: first.line, item: first.item.label }, ...armed.rows],
       pending: this.triggers.length,
     };
-    if (!(result.accepted && result.clicked)) {
+    if (!result.clicked) {
       const reason = freezeReason(first.simName, from, result);
       this.freeze(reason, { simId: first.simId, simName: first.simName, nextIds: armed.nextIds });
       view.frozen = reason;
-      view.changed += `; FROZEN: ${reason}. Read the reply, then script resume | replace_from | cancel`;
+      view.changed += `; FROZEN: ${reason}. Then script resume | replace_from | cancel`;
     }
     return view;
   }
@@ -1129,7 +1128,7 @@ export class PlumWakeService {
 
   // The condition was met. A plain trigger wakes Plum; a trigger with `then` acts itself,
   // unless the end that fired it was bad, in which case Plum is woken to adapt (the minimal
-  // gate). A whisper's accepted click that ended canceled is clicked again once first.
+  // gate). A whisper's click that ended canceled is clicked again once first.
   private fire(trigger: WakeTrigger, because: string, ended?: WakeEnd) {
     if (!trigger.then) {
       this.remove(trigger);
@@ -1180,8 +1179,8 @@ export class PlumWakeService {
     void this.act(trigger, because);
   }
 
-  // The accepted click a trigger waited on ended canceled: click it again once (the Sim
-  // already agreed), and the trigger waits for the new interaction instead
+  // The click a trigger waited on ended canceled: click it again once, and the trigger waits
+  // for the new interaction instead
   private async retryWhisper(trigger: WakeTrigger, retry: FromWhisper, because: string) {
     retry.retried = true;
     const onLot = (this.ctx.simStateCache.getReport()?.sims ?? []).some((sim) => sim.sim_id === retry.simId);
@@ -1271,8 +1270,8 @@ export class PlumWakeService {
     this.drain();
   }
 
-  // A whisper beat: under the player's pause it waits for the unpause; otherwise the Sim
-  // answers, an accepted click chains the next beat, anything else freezes the script
+  // A whisper beat: under the player's pause it waits for the unpause; otherwise the click is
+  // made, a click that took chains the next beat, one the world refused freezes the script
   private async actWhisper(trigger: WakeTrigger, action: WhisperAction, because: string) {
     if (getModClockState()?.paused_by === 'user') {
       log.info(`[PlumWake] ${trigger.id} fired under the player's pause; the whisper waits for the unpause`);
@@ -1296,15 +1295,15 @@ export class PlumWakeService {
       result = await this.plum.whisper.whisper(request);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      result = { accepted: false, reply: `(the whisper failed: ${message})` };
+      result = { refused: `the whisper failed: ${message}` };
     }
     const outcome = describeOutcome(request, result);
     this.journal.push(`${trigger.id} fired (${because}): ${outcome}`);
-    if (result.accepted && result.clicked) {
+    if (result.clicked) {
       this.resolveDependents(trigger, result.clicked);
       return;
     }
-    if (result.accepted && !action.item) {
+    if (!action.item) {
       // Talk only: the beat is spent; what waited on it waits for the Sim's next end
       for (const dependent of this.dependentsOf(trigger)) {
         this.rebase(dependent, action.simId, action.simName);
@@ -1390,16 +1389,9 @@ function whisperRequest(beat: ScriptBeat, beatLabel?: string): WhisperRequest {
   };
 }
 
-// Why a whispered beat froze the script, with the Sim's reply so the wake carries it
+// Why a whispered beat froze the script, with the game's refusal so the wake carries it
 function freezeReason(simName: string, beat: number | undefined, result: WhisperResult): string {
-  const which = `beat ${beat ?? '?'}`;
-  if (result.reply === NO_ANSWER) {
-    return `${simName} gave no usable answer to ${which} (a model glitch, not a refusal; resume or replace_from re-whispers it)`;
-  }
-  if (!result.accepted) {
-    return `${simName} declined ${which}: "${result.reply}"`;
-  }
-  return `${simName} agreed to ${which} ("${result.reply}") but ${result.refused ?? 'the click did not take'}`;
+  return `${simName}'s beat ${beat ?? '?'} did not take: ${result.refused ?? 'the click did not take'}`;
 }
 
 const NAME_PREFIXES = ['mixer_social_', 'mixer_', 'super_', 'si_', 'sim_'];

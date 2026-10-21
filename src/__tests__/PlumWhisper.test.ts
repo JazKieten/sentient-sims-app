@@ -1,4 +1,4 @@
-// Plum whispers (plan merry-conjuring-dahl, 2026-10-17): the Sim's side of one whisper
+// Plum whispers (plan merry-conjuring-dahl, 2026-10-17): one whisper as the Sim's own click
 // (PlumWhisper.ts), the whisper tool, the whisper script (PlumWake.planScript: freeze,
 // resume, replace_from, retry once, pause, cast gone), the director-gated tools and the
 // director's hard stop.
@@ -28,14 +28,7 @@ import type { MemoryRepository } from 'main/sentient-sims/db/MemoryRepository';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
 import { buildAppTools } from 'main/sentient-sims/services/plum/PlumAppTools';
 import { describe as describeTrigger, ScriptBeat } from 'main/sentient-sims/services/plum/PlumWake';
-import {
-  describeOutcome,
-  parseDecision,
-  PlumWhisperService,
-  replyTag,
-  WhisperResult,
-} from 'main/sentient-sims/services/plum/PlumWhisper';
-import { buildWhisperSystemPrompt } from 'main/sentient-sims/pipeline/prompts/plumWhisper';
+import { describeOutcome, PlumWhisperService, WhisperResult } from 'main/sentient-sims/services/plum/PlumWhisper';
 import { mockApiContext } from './util';
 
 type BetaMessage = Anthropic.Beta.Messages.BetaMessage;
@@ -141,7 +134,6 @@ describe('PlumWhisperService', () => {
   let client: FakeModelClient;
   let plum: PlumService;
   let now: number;
-  let answer: string;
   let oneShot: MockInstance<AIService['runOneShot']>;
   let played: MockInstance<AIService['playTtsLines']>;
   let stored: MockInstance<MemoryRepository['createMemory']>;
@@ -165,10 +157,7 @@ describe('PlumWhisperService', () => {
     });
     plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [clickPieMenu] });
     ctx.simStateCache.ingest(report(1, 'cook'));
-    answer = '{"willing": true, "reply": "Fine, I could eat.", "thought": "A snack would hit the spot."}';
-    oneShot = vi
-      .spyOn(ctx.ai, 'runOneShot')
-      .mockImplementation(() => Promise.resolve({ text: answer, exchange: {} as never }));
+    oneShot = vi.spyOn(ctx.ai, 'runOneShot');
     played = vi.spyOn(ctx.ai, 'playTtsLines').mockReturnValue(undefined);
     vi.spyOn(ctx.participantRepository, 'getParticipants').mockReturnValue([]);
     stored = vi.spyOn(ctx.memoryRepository, 'createMemory').mockReturnValue(undefined);
@@ -190,7 +179,7 @@ describe('PlumWhisperService', () => {
     await flush();
   }
 
-  it('an agreed nudge clicks the item as a whisper, airs the thought, and makes two tab rows', async () => {
+  it('a nudge clicks the item as a whisper: no model call, no voice, nothing in the tab', async () => {
     const pending = plum.whisper.whisper({
       simId: '1',
       simName: 'Bella Goth',
@@ -199,17 +188,8 @@ describe('PlumWhisperService', () => {
       origin: 'chat',
     });
     await flush();
-    // The Sim answered from her status, the thread and the nudge
-    expect(oneShot).toHaveBeenCalledTimes(1);
-    const [label, system, user] = oneShot.mock.calls[0] as unknown as [string, string, string];
-    expect(label).toBe('Plum whisper: Bella Goth');
-    expect(system).toContain('You are playing Bella Goth');
-    expect(system).toContain('quiet voice inside you');
-    expect(system).not.toContain('Plum');
-    expect(user).toBe(
-      'The voice says: "You look peckish."\nIt is nudging you to: Grab Snack (with object_Fridge).\n\nAnswer as Bella Goth.',
-    );
-    // The click went to the mod as HER choice
+    // The click went to the mod as HER choice, with nobody asked first
+    expect(oneShot).not.toHaveBeenCalled();
     const [call] = toolCalls();
     expect(call.name).toBe('click_pie_menu');
     expect(call.args).toEqual({ sim: '1', target: '900', item: 'super_GrabSnack', source: 'whisper' });
@@ -219,46 +199,24 @@ describe('PlumWhisperService', () => {
       interaction_id: '4242',
     });
     const result = await pending;
-    expect(result).toMatchObject({
-      accepted: true,
-      reply: 'Fine, I could eat.',
-      thought: 'A snack would hit the spot.',
+    expect(result).toEqual({
       clicked: {
         changed: 'clicked "Grab Snack" on object_Fridge for Bella Goth',
         key: 'super_GrabSnack',
         interaction_id: '4242',
       },
-      delivered: true,
     });
-    expect(result.refused).toBeUndefined();
-    // The thought: a monologue memory of hers (no action heading it) and a voiced (to self) line
-    expect(stored).toHaveBeenCalledTimes(1);
-    const [request] = stored.mock.calls[0] as unknown as [
-      { memory: Record<string, unknown>; index: { owner: string } },
-    ];
-    expect(request.memory).toEqual({
-      content: 'Bella Goth (to self): A snack would hit the spot.',
-      location_id: 55,
-      event_type: 'monologue',
-    });
-    expect(request.index.owner).toBe('1');
-    expect(played).toHaveBeenCalledTimes(1);
-    const [lines, , options] = played.mock.calls[0] as unknown as [
-      { speaker: string; text: string; simId?: string }[],
-      unknown,
-      { paced: boolean; pacedText: string },
-    ];
-    expect(lines).toEqual([{ speaker: 'Bella Goth (to self)', text: 'A snack would hit the spot.', simId: '1' }]);
-    expect(options).toEqual({ paced: true, pacedText: 'Bella Goth (to self): A snack would hit the spot.' });
-    // Two rows, each sent to the tab as an event of its kind, both persisted by kind
-    expect(plum.rows.map((row) => `${row.kind}:${row.name}:${row.text}`)).toEqual([
-      'whisper:Bella Goth:You look peckish.',
-      'reply:Bella Goth:Fine, I could eat.',
+    // Nothing is said back: no memory, no voice, no scene line
+    expect(stored).not.toHaveBeenCalled();
+    expect(played).not.toHaveBeenCalled();
+    expect(notifications().some((event) => event.type === ModWebsocketMessageType.SCENE_LINE)).toBe(false);
+    // One hidden row in the thread, none sent to the tab
+    expect(plum.rows.map((row) => `${row.kind}:${row.name}:${row.text}:${row.hidden}`)).toEqual([
+      'whisper:Bella Goth:You look peckish.:true',
     ]);
-    expect(plum.rows[1]).toMatchObject({ ok: true, summary: 'agreed' });
-    expect(eventsOfKind('whisper')).toHaveLength(1);
-    expect((eventsOfKind('reply')[0].row as { summary: string }).summary).toBe('agreed');
-    // No model turn of Plum's: agreement never wakes it
+    expect(eventsOfKind('whisper')).toEqual([]);
+    expect(eventsOfKind('reply')).toEqual([]);
+    // No model turn of Plum's either
     expect(client.requests).toHaveLength(0);
     // The journal / log line
     expect(
@@ -266,9 +224,7 @@ describe('PlumWhisperService', () => {
         { simId: '1', simName: 'Bella Goth', line: 'You look peckish.', item: SNACK, origin: 'chat' },
         result,
       ),
-    ).toBe(
-      'you told Bella Goth "You look peckish."; Bella Goth: "Fine, I could eat." -> agreed, clicked "Grab Snack" on object_Fridge for Bella Goth',
-    );
+    ).toBe('you told Bella Goth "You look peckish." -> clicked "Grab Snack" on object_Fridge for Bella Goth');
     // The mod watches the interaction: a `doing` trigger by id waits for its exact end
     plum.wake.set({
       kind: 'sim_finishes',
@@ -283,52 +239,7 @@ describe('PlumWhisperService', () => {
     expect(client.requests).toHaveLength(0);
   });
 
-  it('a decline runs nothing, stores nothing and airs nothing; an unusable answer counts as a decline', async () => {
-    answer = '{"willing": false, "reply": "I am not hungry, and I do not take orders."}';
-    const result = await plum.whisper.whisper({
-      simId: '1',
-      simName: 'Bella Goth',
-      line: 'Eat something.',
-      item: SNACK,
-      origin: 'chat',
-    });
-    expect(result).toEqual({ accepted: false, reply: 'I am not hungry, and I do not take orders.' });
-    expect(toolCalls()).toHaveLength(0);
-    expect(stored).not.toHaveBeenCalled();
-    expect(played).not.toHaveBeenCalled();
-    expect(plum.rows[1]).toMatchObject({ kind: 'reply', ok: false, summary: 'declined' });
-    answer = 'Sure, whatever you say.';
-    const calls = oneShot.mock.calls.length;
-    const garbled = await plum.whisper.whisper({
-      simId: '1',
-      simName: 'Bella Goth',
-      line: 'Eat.',
-      item: SNACK,
-      origin: 'chat',
-    });
-    expect(garbled).toEqual({ accepted: false, reply: '(no usable answer)' });
-    // Asked twice before giving up, and the tab says it was a glitch, not a refusal
-    expect(oneShot.mock.calls.length - calls).toBe(2);
-    expect(plum.rows[plum.rows.length - 1].summary).toBe('no usable answer');
-    expect(toolCalls()).toHaveLength(0);
-    // The reply with the prose unquoted still parses (the loose block)
-    answer = '{"willing": true, "reply": Alright then, "thought": I was heading to the fridge anyway}';
-    const loose = plum.whisper.whisper({
-      simId: '1',
-      simName: 'Bella Goth',
-      line: 'Eat.',
-      item: SNACK,
-      origin: 'chat',
-    });
-    await answerClick(true, { changed: 'clicked', key: 'super_GrabSnack' });
-    expect(await loose).toMatchObject({
-      accepted: true,
-      reply: 'Alright then',
-      thought: 'I was heading to the fridge anyway',
-    });
-  });
-
-  it('an agreed click the world refuses keeps the agreement, airs no thought, and says why', async () => {
+  it('a click the world refuses says why; with writes off no click is even tried', async () => {
     const pending = plum.whisper.whisper({
       simId: '1',
       simName: 'Bella Goth',
@@ -341,17 +252,14 @@ describe('PlumWhisperService', () => {
       'player_directed_interaction_pending: Bella Goth is doing something the player clicked (sim_Chat)',
     );
     const result = await pending;
-    expect(result.accepted).toBe(true);
-    expect(result.clicked).toBeUndefined();
-    expect(result.refused).toBe(
-      'player_directed_interaction_pending: Bella Goth is doing something the player clicked (sim_Chat)',
+    expect(result).toEqual({
+      refused: 'player_directed_interaction_pending: Bella Goth is doing something the player clicked (sim_Chat)',
+    });
+    expect(
+      describeOutcome({ simId: '1', simName: 'Bella Goth', line: 'Snack?', item: SNACK, origin: 'chat' }, result),
+    ).toBe(
+      'you told Bella Goth "Snack?" -> Grab Snack did not take: player_directed_interaction_pending: Bella Goth is doing something the player clicked (sim_Chat)',
     );
-    expect(result.delivered).toBeUndefined();
-    expect(stored).not.toHaveBeenCalled();
-    expect(played).not.toHaveBeenCalled();
-    expect(plum.rows[1]).toMatchObject({ kind: 'reply', ok: false });
-    expect((plum.rows[1].summary ?? '').startsWith('agreed, but player_directed_interaction_pending')).toBe(true);
-    // Writes off: no click is even tried
     ctx.settings.set(SettingsEnum.PLUM_ALLOW_WRITES, false);
     sendModNotification.mockClear();
     const held = await plum.whisper.whisper({
@@ -365,59 +273,30 @@ describe('PlumWhisperService', () => {
     expect(held.refused).toContain('Plum may change things');
   });
 
-  it('a whisper with no item is talk: nothing runs whatever the Sim says', async () => {
-    answer = '{"willing": true, "reply": "Yes, it has been a long day."}';
+  it('a whisper with no item is talk: nothing runs', async () => {
     const result = await plum.whisper.whisper({ simId: '1', simName: 'Bella Goth', line: 'Long day?', origin: 'chat' });
-    expect(result).toEqual({ accepted: true, reply: 'Yes, it has been a long day.' });
+    expect(result).toEqual({});
     expect(toolCalls()).toHaveLength(0);
+    expect(oneShot).not.toHaveBeenCalled();
     expect(stored).not.toHaveBeenCalled();
-    expect(plum.rows[1].summary).toBe('');
-    expect(
-      replyTag(
-        { simId: '1', simName: 'Bella Goth', line: 'x', origin: 'chat' },
-        { accepted: false, reply: '(no usable answer)' },
-      ),
-    ).toBe('no usable answer');
-    // The next whisper to her carries the thread
-    await plum.whisper.whisper({ simId: '1', simName: 'Bella Goth', line: 'Rest then.', origin: 'chat' });
-    const system = (oneShot.mock.calls[1] as unknown as [string, string])[1];
-    expect(system).toContain('Earlier the voice said: "Long day?"');
-    expect(system).toContain('You answered: "Yes, it has been a long day." (and went along with it)');
+    expect(plum.rows).toHaveLength(1);
+    expect(describeOutcome({ simId: '1', simName: 'Bella Goth', line: 'Long day?', origin: 'chat' }, result)).toBe(
+      'you told Bella Goth "Long day?"',
+    );
   });
 
-  it('with the voice setting off the thought is shown, not spoken', async () => {
-    ctx.settings.set(SettingsEnum.PLUM_WHISPER_VOICED, false);
-    const pending = plum.whisper.whisper({
-      simId: '1',
-      simName: 'Bella Goth',
-      line: 'Snack?',
-      item: SNACK,
-      origin: 'chat',
-    });
-    await answerClick(true, { changed: 'clicked', key: 'super_GrabSnack' });
-    expect((await pending).delivered).toBe(true);
-    expect(played).not.toHaveBeenCalled();
-    const line = notifications().find((notification) => notification.type === ModWebsocketMessageType.SCENE_LINE);
-    expect(line).toMatchObject({
-      speaker: 'Bella Goth (to self)',
-      text: 'A snack would hit the spot.',
-      voiced: false,
-      speaker_sim_id: '1',
-    });
-  });
-
-  it("the whisper tool: resolves the Sim and the target, reports the reply, and is the turn's one push", async () => {
+  it("the whisper tool: resolves the Sim and the target, reports the click, and is the turn's one push", async () => {
     client.queue.push(
       message(
         [
-          text('Let me ask her.'),
+          text('Let me nudge her.'),
           toolUse('tu_1', 'whisper', { sim: 'Bella', line: 'Grab a bite.', item: 'Grab Snack', target: 'fridge' }),
           toolUse('tu_2', 'whisper', { sim: 'Bella', line: 'And a nap.', item: 'Nap', target: null }),
         ],
         'tool_use',
       ),
     );
-    client.queue.push(message([text('She agreed.')], 'end_turn'));
+    client.queue.push(message([text('Done.')], 'end_turn'));
     const turn = plum.runTurn('tell Bella to eat', { maxPushes: 1 });
     await answerClick(true, {
       changed: 'clicked "Grab Snack" on object_Fridge for Bella Goth',
@@ -430,10 +309,8 @@ describe('PlumWhisperService', () => {
     const results = client.requests[1].messages[2].content as Anthropic.Beta.Messages.BetaToolResultBlockParam[];
     expect(results[0].is_error).toBeUndefined();
     const content = JSON.parse(results[0].content as string) as Record<string, unknown>;
-    expect(content.changed).toBe('Bella Goth agreed: clicked "Grab Snack" on object_Fridge for Bella Goth');
-    expect(content).toMatchObject({
-      accepted: true,
-      reply: 'Fine, I could eat.',
+    expect(content).toEqual({
+      changed: 'clicked "Grab Snack" on object_Fridge for Bella Goth',
       key: 'super_GrabSnack',
       interaction_id: '7',
     });
@@ -441,13 +318,15 @@ describe('PlumWhisperService', () => {
     expect(results[1].is_error).toBe(true);
     expect(results[1].content as string).toContain('one beat per tick');
     expect(toolCalls()).toHaveLength(1);
-    // Rows: the player, Plum, the tool row, then the whisper pair inside it, the held tool, Plum
-    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'tool', 'whisper', 'reply', 'tool', 'plum']);
-    expect(plum.rows[2].summary).toBe('Bella Goth agreed: clicked "Grab Snack" on object_Fridge for Bella Goth');
-    expect(plum.rows[5].summary).toBe('whisper held: one beat per tick');
-    // The seed of the next thread renders the pair
-    expect(plum.renderSeed([], plum.rows.slice(3, 5))).toContain('[you, to Bella Goth] Grab a bite.');
-    expect(plum.renderSeed([], plum.rows.slice(3, 5))).toContain('[Bella Goth] Fine, I could eat. (agreed)');
+    // Rows: the player, Plum, the tool row, the hidden whisper inside it, the held tool, Plum
+    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'tool', 'whisper', 'tool', 'plum']);
+    expect(plum.rows[2].summary).toBe('clicked "Grab Snack" on object_Fridge for Bella Goth');
+    expect(plum.rows[4].summary).toBe('whisper held: one beat per tick');
+    // The tab saw the conversation and the tool calls, never the whisper
+    expect(eventsOfKind('whisper')).toEqual([]);
+    expect(eventsOfKind('tool_call_started')).toHaveLength(2);
+    // The seed of the next thread still renders the whisper for Plum
+    expect(plum.renderSeed([], plum.rows.slice(3, 4))).toContain('[you, to Bella Goth] Grab a bite.');
   });
 
   it('plan_script and script are offered only with the director slot; whisper always', async () => {
@@ -466,36 +345,9 @@ describe('PlumWhisperService', () => {
     expect(withDirector).toContain('script');
   });
 
-  it('the parse repairs the shapes the cheap model sends: a lost quote, a lost comma, a cut-off thought', () => {
-    // Live 2026-10-17: the reply never closed before "thought"
-    expect(
-      parseDecision(
-        `{"willing": true, "reply": "I should probably drink some water before bed, it's been a long day, "thought": "I'm getting a bit dehydrated"}`,
-      ),
-    ).toEqual({
-      willing: true,
-      reply: "I should probably drink some water before bed, it's been a long day",
-      thought: "I'm getting a bit dehydrated",
-    });
-    // Live 2026-10-17: no comma between the strings
-    expect(
-      parseDecision(`{"willing": true, "reply": "I'm so done with his antics, " "thought": "I need to let him know"}`),
-    ).toEqual({ willing: true, reply: "I'm so done with his antics", thought: 'I need to let him know' });
-    // A thought cut off by the token budget still yields the decision
-    expect(parseDecision('{"willing": false, "reply": "No thanks.", "thought": "I was')).toEqual({
-      willing: false,
-      reply: 'No thanks.',
-      thought: 'I was',
-    });
-    expect(parseDecision('{"willing": true, "reply": "Fine."}')).toEqual({ willing: true, reply: 'Fine.' });
-    expect(parseDecision('Sure, whatever.')).toBeUndefined();
-    expect(parseDecision('{"willing": "yes", "reply": "Fine."}')).toBeUndefined();
-  });
-
   it('a "(to self)" speaker strips to the Sim', () => {
     expect(stripToSelf('Bella Goth (to self)')).toBe('Bella Goth');
     expect(stripToSelf('Bella Goth')).toBe('Bella Goth');
-    expect(buildWhisperSystemPrompt({ simName: 'Bella Goth' })).not.toContain('\n\n\n');
   });
 });
 
@@ -508,13 +360,9 @@ describe('the whisper script (PlumWake)', () => {
   let answers: WhisperResult[];
 
   const agreed = (id: string, key = 'super_GrabSnack'): WhisperResult => ({
-    accepted: true,
-    reply: 'Sure.',
-    thought: 'Why not.',
     clicked: { changed: `clicked ${key}`, key, interaction_id: id },
-    delivered: true,
   });
-  const declined: WhisperResult = { accepted: false, reply: 'No. I would rather not.' };
+  const declined: WhisperResult = { refused: 'mixer_social_Flirt is greyed out: Too Far Away' };
 
   function beat(simId: string, simName: string, line: string, key: string): ScriptBeat {
     return { simId, simName, line, item: { key, label: key } };
@@ -576,7 +424,7 @@ describe('the whisper script (PlumWake)', () => {
     expect((whispers.mock.calls[0][0] as { beatLabel: string }).beatLabel).toBe('script "Snack Fight" beat 1');
     expect(planned.frozen).toBeUndefined();
     expect(planned.changed).toContain(
-      'SCRIPT "Snack Fight": whispered beat 1 (you told Bella Goth "Grab a snack."; Bella Goth: "Sure." -> agreed, clicked super_GrabSnack)',
+      'SCRIPT "Snack Fight": whispered beat 1 (you told Bella Goth "Grab a snack." -> clicked super_GrabSnack)',
     );
     expect(planned.beats.map((row) => `${row.n}:${row.sim}:${row.item}`)).toEqual([
       '1:Bella Goth:super_GrabSnack',
@@ -623,7 +471,7 @@ describe('the whisper script (PlumWake)', () => {
     const journal = plum.wake.takeJournal();
     expect(
       journal.some((line) =>
-        line.includes('you told Don Lothario "Go flirt with Bella."; Don Lothario: "Sure." -> agreed'),
+        line.includes('you told Don Lothario "Go flirt with Bella." -> clicked mixer_social_Flirt'),
       ),
     ).toBe(true);
     client.queue.push(message([text('That was the scene.')], 'end_turn'));
@@ -640,11 +488,11 @@ describe('the whisper script (PlumWake)', () => {
     expect(plum.wake.list()).toHaveLength(0);
   });
 
-  it('a decline freezes the script with one wake, keeps the chain, ignores ends while frozen, and resume goes on from the next beat', async () => {
+  it('a refused click freezes the script with one wake, keeps the chain, ignores ends while frozen, and resume goes on from the next beat', async () => {
     answers.push(agreed('100'), declined);
     await plum.wake.planScript({ name: 'Snack Fight', beats: BEATS, recapNote: 'recap it' });
     const [w2, w3, wake] = plum.wake.list();
-    client.queue.push(message([text('Don said no; thinking.')], 'end_turn'));
+    client.queue.push(message([text('Don could not; thinking.')], 'end_turn'));
     plum.onModMessage({
       kind: 'interaction_ended',
       interaction_id: '100',
@@ -655,17 +503,21 @@ describe('the whisper script (PlumWake)', () => {
     await flush();
     await flush();
     expect(whisperedLines()).toEqual(['Grab a snack.', 'Go flirt with Bella.']);
-    // Frozen: nothing dropped, exactly one wake carrying the reply
+    // Frozen: nothing dropped, exactly one wake saying why
     expect(plum.wake.isFrozen()).toBe(true);
-    expect(plum.wake.frozenReason()).toBe('Don Lothario declined beat 2: "No. I would rather not."');
+    expect(plum.wake.frozenReason()).toBe(
+      "Don Lothario's beat 2 did not take: mixer_social_Flirt is greyed out: Too Far Away",
+    );
     expect(plum.wake.list()).toEqual([w3, wake]);
     expect(client.requests).toHaveLength(1);
     const text1 = lastUserText(client.requests[0]);
     expect(text1).toContain(`<wake id="${w2.id}"`);
-    expect(text1).toContain('Don Lothario: "No. I would rather not." -> declined');
+    expect(text1).toContain('-> mixer_social_Flirt did not take: mixer_social_Flirt is greyed out: Too Far Away');
     expect(text1).toContain('The script is frozen');
-    expect(plum.wake.status()).toBe('script frozen: Don Lothario declined beat 2: "No. I would rather not."');
-    expect(plum.wake.describeScript()[0]).toContain('FROZEN: Don Lothario declined beat 2');
+    expect(plum.wake.status()).toBe(
+      "script frozen: Don Lothario's beat 2 did not take: mixer_social_Flirt is greyed out: Too Far Away",
+    );
+    expect(plum.wake.describeScript()[0]).toContain("FROZEN: Don Lothario's beat 2 did not take");
     // While frozen an end on the cast does nothing, and a plain wake_me still fires
     answers.push(agreed('999'));
     plum.wake.set({ kind: 'sim_finishes', simId: '1', simName: 'Bella Goth', note: 'plain wake' });

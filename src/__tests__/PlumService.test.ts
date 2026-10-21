@@ -626,7 +626,9 @@ describe('PlumService', () => {
     expect(registered).toEqual([{ requestId: 'plum-1', simId: '1', action: 'gossip' }]);
     expect(plum.rows.map((row) => row.kind)).toEqual(['tool']);
     expect(plum.rows[0].summary).toBe('trigger w1: pushed gossip on Bella');
-    expect(eventsOfKind('tool_call_finished')[0].summary).toBe('trigger w1: pushed gossip on Bella');
+    // A trigger's row stays out of the tab
+    expect(plum.rows[0].hidden).toBe(true);
+    expect(eventsOfKind('tool_call_finished')).toEqual([]);
     expect(client.requests).toEqual([]);
 
     const refused = await plum.runScheduledTool('send_sim_home', { sim: '1', confirmed_by_player: true }, 'trigger w2');

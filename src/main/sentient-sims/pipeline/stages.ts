@@ -47,8 +47,6 @@ export enum StageId {
   WERNICKE_MATCH = 'wernicke_match',
   // Prefrontal cortex — consenting to or refusing an ask.
   PREFRONTAL_DECIDE = 'prefrontal_decide',
-  // Prefrontal cortex — answering the voice in your head (Plum's whisper), in character.
-  PLUM_WHISPER = 'plum_whisper',
   // Hippocampal replay during sleep — the diary and tomorrow's plan.
   CONSOLIDATION_REFLECT = 'consolidation_reflect',
   CONSOLIDATION_PLAN = 'consolidation_plan',
@@ -202,14 +200,6 @@ export const STAGES: StageDefinition[] = [
     job: 'Will you do it? — consent or refusal, in character',
     legacyActionType: AIActionType.ASK_DECISION,
     defaultMaxResponseTokens: 150,
-    usesLLM: true,
-  },
-  {
-    id: StageId.PLUM_WHISPER,
-    brainName: 'Prefrontal cortex',
-    job: 'Answering the voice in your head: what you say back, whether you will, and the thought as you go',
-    legacyActionType: AIActionType.PLUM_WHISPER,
-    defaultMaxResponseTokens: 400,
     usesLLM: true,
   },
   {

@@ -25,7 +25,7 @@ import { AnthropicPlumClient, describeModelError, PlumEffort, PlumModelClient } 
 import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/PlumWake';
 import { PlumWhisperService } from './plum/PlumWhisper';
 import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
-import { costOf, formatDollars } from './plum/plumPricing';
+import { costOf } from './plum/plumPricing';
 import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
 import type { PlumBrainSlot } from '../tiers/types';
@@ -44,9 +44,9 @@ export const MAX_ITERATIONS = 12;
 export const DEFAULT_TOOL_TIMEOUT_MS = 20000;
 export const MAX_TOKENS = 4096;
 
-// whisper: Plum's line to a Sim (name = the Sim); reply: the Sim's answer (name, ok, summary
-// = agreed | declined | why the click did not take). PlumWhisper.ts adds both.
-export type PlumRowKind = 'player' | 'plum' | 'tool' | 'director' | 'error' | 'whisper' | 'reply';
+// whisper: Plum's line to a Sim (name = the Sim), added by PlumWhisper.ts; kept in the
+// thread, never shown.
+export type PlumRowKind = 'player' | 'plum' | 'tool' | 'director' | 'error' | 'whisper';
 
 export type PlumRow = {
   row_id: string;
@@ -58,7 +58,18 @@ export type PlumRow = {
   detail?: string;
   ok?: boolean;
   done?: boolean;
+  // Never sent to the tab: the director's narration and tool calls, the triggers' pushes,
+  // Plum's whispers. The thread keeps them so Plum remembers its own work.
+  hidden?: boolean;
 };
+
+// What the tab shows: the player's conversation with Plum. The kind check covers rows
+// stored before `hidden` existed (older director, whisper and reply rows).
+const QUIET_KINDS: ReadonlySet<string> = new Set(['director', 'whisper', 'reply']);
+
+export function shownInTab(row: PlumRow): boolean {
+  return !row.hidden && !QUIET_KINDS.has(row.kind);
+}
 
 export type PlumStatusState = 'idle' | 'thinking' | 'tool';
 
@@ -173,6 +184,9 @@ export class PlumService {
 
   private turnRunning = false;
 
+  // A director tick: the tab shows none of it, not even the thinking state
+  private quietTurn = false;
+
   private readonly queuedLines: { text: string; options: PlumTurnOptions }[] = [];
 
   // push_action calls so far in the running turn (the director's one-beat rule)
@@ -192,7 +206,7 @@ export class PlumService {
     this.thread = this.newThread();
     this.wake = new PlumWakeService(ctx, this, { now: this.now, ...options.wakeDeps });
     this.wake.attach();
-    this.whisper = new PlumWhisperService(ctx, this, { now: this.now });
+    this.whisper = new PlumWhisperService(ctx, this);
   }
 
   // The app tools this build offers: a tool gated on a tier slot (onlyWith) is left out when
@@ -283,7 +297,7 @@ export class PlumService {
     switch (action) {
       case 'open':
         this.emitHistory();
-        this.emitStatus(this.turnRunning ? 'thinking' : 'idle');
+        this.emitStatus(this.turnRunning && !this.quietTurn ? 'thinking' : 'idle');
         return;
       case 'new_thread':
         void this.startNewThread();
@@ -349,6 +363,7 @@ export class PlumService {
       return {};
     }
     this.turnRunning = true;
+    this.quietTurn = Boolean(options.director);
     this.turnPushes = 0;
     try {
       const result = await this.runTurnInner(text, options);
@@ -359,7 +374,8 @@ export class PlumService {
       return result;
     } finally {
       this.turnRunning = false;
-      this.emitStatus('idle');
+      this.turnStatus('idle');
+      this.quietTurn = false;
       const next = this.queuedLines.shift();
       if (next) {
         void this.runTurn(next.text, next.options);
@@ -410,7 +426,7 @@ export class PlumService {
     ];
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
-      this.emitStatus('thinking');
+      this.turnStatus('thinking');
       let response: Anthropic.Beta.Messages.BetaMessage;
       try {
         response = await client.create({
@@ -464,8 +480,7 @@ export class PlumService {
 
       for (const block of response.content) {
         if (block.type === 'text' && block.text.trim()) {
-          const row = this.addRow({ kind: options.director ? 'director' : 'plum', text: block.text.trim() });
-          this.emit({ kind: options.director ? 'director' : 'assistant', thread_id: this.thread.id, row });
+          this.sayRow(block.text.trim(), options);
         }
       }
 
@@ -477,7 +492,7 @@ export class PlumService {
         return {};
       }
 
-      this.emitStatus('tool');
+      this.turnStatus('tool');
       // Every tool_use of one assistant turn is answered in ONE user message, in order
       const results: Anthropic.Beta.Messages.BetaToolResultBlockParam[] = [];
       for (const toolUse of toolUses) {
@@ -524,7 +539,7 @@ export class PlumService {
     const live = this.liveContextBlock();
     const startedAt = this.now();
     let tools = 0;
-    this.emitStatus('thinking');
+    this.turnStatus('thinking');
     const result = await brain.runTurn({
       id: randomUUID().slice(0, 8),
       kind,
@@ -543,9 +558,9 @@ export class PlumService {
       text,
       runTool: async (name, args) => {
         tools += 1;
-        this.emitStatus('tool');
-        const outcome = await this.runTool(name, args, { maxPushes: options.maxPushes });
-        this.emitStatus('thinking');
+        this.turnStatus('tool');
+        const outcome = await this.runTool(name, args, { maxPushes: options.maxPushes, hidden: options.director });
+        this.turnStatus('thinking');
         return outcome;
       },
       say: (said) => {
@@ -553,8 +568,7 @@ export class PlumService {
         if (!line) {
           return;
         }
-        const row = this.addRow({ kind: options.director ? 'director' : 'plum', text: line });
-        this.emit({ kind: options.director ? 'director' : 'assistant', thread_id: this.thread.id, row });
+        this.sayRow(line, options);
       },
     });
     this.thread.lastReplyAt = this.now();
@@ -617,7 +631,7 @@ export class PlumService {
     options: PlumTurnOptions = {},
   ): Promise<Anthropic.Beta.Messages.BetaToolResultBlockParam> {
     const args = (toolUse.input ?? {}) as Record<string, unknown>;
-    const outcome = await this.runTool(toolUse.name, args, { maxPushes: options.maxPushes });
+    const outcome = await this.runTool(toolUse.name, args, { maxPushes: options.maxPushes, hidden: options.director });
     return {
       type: 'tool_result' as const,
       tool_use_id: toolUse.id,
@@ -639,24 +653,29 @@ export class PlumService {
     return this.runTool(name, args, { label });
   }
 
-  // One tool, from the model loop or a trigger: the visible row (started / finished events,
-  // persisted), the write and destructive guards, the director's push cap, app-vs-mod
-  // dispatch, and the dispatcher registration after a push
+  // One tool, from the model loop or a trigger: the row (started / finished events unless the
+  // row is hidden: a director turn's call or a trigger's; persisted either way), the write
+  // and destructive guards, the director's push cap, app-vs-mod dispatch, and the dispatcher
+  // registration after a push
   private async runTool(
     name: string,
     args: Record<string, unknown>,
-    options: { maxPushes?: number; label?: string } = {},
+    options: { maxPushes?: number; label?: string; hidden?: boolean } = {},
   ): Promise<PlumToolOutcome> {
     const entry = this.catalogue.find((candidate) => candidate.definition.name === name);
     const prefix = options.label ? `${options.label}: ` : '';
+    const hidden = Boolean(options.hidden || options.label);
     const row = this.addRow({
       kind: 'tool',
       text: '',
       name,
       summary: prefix + (entry && entry.definition.risk === 'read' ? readSummary(name, args) : name),
       done: false,
+      ...(hidden ? { hidden } : {}),
     });
-    this.emit({ kind: 'tool_call_started', thread_id: this.thread.id, row });
+    if (!hidden) {
+      this.emit({ kind: 'tool_call_started', thread_id: this.thread.id, row });
+    }
 
     const finish = (ok: boolean, summary: string, detail: unknown, content: string, result?: unknown) => {
       row.done = true;
@@ -664,14 +683,16 @@ export class PlumService {
       row.summary = prefix + summary;
       row.detail = trimDetail(detail);
       this.persistRowUpdate(row);
-      this.emit({
-        kind: 'tool_call_finished',
-        thread_id: this.thread.id,
-        row_id: row.row_id,
-        ok,
-        summary: row.summary,
-        detail: row.detail,
-      });
+      if (!hidden) {
+        this.emit({
+          kind: 'tool_call_finished',
+          thread_id: this.thread.id,
+          row_id: row.row_id,
+          ok,
+          summary: row.summary,
+          detail: row.detail,
+        });
+      }
       return {
         ok,
         summary: row.summary,
@@ -832,12 +853,10 @@ export class PlumService {
     return row;
   }
 
-  // A row another service adds to the conversation (a whisper and its reply): stored by
-  // kind like every row and sent to the tab as an event of that kind
-  addVisibleRow(fields: Omit<PlumRow, 'row_id' | 'ts'>): PlumRow {
-    const row = this.addRow(fields);
-    this.emit({ kind: row.kind, thread_id: this.thread.id, row });
-    return row;
+  // A row another service adds to the thread quietly (Plum's whispers): stored by kind like
+  // every row, never sent to the tab
+  addQuietRow(fields: Omit<PlumRow, 'row_id' | 'ts' | 'hidden'>): PlumRow {
+    return this.addRow({ ...fields, hidden: true });
   }
 
   // --- memory across sessions (db/PlumRepository.ts) -----------------------------------------
@@ -913,7 +932,7 @@ export class PlumService {
     }
     this.ctx.ext.plumBrain?.onThreadReset?.();
     this.emitHistory();
-    this.emitStatus(this.turnRunning ? 'thinking' : 'idle');
+    this.emitStatus(this.turnRunning && !this.quietTurn ? 'thinking' : 'idle');
   }
 
   renderSeed(notes: PlumNote[], rows: readonly PlumRow[]): string {
@@ -943,8 +962,6 @@ export class PlumService {
           lines.push(`[${row.kind}] ${row.text}`);
         } else if (row.kind === 'whisper') {
           lines.push(`[you, to ${row.name ?? 'a Sim'}] ${row.text}`);
-        } else if (row.kind === 'reply') {
-          lines.push(`[${row.name ?? 'the Sim'}] ${row.text}${row.summary ? ` (${row.summary})` : ''}`);
         }
       });
       lines.push('</earlier_conversation>');
@@ -1070,21 +1087,32 @@ export class PlumService {
     sendModNotification({ type: ModWebsocketMessageType.PLUM_EVENT, ...event });
   }
 
+  // Plum's words in a turn: a row the tab shows, or a director row the thread keeps quietly
+  private sayRow(text: string, options: PlumTurnOptions) {
+    if (options.director) {
+      this.addRow({ kind: 'director', text, hidden: true });
+      return;
+    }
+    const row = this.addRow({ kind: 'plum', text });
+    this.emit({ kind: 'assistant', thread_id: this.thread.id, row });
+  }
+
+  // A state change of the running turn; a director tick shows none
+  private turnStatus(state: PlumStatusState) {
+    if (!this.quietTurn) {
+      this.emitStatus(state);
+    }
+  }
+
+  // The status carries director_active for the tab's button; the director's own doings
+  // (armed triggers, the hour's spend) stay out of the tab and in the log
   emitStatus(state: PlumStatusState, text?: string) {
     const directorActive = this.ctx.ext.director?.status().active ?? false;
-    // While directing, the status line is the next armed trigger plus the hour's spend (the
-    // tab already shows text; no DLL change)
     let line = text;
     const external = this.externalBrain();
     if (line === undefined && external) {
-      // An external brain spends the developer's own plan, not the key: no meter
-      const parts = [external.unavailable() ?? (directorActive ? this.wake.status() : undefined), 'via Claude Code'];
+      const parts = [external.unavailable(), 'via Claude Code'];
       line = parts.filter((part): part is string => Boolean(part)).join(' | ');
-    } else if (line === undefined && directorActive) {
-      const parts = [this.wake.status(), `${formatDollars(this.costThisHour())} this hour`].filter(
-        (part): part is string => Boolean(part),
-      );
-      line = parts.join(' | ');
     }
     this.emit({
       kind: 'status',
@@ -1101,7 +1129,7 @@ export class PlumService {
     this.emit({
       kind: 'history',
       thread_id: this.thread.id,
-      rows: this.thread.rows.slice(-HISTORY_ROWS),
+      rows: this.thread.rows.filter(shownInTab).slice(-HISTORY_ROWS),
       director: director ? { active: director.active, arc: director.arc } : { active: false },
     });
   }

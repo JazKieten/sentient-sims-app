@@ -151,8 +151,6 @@ export enum SettingsEnum {
   PLUM_DIRECTOR_MODEL = 'plumDirectorModel',
   PLUM_ALLOW_WRITES = 'plumAllowWrites',
   PLUM_DIRECTOR_MAX_TICKS_PER_HOUR = 'plumDirectorMaxTicksPerHour',
-  // The thought a Sim has when they agree to a whisper airs as a voiced (to self) line
-  PLUM_WHISPER_VOICED = 'plumWhisperVoiced',
   // Where Plum's thinking runs: 'api' (the Anthropic key above) or 'claude-code' (a local
   // Claude Code session on the developer's own plan, dev tier only, scripts/plum-claude)
   PLUM_BRAIN = 'plumBrain',

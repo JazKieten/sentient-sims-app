@@ -15,6 +15,10 @@ import {
   WakeKind,
 } from './PlumWake';
 import { PlumWhisperService, WhisperItem } from './PlumWhisper';
+import { DIRECTOR_NOTE_MAX_CHARS } from './plumPrompt';
+
+// The one thing the director_note tool needs of the PlumService running the turn
+export type DirectorNoteStore = { setDirectorNote(note: string): void };
 
 const MEMORY_TEXT_CHARS = 400;
 const DEFAULT_MEMORIES = 10;
@@ -126,11 +130,12 @@ function scriptBeats(ctx: ApiContext, raw: unknown): ScriptBeat[] {
 
 // `wakeOf` names the PlumService whose wake-ups wake_me sets (the one running the turn);
 // resolved at call time because the service builds its tools before its wake list exists.
-// `whisperOf` the same for the whisper tools.
+// `whisperOf` the same for the whisper tools, `noteOf` for director_note.
 export function buildAppTools(
   ctx: ApiContext,
   wakeOf: () => PlumWakeService = () => ctx.plum.wake,
   whisperOf: () => PlumWhisperService = () => ctx.plum.whisper,
+  noteOf: () => DirectorNoteStore = () => ctx.plum,
 ): AppTool[] {
   const recentMemories: AppTool = {
     definition: {
@@ -822,6 +827,43 @@ export function buildAppTools(
     },
   };
 
+  // The director's memory between ticks (roadmap C1): a director tick is a detached request
+  // that sees only the <live> block, this note and the tick text, so the note is rewritten at
+  // the end of every tick and comes back at the start of the next one. Core: a script's wake
+  // with the director off takes the same detached path.
+  const directorNote: AppTool = {
+    definition: {
+      name: 'director_note',
+      description:
+        'Rewrite the note you carry between director ticks (it is your ONLY memory of the show: the next tick ' +
+        'sees the <live> block, this note and the tick text, nothing of this conversation). Put in it the ' +
+        "arc's name and premise, the cast in a line each, which beats landed and how the Sims played them, " +
+        `and what the player said about the show. At most ${DIRECTOR_NOTE_MAX_CHARS} characters; the whole ` +
+        'note is replaced, so carry forward what still matters. An empty note clears it.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          note: { type: 'string', description: `The whole note, at most ${DIRECTOR_NOTE_MAX_CHARS} characters` },
+        },
+        required: ['note'],
+        additionalProperties: false,
+      },
+      risk: 'write',
+      timeout_ms: 5000,
+      tier: 'core',
+    },
+    run: (args) => {
+      const full = typeof args.note === 'string' ? args.note.trim() : '';
+      const note = full.slice(0, DIRECTOR_NOTE_MAX_CHARS);
+      noteOf().setDirectorNote(note);
+      if (!note) {
+        return Promise.resolve({ changed: 'director note cleared' });
+      }
+      const cut = full.length > note.length ? `, cut to ${DIRECTOR_NOTE_MAX_CHARS}` : '';
+      return Promise.resolve({ changed: `director note updated (${note.length} chars${cut})` });
+    },
+  };
+
   return [
     recentMemories,
     simFacts,
@@ -834,5 +876,6 @@ export function buildAppTools(
     whisper,
     planScript,
     script,
+    directorNote,
   ];
 }

@@ -11,6 +11,16 @@
 // MAX_ITERATIONS. The system prompt and the sorted strict tool list are the cache prefix;
 // the volatile <live> block is the first text block of each player turn.
 //
+// Two kinds of turn. A CHAT turn (the player typed, or a wake_me they asked for) runs on the
+// thread: its messages accumulate, roll at THREAD_ROLL_TOKENS, and are the player's
+// conversation. A DIRECTOR turn (a director tick, a script's or an arc's wake) is DETACHED
+// (roadmap C1, 2026-10-20): ONE user message [<live>, <director_note>, tick text] on a local
+// messages array that is dropped when the turn ends, so every director request is the cache
+// prefix plus a few thousand tokens, flat, however long the show runs (before: the director
+// rode the chat thread, 25k -> 150k over an evening and the 1M window in ~13 h). Its rows still
+// land on the shared thread.rows for the tab; its only memory across ticks is the note it
+// rewrites with the director_note tool, kept per save in plum_note (kind 'director').
+//
 // Destructive tools, defence in depth: the prompt (ask, then confirmed_by_player), every call
 // a visible row, the plumAllowWrites switch, and the ask-answer-act rule here: a destructive
 // call is forwarded only when the player's latest line arrived after a reply of Plum's.
@@ -24,7 +34,7 @@ import { PlumModMessage, PlumModToolResult } from '../models/ModLogWebsocketMess
 import { AnthropicPlumClient, describeModelError, PlumEffort, PlumModelClient } from './plum/PlumModelClient';
 import { describe as describeTrigger, PlumWakeService, WakeDeps } from './plum/PlumWake';
 import { PlumWhisperService } from './plum/PlumWhisper';
-import { PLUM_SYSTEM_PROMPT, liveBlock } from './plum/plumPrompt';
+import { PLUM_SYSTEM_PROMPT, directorNoteBlock, liveBlock } from './plum/plumPrompt';
 import { costOf, formatDollars } from './plum/plumPricing';
 import { buildAppTools, resolveSimId } from './plum/PlumAppTools';
 import { PlumNote, PlumRepository, PlumStoredRow } from '../db/PlumRepository';
@@ -62,9 +72,9 @@ export type PlumRow = {
 
 export type PlumStatusState = 'idle' | 'thinking' | 'tool';
 
-// How one turn runs. The director (autonomy tier, DirectorService) drives turns on the
-// same thread as the chat: its text is not a player row, its replies are director rows,
-// and it may push at most one beat.
+// How one turn runs. The director (autonomy tier, DirectorService) drives DETACHED turns:
+// its text is not a player row, its replies are director rows, it may push at most one
+// beat, and it never touches the chat thread's messages (see the header).
 export type PlumTurnOptions = {
   effort?: PlumEffort;
   director?: boolean;
@@ -73,8 +83,8 @@ export type PlumTurnOptions = {
   // ask-answer-act clock does not move
   wake?: boolean;
   // The wake belongs to a script or an arc (a trigger with `then` or `script`, set with the
-  // director off): it runs on the director's model and rolls at the director's threshold,
-  // like a director tick. A wake_me the player asked for in chat stays a chat turn.
+  // director off): it is a director turn too (the director's model, detached). A wake_me the
+  // player asked for in chat stays a chat turn.
   script?: boolean;
 };
 
@@ -120,14 +130,11 @@ type Thread = {
 export const HISTORY_ROWS = 30;
 // A chat thread past this many tokens of context rolls to a fresh one (summary note + seed).
 // A chat roll saves cents a turn and costs Plum the exact things the player said, so chat
-// keeps 60k (Scott 2026-10-18).
+// keeps 60k (Scott 2026-10-18). A director turn never rolls: it is detached and has no
+// thread to roll (the 30k director threshold of 2026-10-18 went with roadmap C1).
 export const THREAD_ROLL_TOKENS = 60_000;
-// A director tick or a script wake rolls the thread sooner: two thirds of a director call is
-// re-reading the thread, and since 2026-10-17 the <live> block is the truth for triggers,
-// journal and script, so the roll loses nothing the arc needs (the summary note carries the
-// arc name, the cast and what landed). Measured 2026-10-17: 25k -> 150k over an evening with
-// no roll, $6.28/h on Opus; at 30k the mean context is ~20k and Opus is ~$0.80/h.
-export const DIRECTOR_ROLL_TOKENS = 30_000;
+// The director's own note between ticks: kept in plum_note under this kind, one row per save
+export const DIRECTOR_NOTE_KIND = 'director';
 // The tab's "$x.xx this hour" while directing sums the calls of this sliding window
 const COST_WINDOW_MS = 3_600_000;
 export const SEED_ROWS = 20;
@@ -181,10 +188,20 @@ export class PlumService {
   // Every model call's price, for "$x.xx this hour" (pruned to the window on read)
   private usageLog: { at: number; cost: number }[] = [];
 
+  // The director's memory between detached turns (the director_note tool), per save
+  private directorNote: string | undefined;
+
   constructor(ctx: ApiContext, options: PlumServiceOptions = {}) {
     this.ctx = ctx;
     this.clientFactory = options.clientFactory ?? ((apiKey) => new AnthropicPlumClient(apiKey));
-    this.appTools = options.appTools ?? buildAppTools(ctx, () => this.wake);
+    this.appTools =
+      options.appTools ??
+      buildAppTools(
+        ctx,
+        () => this.wake,
+        () => this.whisper,
+        () => this,
+      );
     // A stub context in a test may have no repository; Plum then remembers nothing
     this.repository = 'plumRepository' in ctx ? ctx.plumRepository : undefined;
     this.now = options.now ?? (() => Date.now());
@@ -326,10 +343,48 @@ export class PlumService {
     return this.thread.messages;
   }
 
-  // Which model and roll threshold a turn uses: a director tick and a script's wake are the
-  // director's; everything else is chat
+  // Which turns are the director's: a director tick and a script's or an arc's wake. They run
+  // on the director's model, DETACHED from the chat thread (one local user message, nothing
+  // kept), and never roll it. Everything else is chat. The one rule for all three.
   private isDirectorTurn(options: PlumTurnOptions): boolean {
     return Boolean(options.director || options.script);
+  }
+
+  // The text blocks every turn opens with: the <live> block, then for a detached turn the
+  // director's note (its only memory), for a chat turn on a fresh thread the seed
+  private turnPrefix(detached: boolean): Anthropic.Beta.Messages.BetaTextBlockParam[] {
+    const blocks: Anthropic.Beta.Messages.BetaTextBlockParam[] = [
+      { type: 'text', text: this.liveContextBlock({ detached }) },
+    ];
+    if (detached) {
+      if (this.directorNote) {
+        blocks.push({ type: 'text', text: directorNoteBlock(this.directorNote) });
+      }
+    } else if (this.thread.messages.length === 0 && this.thread.seed) {
+      blocks.push({ type: 'text', text: this.thread.seed });
+    }
+    return blocks;
+  }
+
+  // --- the director's note (director_note tool) ------------------------------------------
+
+  get directorNoteText(): string | undefined {
+    return this.directorNote;
+  }
+
+  // Rewritten at the end of every director turn by the model; an empty note clears it. Kept
+  // per save so an app restart hands the show back to the next tick.
+  setDirectorNote(note: string) {
+    const text = note.trim();
+    this.directorNote = text || undefined;
+    if (!this.repository?.isLoaded()) {
+      return;
+    }
+    try {
+      this.repository.replaceNote(DIRECTOR_NOTE_KIND, text, [], this.gameDay());
+    } catch (error) {
+      log.warn('[Plum] could not store the director note', error);
+    }
   }
 
   private modelFor(options: PlumTurnOptions): string {
@@ -389,21 +444,21 @@ export class PlumService {
     const client = this.clientFactory(apiKey);
     const model = this.modelFor(options);
     const kind = PlumService.kindOf(options);
+    const detached = this.isDirectorTurn(options);
     if (!options.director && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
     }
-    const content: Anthropic.Beta.Messages.BetaTextBlockParam[] = [{ type: 'text', text: this.liveContextBlock() }];
-    if (this.thread.messages.length === 0 && this.thread.seed) {
-      content.push({ type: 'text', text: this.thread.seed });
-    }
+    const content = this.turnPrefix(detached);
     content.push({ type: 'text', text });
-    // Where this turn starts in the thread: a refusal rolls the thread back here, or the
-    // flagged text would ride every later request and the classifier would refuse them all
-    // (2026-10-17: one declined line left Plum mute until "New conversation").
-    const turnStart = this.thread.messages.length;
-    this.thread.messages.push({ role: 'user', content });
+    // A detached turn's messages live and die with the turn; a chat turn's are the thread's.
+    // Where this turn starts in them: a refusal rolls back to here, or the flagged text would
+    // ride every later request and the classifier would refuse them all (2026-10-17: one
+    // declined line left Plum mute until "New conversation").
+    const messages: Anthropic.Beta.Messages.BetaMessageParam[] = detached ? [] : this.thread.messages;
+    const turnStart = messages.length;
+    messages.push({ role: 'user', content });
     const tools = toApiTools(this.catalogue);
     const system: Anthropic.Beta.Messages.BetaTextBlockParam[] = [
       { type: 'text', text: PLUM_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
@@ -417,7 +472,7 @@ export class PlumService {
           model,
           system,
           tools,
-          messages: this.thread.messages,
+          messages,
           maxTokens: MAX_TOKENS,
           effort: options.effort ?? 'medium',
         });
@@ -431,20 +486,22 @@ export class PlumService {
       const usage = response.usage;
       const contextTokens =
         usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
-      this.thread.contextTokens = contextTokens;
+      if (!detached) {
+        // The chat thread's size, for its roll; a detached turn's context is its own
+        this.thread.contextTokens = contextTokens;
+      }
       this.recordUsage(model, usage);
-      // The meter (scripts/plum-cost.py) reads these; `detached` is false until director turns
-      // leave the chat thread (roadmap C1)
+      // The meter (scripts/plum-cost.py) reads these
       log.info(
         `[Plum] turn ${iteration + 1}: stop=${response.stop_reason} in=${usage.input_tokens} ` +
           `cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0} ` +
-          `out=${usage.output_tokens} ctx=${contextTokens} kind=${kind} model=${model} detached=false`,
+          `out=${usage.output_tokens} ctx=${contextTokens} kind=${kind} model=${model} detached=${detached}`,
       );
 
       if (response.stop_reason === 'refusal') {
         const details = response.stop_details;
         log.warn(`[Plum] refusal details: ${JSON.stringify(details ?? null)}`);
-        this.thread.messages.length = turnStart;
+        messages.length = turnStart;
         const category = details?.category ? ` [${details.category}]` : '';
         const why = details?.explanation ? ` ${details.explanation}` : '';
         this.emitError(
@@ -460,7 +517,7 @@ export class PlumService {
       }
 
       // Stored verbatim: an edited history invalidates preserved thinking
-      this.thread.messages.push({ role: 'assistant', content: response.content });
+      messages.push({ role: 'assistant', content: response.content });
 
       for (const block of response.content) {
         if (block.type === 'text' && block.text.trim()) {
@@ -483,7 +540,7 @@ export class PlumService {
       for (const toolUse of toolUses) {
         results.push(await this.runToolUse(toolUse, options));
       }
-      this.thread.messages.push({ role: 'user', content: results });
+      messages.push({ role: 'user', content: results });
     }
     this.emitError(`Plum stopped after ${MAX_ITERATIONS} tool calls in one turn; ask again to continue.`);
     this.thread.lastReplyAt = this.now();
@@ -514,6 +571,7 @@ export class PlumService {
       return { error: { status: 503, message: reason } };
     }
     const kind = PlumService.kindOf(options);
+    const detached = this.isDirectorTurn(options);
     // The seed is the conversation BEFORE this turn (the turn's own text rides after it)
     const priorRows = this.thread.rows.slice(-SEED_ROWS);
     if (!options.director && !options.wake) {
@@ -521,13 +579,19 @@ export class PlumService {
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
     }
-    const live = this.liveContextBlock();
+    // The same opening blocks the API loop sends: <live>, then the director's note on a
+    // detached turn (the brain keeps its own context, so nothing is dropped on its side; the
+    // note is still what the API path would see, and the brain's seed is a chat matter)
+    const live = this.turnPrefix(detached)
+      .map((block) => block.text)
+      .join('\n\n');
     const startedAt = this.now();
     let tools = 0;
     this.emitStatus('thinking');
     const result = await brain.runTurn({
       id: randomUUID().slice(0, 8),
       kind,
+      detached,
       live,
       seed: () => {
         let notes: PlumNote[] = [];
@@ -562,7 +626,7 @@ export class PlumService {
       this.emitError(result.error.message);
     }
     log.info(
-      `[Plum] external turn kind=${kind} tools=${tools} ms=${this.now() - startedAt}` +
+      `[Plum] external turn kind=${kind} detached=${detached} tools=${tools} ms=${this.now() - startedAt}` +
         (result.error ? ` error=${result.error.status ?? ''} ${result.error.message}` : ''),
     );
     return result;
@@ -789,7 +853,10 @@ export class PlumService {
 
   // --- context ---------------------------------------------------------------------------
 
-  liveContextBlock(): string {
+  // `detached`: the block opens a director turn, which carries the director's note as its own
+  // block; a chat turn while the director is running gets the note inside <live> instead, so
+  // the two Plums agree about the show
+  liveContextBlock({ detached = false }: { detached?: boolean } = {}): string {
     const lot = this.ctx.simStateCache.getReport()?.lot;
     const clock = lot?.clock;
     let clockText: string | undefined;
@@ -810,6 +877,9 @@ export class PlumService {
       triggers: this.wake.list().map((trigger) => `${trigger.id} ${describeTrigger(trigger)}`),
       script: this.wake.describeScript(),
       journal: this.wake.takeJournal(),
+      ...(!detached && this.directorNote && this.ctx.ext.director?.status().active
+        ? { director: this.directorNote }
+        : {}),
     });
   }
 
@@ -906,18 +976,27 @@ export class PlumService {
         this.thread.id = threadId;
         this.thread.rows = rows;
       }
-      log.info(`[Plum] database loaded: ${rows.length} rows of the last conversation, seed ${seed.length} chars`);
+      // The director's note is the save's too: the next tick picks the show back up
+      this.directorNote = this.repository.latestNote(DIRECTOR_NOTE_KIND)?.text || undefined;
+      log.info(
+        `[Plum] database loaded: ${rows.length} rows of the last conversation, seed ${seed.length} chars` +
+          (this.directorNote ? `, director note ${this.directorNote.length} chars` : ''),
+      );
     } catch (error) {
       log.warn('[Plum] could not read the last conversation', error);
       this.thread = this.newThread();
+      this.directorNote = undefined;
     }
     this.ctx.ext.plumBrain?.onThreadReset?.();
     this.emitHistory();
     this.emitStatus(this.turnRunning ? 'thinking' : 'idle');
   }
 
-  renderSeed(notes: PlumNote[], rows: readonly PlumRow[]): string {
+  renderSeed(allNotes: PlumNote[], rows: readonly PlumRow[]): string {
     const lines: string[] = [];
+    // The director's note is the detached turns' memory, not the chat's: a chat turn sees it
+    // in <live> while the director runs, and never as a note of its own
+    const notes = allNotes.filter((note) => note.kind !== DIRECTOR_NOTE_KIND);
     if (notes.length > 0) {
       lines.push('<plum_notes>', 'Notes you kept for yourself in earlier sessions of this save (newest last):');
       for (const note of notes) {
@@ -952,19 +1031,14 @@ export class PlumService {
     return lines.join('\n');
   }
 
-  // A long thread rolls on its own, still inside the turn (turnRunning holds, new lines
-  // queue). A director tick or a script wake rolls at DIRECTOR_ROLL_TOKENS, chat at
-  // THREAD_ROLL_TOKENS; the director's arc survives the roll because the <live> block, not
-  // the transcript, is the truth about its triggers, journal and script.
+  // A long chat thread rolls on its own, still inside the turn (turnRunning holds, new lines
+  // queue). A director turn is detached and left nothing on the thread, so it never rolls it
+  // (and never spends a summary call).
   private async rollIfLong(options: PlumTurnOptions): Promise<void> {
-    const director = this.isDirectorTurn(options);
-    const limit = director ? DIRECTOR_ROLL_TOKENS : THREAD_ROLL_TOKENS;
-    if ((this.thread.contextTokens ?? 0) < limit) {
+    if (this.isDirectorTurn(options) || (this.thread.contextTokens ?? 0) < THREAD_ROLL_TOKENS) {
       return;
     }
-    log.info(
-      `[Plum] the ${director ? 'director' : 'conversation'} passed ${limit / 1000}k tokens; rolling to a fresh thread`,
-    );
+    log.info(`[Plum] the conversation passed ${THREAD_ROLL_TOKENS / 1000}k tokens; rolling to a fresh thread`);
     await this.startNewThread({ keepRows: true, model: this.modelFor(options) });
   }
 

@@ -164,7 +164,7 @@ describe('DirectorService', () => {
     sendModNotification.mockClear();
   });
 
-  it('start runs a planning tick at high effort, reads the arc, and the push is one beat', async () => {
+  it('start runs a detached planning tick at medium effort, reads the arc, and the push is one beat', async () => {
     client.queue.push(
       message(
         [
@@ -177,10 +177,12 @@ describe('DirectorService', () => {
     client.queue.push(message([text('Beat one is cued.')], 'end_turn'));
     director.start('something tense');
     await flush();
-    expect(client.requests[0].effort).toBe('high');
+    // One effort for every director request (roadmap C1): planning included
+    expect(client.requests[0].effort).toBe('medium');
     const first = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
     expect(first[first.length - 1].text).toContain('<director_tick n="1">');
     expect(first[first.length - 1].text).toContain('something tense');
+    expect(first[first.length - 1].text).toContain('Finish by calling director_note');
     const [call] = toolCalls();
     expect(call.name).toBe('push_action');
     plum.onModMessage({
@@ -200,6 +202,9 @@ describe('DirectorService', () => {
     ]);
     expect(eventsOfKind('player')).toEqual([]);
     expect(plum.rows.map((row) => row.kind)).toEqual(['director', 'tool', 'director']);
+    // Detached: the tick's two requests grew a local array, and the chat thread holds nothing
+    expect(client.requests[1].messages).toHaveLength(3);
+    expect(plum.messages).toEqual([]);
   });
 
   it('a second push in one tick is refused without a send', async () => {

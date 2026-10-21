@@ -37,6 +37,9 @@ export function liveBlock(fields: {
   journal?: string[];
   // The whisper script (PlumWake.describeScript): frozen or running, its beats
   script?: string[];
+  // The director's own note (the director_note tool), shown to a CHAT turn while the director
+  // is running so the two Plums agree; a detached director turn carries it as its own block
+  director?: string;
 }): string {
   const lines: string[] = ['<live>'];
   if (fields.clock) {
@@ -66,6 +69,19 @@ export function liveBlock(fields: {
       lines.push(`- ${entry}`);
     }
   }
+  if (fields.director) {
+    lines.push("director's note (the show running in the other tab):");
+    for (const entry of fields.director.split('\n')) {
+      lines.push(`  ${entry}`);
+    }
+  }
   lines.push('</live>');
   return lines.join('\n');
 }
+
+// How a detached director turn carries the note it wrote last tick (its only memory)
+export function directorNoteBlock(note: string): string {
+  return `<director_note>\n${note}\n</director_note>`;
+}
+
+export const DIRECTOR_NOTE_MAX_CHARS = 1200;

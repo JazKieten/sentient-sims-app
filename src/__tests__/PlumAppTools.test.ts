@@ -287,6 +287,27 @@ describe('Plum app-side tools', () => {
     expect(ctx.plum.wake.list()).toHaveLength(0);
   });
 
+  it("director_note rewrites the director's note, caps it, and an empty note clears it", async () => {
+    const ctx = mockApiContext({ tiers: [] });
+    const notes: string[] = [];
+    const directorNote = buildAppTools(
+      ctx,
+      () => ctx.plum.wake,
+      () => ctx.plum.whisper,
+      () => ({ setDirectorNote: (note: string) => notes.push(note) }),
+    ).find((candidate) => candidate.definition.name === 'director_note');
+    expect(directorNote?.definition).toMatchObject({ risk: 'write', tier: 'core' });
+    expect(await directorNote?.run({ note: '  ARC Dinner: Bella cooks for Don.  ' })).toEqual({
+      changed: 'director note updated (32 chars)',
+    });
+    const long = 'x'.repeat(1300);
+    expect(await directorNote?.run({ note: long })).toEqual({
+      changed: 'director note updated (1200 chars, cut to 1200)',
+    });
+    expect(await directorNote?.run({ note: '' })).toEqual({ changed: 'director note cleared' });
+    expect(notes).toEqual(['ARC Dinner: Bella cooks for Don.', 'x'.repeat(1200), '']);
+  });
+
   it('every app tool is strict with every property required, nested objects included', () => {
     const ctx = mockApiContext({ tiers: [] });
     type Schema = {
@@ -311,5 +332,6 @@ describe('Plum app-side tools', () => {
       return definition.name;
     });
     expect(names).toContain('plan_arc');
+    expect(names).toContain('director_note');
   });
 });

@@ -150,7 +150,11 @@ export type PlumPushRegistration = (
 export type PlumTurnPort = {
   id: string;
   kind: PlumTurnKind;
-  // The <live> block, built once for the turn
+  // A director turn (tick, script wake): on the API path a detached request that carries only
+  // <live>, the director's note and the text; the brain gets the same opening in `live` and
+  // should take no seed for it (the seed is the chat's)
+  detached: boolean;
+  // The <live> block, built once for the turn (plus the <director_note> block when detached)
   live: string;
   // Plum's notes and the tail of the last conversation, rendered fresh when asked
   seed(): string;

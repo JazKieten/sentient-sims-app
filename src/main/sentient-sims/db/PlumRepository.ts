@@ -118,4 +118,33 @@ export class PlumRepository extends Repository {
     const result = this.dbService.getDb().prepare('DELETE FROM plum_note WHERE id = ?').run([id]);
     return result.changes > 0;
   }
+
+  // A note of which only the newest matters (the director's note, rewritten every tick):
+  // every earlier note of that kind goes, and an empty text leaves none
+  replaceNote(kind: string, text: string, simIds: string[] = [], gameDay?: number): number | undefined {
+    const db = this.dbService.getDb();
+    const swap = db.transaction((): number | undefined => {
+      db.prepare('DELETE FROM plum_note WHERE kind = ?').run([kind]);
+      return text ? this.addNote(kind, text, simIds, gameDay) : undefined;
+    });
+    return swap();
+  }
+
+  latestNote(kind: string): PlumNote | undefined {
+    const row = this.dbService
+      .getDb()
+      .prepare('SELECT * FROM plum_note WHERE kind = ? ORDER BY id DESC LIMIT 1')
+      .get([kind]) as NoteRow | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return {
+      id: row.id,
+      kind: row.kind,
+      text: row.text,
+      sim_ids: parseJson<string[]>(row.sim_ids_json, []),
+      created_at: row.created_at,
+      ...(row.game_day === null ? {} : { game_day: row.game_day }),
+    };
+  }
 }

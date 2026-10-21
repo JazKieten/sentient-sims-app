@@ -83,6 +83,23 @@ describe('PlumRepository', () => {
     expect(repo.deleteNote(notes[0].id)).toBe(true);
     expect(repo.notes(40)).toHaveLength(1);
   });
+
+  it('replaceNote keeps one note of its kind: the newest, or none for an empty text', () => {
+    const ctx = loadedContext();
+    const repo = ctx.plumRepository;
+    repo.addNote('note', 'Unrelated.');
+    repo.replaceNote('director', 'ARC Dinner, beat 1.', [], 4);
+    repo.replaceNote('director', 'ARC Dinner, beats 1-2.', [], 4);
+    expect(repo.latestNote('director')).toMatchObject({
+      kind: 'director',
+      text: 'ARC Dinner, beats 1-2.',
+      game_day: 4,
+    });
+    expect(repo.notes(40).map((note) => note.text)).toEqual(['Unrelated.', 'ARC Dinner, beats 1-2.']);
+    expect(repo.replaceNote('director', '')).toBeUndefined();
+    expect(repo.latestNote('director')).toBeUndefined();
+    expect(repo.notes(40).map((note) => note.text)).toEqual(['Unrelated.']);
+  });
 });
 
 describe('Plum memory across sessions', () => {
@@ -126,6 +143,42 @@ describe('Plum memory across sessions', () => {
     const second = client.requests[1].messages;
     const lastUser = second[second.length - 1].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
     expect(lastUser).toHaveLength(2);
+  });
+
+  it("the director's note survives an app restart and never rides the chat seed", async () => {
+    const ctx = loadedContext();
+    const client = new FakeModelClient();
+    const plum = new PlumService(ctx, { clientFactory: () => client, appTools: [] });
+    plum.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [] });
+    ctx.plumRepository.addNote('note', 'Scott likes the lights off at night.', [], 3);
+    plum.setDirectorNote('ARC Dinner: Bella cooks for Don. Beat 1 landed.');
+    plum.setDirectorNote('ARC Dinner: Bella cooks for Don. Beats 1-2 landed.');
+    expect(ctx.plumRepository.notes(40).filter((note) => note.kind === 'director')).toHaveLength(1);
+
+    // The next app session over the same save
+    const later = new PlumService(ctx, { clientFactory: () => client, appTools: [] });
+    later.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [] });
+    expect(later.directorNoteText).toBeUndefined();
+    later.onDatabaseLoaded();
+    expect(later.directorNoteText).toBe('ARC Dinner: Bella cooks for Don. Beats 1-2 landed.');
+
+    // A director tick picks the show back up from the note
+    client.queue.push(reply('Watching.'));
+    await later.runTurn('<director_tick n="1"/>', { director: true });
+    const tick = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(tick.map((block) => block.text.split('\n')[0])).toEqual([
+      '<live>',
+      '<director_note>',
+      '<director_tick n="1"/>',
+    ]);
+
+    // The chat's seed carries Plum's notes, not the director's
+    client.queue.push(reply('Welcome back.'));
+    await later.runTurn('remember me?');
+    const chat = client.requests[1].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(chat[1].text).toContain('[note (day 3)] Scott likes the lights off at night.');
+    expect(chat[1].text).not.toContain('[director');
+    expect(chat[1].text).not.toContain('ARC Dinner');
   });
 
   it('a new conversation writes one summary note at low effort and seeds the next thread', async () => {

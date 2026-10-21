@@ -11,9 +11,13 @@
 // script FREEZES until Plum decides: script resume / replace_from / cancel), on a hard stop
 // (fire, death, a cast Sim gone, a stale report), or when the script completes; then Plum
 // recaps, plans the next one, and never stops on its own. plan_arc (pushes, no say) stays
-// for now. The turns are on the same conversation as the chat (PlumService.runTurn with
-// director options), so the player can talk to Plum mid-script and sees the narration as
-// director rows.
+// for now. Every tick is a DETACHED turn (PlumService.runTurn with director: true, roadmap
+// C1): one request of <live> + the director's note + the tick text, nothing of the chat
+// thread and nothing kept after, so a tick costs the same at 3 a.m. as at the start of the
+// show. The note (director_note tool, rewritten at the end of every tick) is the only memory
+// between ticks; the <live> block is the truth about triggers, journal and script. The
+// player can still talk to Plum mid-script in the chat thread, which sees the note in its
+// <live>, and sees the narration as director rows in the same tab.
 //
 // Guard rails: no tick while the player's own pause stands or the state report is stale,
 // none while triggers are armed (the arc runs itself; the 60 s interval only catches a
@@ -28,6 +32,7 @@ import type { SimStateEntry } from '../models/SimStateReport';
 import { isAsleep } from './CognitionService';
 import type { DirectorSlot } from '../tiers/types';
 import type { PlumService } from './PlumService';
+import { DIRECTOR_NOTE_MAX_CHARS } from './plum/plumPrompt';
 
 export const TICK_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -302,9 +307,11 @@ export class DirectorService implements DirectorSlot {
     const planning = this.ticks === 1 || this.arc === undefined;
     const rowsBefore = this.plum.rows.length;
     try {
+      // One effort for every director request (medium, PlumService's default): the request is
+      // new each tick anyway, so effort no longer costs a cache miss, and planning quality at
+      // medium is what the bench measures (sprint plan section 7)
       const result = await this.plum.runTurn(this.tickText(planning, wake), {
         director: true,
-        effort: planning ? 'high' : 'medium',
         maxPushes: 1,
       });
       this.readArc(rowsBefore);
@@ -418,6 +425,14 @@ export class DirectorService implements DirectorSlot {
     lines.push(
       'Narrate in one to three sentences like a director watching dailies; quote a good line when there is one. ' +
         'Never cancel what a Sim is doing, never travel, never touch the clock or the settings while directing.',
+    );
+    // The tick is detached: nothing of this turn survives it but the note
+    lines.push(
+      'This tick is a fresh request: the next one sees only the <live> block, your <director_note> and its own ' +
+        'tick text, nothing you read or said here. Finish by calling director_note with the updated note ' +
+        `(at most ${DIRECTOR_NOTE_MAX_CHARS} characters): the arc's name and premise, the cast in a line each, ` +
+        'which beats landed and how the Sims played them, and what the player said about the show. A tick ' +
+        'that does not call it keeps the old note.',
     );
     lines.push('</director_tick>');
     return lines.join('\n');

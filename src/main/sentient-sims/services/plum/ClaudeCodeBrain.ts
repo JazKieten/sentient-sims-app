@@ -256,8 +256,10 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
       return;
     }
     const { port } = turn;
-    const parts = [`[plum turn ${port.id} kind=${port.kind}]`, port.live];
-    if (this.needsSeed) {
+    const parts = [`[plum turn ${port.id} kind=${port.kind}${port.detached ? ' detached=true' : ''}]`, port.live];
+    // A detached director turn carries its own memory (the <director_note> inside live); the
+    // seed is the chat's and waits for the next chat turn
+    if (this.needsSeed && !port.detached) {
       const seed = port.seed();
       if (seed) {
         parts.push(seed);

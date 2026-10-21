@@ -13,12 +13,8 @@ import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { ModWebsocketMessageType } from 'main/sentient-sims/models/ModWebsocketMessage';
 import { PlumModToolDef } from 'main/sentient-sims/models/ModLogWebsocketMessage';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import {
-  DIRECTOR_ROLL_TOKENS,
-  MAX_ITERATIONS,
-  PlumService,
-  THREAD_ROLL_TOKENS,
-} from 'main/sentient-sims/services/PlumService';
+import { MAX_ITERATIONS, PlumService, THREAD_ROLL_TOKENS } from 'main/sentient-sims/services/PlumService';
+import { buildAppTools } from 'main/sentient-sims/services/plum/PlumAppTools';
 import { PlumModelClient, PlumModelRequest } from 'main/sentient-sims/services/plum/PlumModelClient';
 import {
   catalogueFingerprint,
@@ -502,51 +498,138 @@ describe('PlumService', () => {
     expect(blocks[2].text).toBe('fourth');
   });
 
-  it('a director turn runs on plumDirectorModel and rolls at DIRECTOR_ROLL_TOKENS; the note names the armed triggers', async () => {
+  it('a director turn is DETACHED: one user message on the director model, the chat thread untouched, no roll, rows kept', async () => {
     ctx.settings.set(SettingsEnum.PLUM_DIRECTOR_MODEL, 'claude-haiku-5-5');
     client.queue.push(message([text('One.')], 'end_turn'));
     await plum.runTurn('first');
     client.queue.push(message([text('Two.')], 'end_turn'));
     await plum.runTurn('second');
     expect(client.requests.every((request) => request.model === 'claude-opus-5-5')).toBe(true);
-    const trigger = plum.wake.set({ kind: 'game_time', at: '07:00', note: 'the morning beat' });
+    const chatMessages = [...plum.messages];
+    expect(chatMessages).toHaveLength(4);
     const before = plum.threadId;
     client.requests = [];
-    // Under the chat threshold but over the director's: a director tick rolls, a chat turn would not
-    client.queue.push(message([text('Beat.')], 'end_turn', { input_tokens: DIRECTOR_ROLL_TOKENS + 1000 }));
-    client.queue.push(message([text('Arc "Dinner", Bella cooking; w1 waits for 07:00 to open act two.')], 'end_turn'));
-    await plum.runTurn('<director_tick/>', { director: true });
+    // A tool round and a huge context: a detached turn still never rolls or summarizes
+    client.queue.push(
+      message([text('Looking.'), toolUse('tu_1', 'look_at_lot', {})], 'tool_use', {
+        input_tokens: THREAD_ROLL_TOKENS * 3,
+      }),
+    );
+    client.queue.push(message([text('Beat.')], 'end_turn', { input_tokens: THREAD_ROLL_TOKENS * 3 }));
+    const turn = plum.runTurn('<director_tick/>', { director: true });
+    await flush();
+    const [call] = toolCalls();
+    plum.onModMessage({ kind: 'tool_result', request_id: call.request_id as string, ok: true, result: { sims: [] } });
+    await turn;
 
     expect(client.requests).toHaveLength(2);
-    const [turn, summary] = client.requests;
-    expect(turn.model).toBe('claude-haiku-5-5');
-    expect(summary.model).toBe('claude-haiku-5-5');
-    expect(summary.effort).toBe('low');
-    const prompt = summary.messages[summary.messages.length - 1].content as string;
-    expect(prompt).toContain(trigger.id);
-    expect(prompt).toContain('WHY you set it');
-    expect(plum.threadId).not.toBe(before);
-    expect(plum.messages).toEqual([]);
-    // The trigger survives the roll: it lives in PlumWake, not the transcript
-    expect(plum.wake.list().map((armed) => armed.id)).toEqual([trigger.id]);
-    // The director rows are kept for the tab
-    expect(plum.rows.map((row) => row.kind)).toEqual(['player', 'plum', 'player', 'plum', 'director']);
+    const [first, second] = client.requests;
+    expect(first.model).toBe('claude-haiku-5-5');
+    expect(second.model).toBe('claude-haiku-5-5');
+    // The first request is ONE user message: <live>, then the tick text (no seed, no note yet)
+    expect(first.messages).toHaveLength(1);
+    const blocks = first.messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(blocks.map((block) => block.text.split('\n')[0])).toEqual(['<live>', '<director_tick/>']);
+    // The tool round grew the LOCAL array, never the thread
+    expect(second.messages).toHaveLength(3);
+    expect(plum.messages).toEqual(chatMessages);
+    expect(plum.threadId).toBe(before);
+    // The rows still land for the tab
+    expect(plum.rows.map((row) => row.kind)).toEqual([
+      'player',
+      'plum',
+      'player',
+      'plum',
+      'director',
+      'tool',
+      'director',
+    ]);
 
-    // A chat turn at the same context does not roll (chat keeps THREAD_ROLL_TOKENS)
+    // The chat thread's size was not touched by the detached turn: a small chat turn does not roll
     client.requests = [];
-    client.queue.push(message([text('Still here.')], 'end_turn', { input_tokens: DIRECTOR_ROLL_TOKENS + 1000 }));
+    client.queue.push(message([text('Still here.')], 'end_turn'));
     await plum.runTurn('hello again');
     expect(client.requests).toHaveLength(1);
     expect(client.requests[0].model).toBe('claude-opus-5-5');
+    expect(client.requests[0].messages).toHaveLength(5);
+    expect(plum.threadId).toBe(before);
   });
 
-  it('a script wake runs on the director model; a plain wake is a chat turn', async () => {
+  it('the chat roll while directing still asks the note to name the armed triggers and why', () => {
+    const trigger = plum.wake.set({ kind: 'game_time', at: '07:00', note: 'the morning beat' });
+    const prompt = plum.summaryPrompt();
+    expect(prompt).toContain(trigger.id);
+    expect(prompt).toContain('WHY you set it');
+  });
+
+  it('a script wake is a detached turn on the director model; a plain wake is a chat turn', async () => {
     ctx.settings.set(SettingsEnum.PLUM_DIRECTOR_MODEL, 'claude-haiku-5-5');
     client.queue.push(message([text('Wake.')], 'end_turn'));
     await plum.runTurn('<wake/>', { wake: true });
+    expect(plum.messages).toHaveLength(2);
     client.queue.push(message([text('Script wake.')], 'end_turn'));
     await plum.runTurn('<wake/>', { wake: true, script: true });
     expect(client.requests.map((request) => request.model)).toEqual(['claude-opus-5-5', 'claude-haiku-5-5']);
+    expect(client.requests[1].messages).toHaveLength(1);
+    expect(plum.messages).toHaveLength(2);
+  });
+
+  it("director_note is the director's memory: into the next detached turn, and into a chat turn's <live> while directing", async () => {
+    // The real app tools, resolving the service lazily like production does
+    const noted: PlumService = new PlumService(ctx, {
+      clientFactory: () => client,
+      now: () => now,
+      appTools: buildAppTools(
+        ctx,
+        () => noted.wake,
+        () => noted.whisper,
+        () => noted,
+      ),
+    });
+    noted.onModMessage({ kind: 'catalogue', tier: 'core', enabled: true, tools: [lookAtLot] });
+    ctx.ext.director = { start() {}, stop() {}, status: () => ({ active: true }), wake: () => true };
+
+    client.queue.push(
+      message(
+        [toolUse('tu_1', 'director_note', { note: 'ARC Dinner: Bella cooks for Don.\nBeat 1 landed.' })],
+        'tool_use',
+      ),
+    );
+    client.queue.push(message([text('Cued.')], 'end_turn'));
+    await noted.runTurn('<director_tick n="1"/>', { director: true });
+    expect(noted.directorNoteText).toBe('ARC Dinner: Bella cooks for Don.\nBeat 1 landed.');
+    const noteRow = noted.rows.find((row) => row.kind === 'tool');
+    expect(noteRow?.summary).toBe('director note updated (47 chars)');
+
+    // The next detached turn opens with <live>, the note, the tick text
+    client.requests = [];
+    client.queue.push(message([text('Watching.')], 'end_turn'));
+    await noted.runTurn('<director_tick n="2"/>', { director: true });
+    const blocks = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0].text.startsWith('<live>')).toBe(true);
+    expect(blocks[0].text).not.toContain("director's note");
+    expect(blocks[1].text).toBe('<director_note>\nARC Dinner: Bella cooks for Don.\nBeat 1 landed.\n</director_note>');
+    expect(blocks[2].text).toBe('<director_tick n="2"/>');
+
+    // A chat turn sees it inside <live> while the director runs, and not once the show is off
+    client.requests = [];
+    client.queue.push(message([text('Yes, Bella is cooking.')], 'end_turn'));
+    await noted.runTurn('what is going on?');
+    const chat = client.requests[0].messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(chat[0].text).toContain(
+      "director's note (the show running in the other tab):\n  ARC Dinner: Bella cooks for Don.\n  Beat 1 landed.",
+    );
+    expect(chat.some((block) => block.text.startsWith('<director_note>'))).toBe(false);
+    ctx.ext.director = { start() {}, stop() {}, status: () => ({ active: false }), wake: () => false };
+    expect(noted.liveContextBlock()).not.toContain("director's note");
+
+    // An empty note clears it
+    client.queue.push(message([toolUse('tu_2', 'director_note', { note: '' })], 'tool_use'));
+    client.queue.push(message([text('Done.')], 'end_turn'));
+    await noted.runTurn('<director_tick n="3"/>', { director: true });
+    expect(noted.directorNoteText).toBeUndefined();
+    expect(noted.rows[noted.rows.length - 2].summary).toBe('director note cleared');
   });
 
   it('costThisHour prices every call of the last hour by its model', async () => {

@@ -4,6 +4,8 @@
 // implementation would forward the same request to the Go server. Today the only one is the
 // bring-your-own-key Anthropic client.
 import Anthropic from '@anthropic-ai/sdk';
+import log from 'electron-log';
+import { limitStrict } from './PlumTools';
 
 export type PlumEffort = 'low' | 'medium' | 'high';
 
@@ -18,6 +20,22 @@ export type PlumModelRequest = {
 
 export interface PlumModelClient {
   create(request: PlumModelRequest): Promise<Anthropic.Beta.Messages.BetaMessage>;
+}
+
+// How many tools may stay strict. Anthropic measures the grammar strict tools compile to past
+// what PlumTools can count; when it refuses, the request goes again with half as many strict
+// tools (the best-ranked kept), and the smaller number holds until the app restarts.
+let strictBudget = Number.POSITIVE_INFINITY;
+
+export function resetStrictBudget() {
+  strictBudget = Number.POSITIVE_INFINITY;
+}
+
+export function isStrictGrammarRefusal(error: unknown): boolean {
+  return (
+    error instanceof Anthropic.BadRequestError &&
+    /compiled grammar is too large|too many strict tools|parameters with union types/i.test(error.message)
+  );
 }
 
 export class AnthropicPlumClient implements PlumModelClient {
@@ -41,11 +59,27 @@ export class AnthropicPlumClient implements PlumModelClient {
     // request reads the whole prior thread and writes only the new tail. Without it the
     // growing messages array was re-bought at full price on every request (2026-10-15:
     // 8.5M uncached input tokens in one evening, cache_read flat at the prefix).
+    for (;;) {
+      const tools = limitStrict(request.tools, strictBudget);
+      const strictCount = tools.filter((tool) => tool.strict).length;
+      try {
+        return await this.send(request, tools);
+      } catch (error) {
+        if (!isStrictGrammarRefusal(error) || strictCount === 0) {
+          throw error;
+        }
+        strictBudget = Math.floor(strictCount / 2);
+        log.warn(`[Plum] Anthropic refused ${strictCount} strict tools; sending again with ${strictBudget}`);
+      }
+    }
+  }
+
+  private async send(request: PlumModelRequest, tools: Anthropic.Beta.Messages.BetaTool[]) {
     const stream = this.client.beta.messages.stream({
       model: request.model,
       max_tokens: request.maxTokens,
       system: request.system,
-      tools: request.tools,
+      tools,
       messages: request.messages,
       cache_control: { type: 'ephemeral' },
       output_config: { effort: request.effort },

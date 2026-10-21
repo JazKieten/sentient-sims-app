@@ -56,6 +56,8 @@ export const MAX_STRICT_UNIONS = 16;
 // tools carrying arrays of objects: "The compiled grammar is too large ... Simplify your tool
 // schemas or reduce the number of strict tools"). A tool whose schema nests objects inside an
 // array (plan_arc, plan_script, script) is never strict; the app validates its arguments.
+// The cap is Anthropic's own measure, so a catalogue can still pass both counts and be refused
+// (2026-10-21, once the poll tools joined): PlumModelClient then halves the strict tools.
 const RISK_RANK: Record<PlumRisk, number> = { destructive: 0, write: 1, read: 2 };
 
 // How many parameters of a schema are union-typed (`type: [..]` or anyOf / oneOf), nested
@@ -119,17 +121,44 @@ export function strictNames(catalogue: CatalogueEntry[]): Set<string> {
   return names;
 }
 
+// Each strict tool's place in strictNames' ranking, so a smaller strict budget keeps the best
+const strictRanks = new WeakMap<Anthropic.Beta.Messages.BetaTool, number>();
+
 export function toApiTools(catalogue: CatalogueEntry[]): Anthropic.Beta.Messages.BetaTool[] {
-  const strict = strictNames(catalogue);
-  return catalogue.map(({ definition }) => ({
-    name: definition.name,
-    description: definition.description,
-    input_schema: {
-      ...(definition.input_schema as Anthropic.Beta.Messages.BetaTool.InputSchema),
-      type: 'object' as const,
-    },
-    ...(strict.has(definition.name) ? { strict: true } : {}),
-  }));
+  const ranked = [...strictNames(catalogue)];
+  return catalogue.map(({ definition }) => {
+    const rank = ranked.indexOf(definition.name);
+    const tool: Anthropic.Beta.Messages.BetaTool = {
+      name: definition.name,
+      description: definition.description,
+      input_schema: {
+        ...(definition.input_schema as Anthropic.Beta.Messages.BetaTool.InputSchema),
+        type: 'object' as const,
+      },
+      ...(rank >= 0 ? { strict: true } : {}),
+    };
+    if (rank >= 0) {
+      strictRanks.set(tool, rank);
+    }
+    return tool;
+  });
+}
+
+// The same tools with the schema guarantee left on the `budget` best-ranked strict ones only.
+// Order and every other field stay put.
+export function limitStrict(
+  tools: Anthropic.Beta.Messages.BetaTool[],
+  budget: number,
+): Anthropic.Beta.Messages.BetaTool[] {
+  return tools.map((tool) => {
+    const rank = strictRanks.get(tool);
+    if (!tool.strict || (rank !== undefined && rank < budget)) {
+      return tool;
+    }
+    const loose = { ...tool };
+    delete loose.strict;
+    return loose;
+  });
 }
 
 // A stable fingerprint of the catalogue: a reconnect with a different one starts a new thread

@@ -1687,22 +1687,6 @@ ${factsBlock}
         return { status: InteractionEventStatus.NOOP };
       }
     }
-    // One conversation per cast at a time: the game fires socials between the same sims
-    // seconds apart and each becomes a scene; a second one would air interleaved with
-    // the first (live 2026-10-20). Judged before generation and again at play, since a
-    // scene generated while the other began would still collide.
-    const alreadyAiring = (): string | undefined => {
-      if (round > 1 || options.continueScene || options.playerLine) {
-        return undefined;
-      }
-      const live = this.ctx.scenePlayback.liveSceneFor(event.sentient_sims.map((sim) => sim.sim_id));
-      return live && live !== sceneId ? live : undefined;
-    };
-    const airing = alreadyAiring();
-    if (airing) {
-      log.info(`[Pipeline] skipping scene ${sceneNames}: a conversation between them is already airing (${airing})`);
-      return { status: InteractionEventStatus.NOOP };
-    }
     const interactionActionType = actionTypeForEvent(event.event_type);
     const directorConfig = this.ctx.providerConfigs.getConfigForDirectedStage(
       AIActionType.DIRECTED_SCENE_DIRECTOR,
@@ -2339,13 +2323,6 @@ ${factsBlock}
           log.info(`[Pipeline] skipping scene ${sceneNames} (round ${round}): ${stale}; not airing it`);
           return false;
         }
-      }
-      const airingNow = alreadyAiring();
-      if (airingNow) {
-        log.info(
-          `[Pipeline] skipping scene ${sceneNames}: a conversation between them is already airing (${airingNow}); not airing it`,
-        );
-        return false;
       }
       // Inner monologue becomes each sim's own PRIVATE memory the moment the scene
       // actually airs — a canceled prefetch leaves no trace. The shared transcript row

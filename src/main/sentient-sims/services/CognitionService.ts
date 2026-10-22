@@ -2024,7 +2024,7 @@ export class CognitionService {
     } = params;
     const pie = rows !== undefined;
     if (pie && !this.pieOverrideWarned) {
-      const override = this.ctx.settings.stagePromptOverrides?.[StageId.BASAL_GANGLIA_OPTIONS];
+      const override = this.ctx.settings.stagePromptOverrides[StageId.BASAL_GANGLIA_OPTIONS];
       if (typeof override === 'string' && override.trim().length > 0) {
         this.pieOverrideWarned = true;
         log.warn(
@@ -2198,7 +2198,7 @@ export class CognitionService {
       objects: (entry.objects ?? []).map((object) => ({
         ...object,
         // A broken provider keeps its place in the room with no verb (part 3)
-        action_keys: brokenObjectIds?.has(String(object.object_id))
+        action_keys: brokenObjectIds?.has(object.object_id)
           ? []
           : (object.action_keys ?? []).filter((key) => !suppressed.has(key)),
       })),

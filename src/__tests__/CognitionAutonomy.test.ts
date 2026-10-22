@@ -84,6 +84,7 @@ function buildCtx(options: CtxOptions = {}) {
       conversationActionsFromViewers: false,
       conversationActionsEnabled: true,
       conversationActionScoreThreshold: 8,
+      stagePromptOverrides: {},
     },
     simStateCache: cache,
     db: { isLoaded: () => true },

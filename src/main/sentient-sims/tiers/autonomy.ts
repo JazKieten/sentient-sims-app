@@ -20,11 +20,14 @@ import { VoiceCommandService } from '../services/VoiceCommandService';
 import { CognitionController } from '../controllers/CognitionController';
 import { createSleepPlanner } from '../services/SleepPlanner';
 import { DirectorService } from '../services/DirectorService';
+import { ModQueryService } from '../services/ModQueryService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
   actionOutcomeRepository: ActionOutcomeRepository;
   actionDispatcher: ActionDispatcherService;
+  // Cognition's questions to the mod before a model call (the moment gate, the vocabulary)
+  modQuery: ModQueryService;
   outcomeVerdict: OutcomeVerdictService;
   dailyPlan: DailyPlanService;
   cognitionService: CognitionService;
@@ -51,6 +54,7 @@ function construct(ctx: ApiContext) {
   autonomy.dailyPlanRepository = new DailyPlanRepository(ctx.db);
   autonomy.actionOutcomeRepository = new ActionOutcomeRepository(ctx.db);
   autonomy.actionDispatcher = new ActionDispatcherService();
+  autonomy.modQuery = new ModQueryService();
   autonomy.outcomeVerdict = new OutcomeVerdictService(autonomy.actionOutcomeRepository);
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
   // Subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
@@ -78,6 +82,7 @@ function construct(ctx: ApiContext) {
   ctx.ext.sleepPlanner = createSleepPlanner(ctx, autonomy);
   ctx.ext.conversationActions = {
     actOnConversation: async (simId, request) => {
+      // speakerKind rides the request as is (ConversationDesire carries the same field)
       const result = await autonomy.cognitionService.actOnConversation(simId, request);
       return {
         acted: result.acted,
@@ -137,6 +142,14 @@ export const autonomyTier: TierRegistration = {
   name: 'autonomy',
   construct,
   routes,
+  // {cognition: {...}} is the query channel's; everything else is not ours
+  onModMessage: (ctx, message) =>
+    message.cognition ? autonomyOf(ctx).modQuery.onModMessage(message.cognition) : false,
+  onModDisconnected: (ctx) => {
+    const autonomy = autonomyOf(ctx);
+    autonomy.modQuery.onModDisconnected();
+    autonomy.cognitionService.onModDisconnected();
+  },
   onDatabaseLoaded: (ctx) => {
     // The bounding pass for the graded outcomes this save holds (F5)
     autonomyOf(ctx).outcomeVerdict.pruneOnLoad();

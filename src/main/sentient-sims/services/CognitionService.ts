@@ -6,8 +6,12 @@ import { ApiContext } from './ApiContext';
 import type { AutonomyServices } from '../tiers/autonomy';
 import { SimStateEntry, SimStateReport, VenueEntry } from '../models/SimStateReport';
 import { CognitionIntent, offeredActions, SOCIAL_ACTIONS, validateIntent } from '../models/CognitionIntent';
-import { isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
-import { InteractionOutcomeEvent } from '../models/ActionIntent';
+import { DISCRETIONARY_ACTIONS, isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
+import { InteractionOutcomeEvent, VocabularyResult, VocabularyRow } from '../models/ActionIntent';
+import { CognitionHoldReleased } from '../models/ModLogWebsocketMessage';
+import { ACTION_OPTIONS_PIE_SYSTEM_PROMPT } from '../pipeline/prompts/action';
+import { offerableRows, whitelistRows } from '../util/formatVocabulary';
+import { describeSim } from './plum/plumLiveSims';
 import { GradedOutcomeEvent } from './OutcomeVerdictService';
 import { AIActionType } from '../models/AIActionType';
 import { LLMExchange } from '../models/InteractionEventResult';
@@ -18,6 +22,7 @@ import {
   TICK_MONOLOGUE_SYSTEM_PROMPT,
   TICK_SCORES_SYSTEM_PROMPT,
   buildCognitionUserPrompt,
+  CognitionPromptExtras,
   parseActionChoice,
   parseActionOptions,
   parseTickScores,
@@ -67,8 +72,13 @@ type SimRuntime = {
   // it while the sim is still busy executing it (see the redispatch guard in deliberate)
   lastDispatch?: { action: string; at: number };
   // A directed scene's Reflection scored this sim over threshold: the next eligible tick
-  // skips monologue/scores and stages the Action Scene directly
-  armedDesire?: { score: number; reason?: string; thought?: string; at: number };
+  // skips monologue/scores and stages the Action Scene directly. targetSimId: the scene's
+  // other participant when there were exactly two, so the vocabulary builds their menu
+  armedDesire?: { score: number; reason?: string; thought?: string; at: number; targetSimId?: string };
+  // The gate (autonomy part 1): a lane is asking the mod whether the moment is right. The
+  // rule lanes became async with it, and this is their only re-entry guard: isEligible and
+  // every lane return early while it is set.
+  gating?: boolean;
   // G-10: the dispatched intent with its remaining automatic retries (transient causes only)
   pendingIntent?: { intent: CognitionIntent; entry: SimStateEntry; retriesLeft: number };
   // A reply to the player wants to act, but the reply is still airing: held until the
@@ -217,6 +227,72 @@ const CRITICAL_NEED_FIXES: Record<string, string[]> = {
 
 const RELEVANT_MEMORY_COUNT = 4;
 
+// The gate (autonomy part 1, 2026-10-21): how long a lane waits for the mod's moment answer,
+// how long the vocabulary may take (one pie menu per target, 55-700 ms a Sim), how long a
+// player-click hold stands without the mod's hold_released (the mod's own cap is 180 s), and
+// how often a failing wire is worth a warning per Sim.
+const MOMENT_QUERY_TIMEOUT_MS = 3_000;
+const VOCABULARY_QUERY_TIMEOUT_MS = 5_000;
+const HOLD_SAFETY_MS = 180_000;
+const GATE_WARN_INTERVAL_MS = 60_000;
+
+type GateLane = 'tick' | 'armed' | 'conversation' | 'critical_need' | 'go_home' | 'rejoin';
+const RULE_LANES = new Set<GateLane>(['critical_need', 'go_home', 'rejoin']);
+
+// What the mod's `moment` query answers (interactions/ss_cognition_query.py)
+type MomentAnswer = {
+  ok?: boolean;
+  key?: string | null;
+  why?: string | null;
+  head?: string | null;
+  interrupts?: string | null;
+  hold?: { interaction_id: string; name?: string } | null;
+  at_work?: boolean;
+  travel_prompt?: boolean;
+  special?: string | null;
+  in_ww_scene?: boolean;
+  departing?: boolean;
+};
+
+type GateVerdict =
+  | { open: true }
+  | { open: false; key: string; why?: string; hold?: string; special?: string; travel_prompt?: boolean };
+
+function pretty(text: string): string {
+  return text.replace(/_/g, ' ');
+}
+
+// Objects the lot reports as broken (any condition but dirty): their verbs leave the
+// vocabulary, so the model never spends a scene on a provider the game will refuse
+function brokenProviderIds(report: SimStateReport | undefined): Set<string> {
+  return new Set(
+    (report?.lot?.conditions ?? [])
+      .filter((condition) => condition.conditions.some((tag) => tag !== 'dirty'))
+      .map((condition) => condition.object_id),
+  );
+}
+
+// The verbs a live want needs: the goal pool's want entries carry their action keys, and a
+// want name that IS a discretionary key counts too. Never hidden by the day's loadout (part 4).
+function wantKeys(entry: SimStateEntry): Set<string> {
+  const keys = new Set<string>();
+  (entry.self?.goal_pool ?? [])
+    .filter((goal) => goal.source === 'want')
+    .forEach((goal) => {
+      (goal.action_keys ?? []).forEach((key) => keys.add(key));
+    });
+  (entry.self?.wants ?? []).forEach((want) => {
+    const key = want
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_');
+    if (DISCRETIONARY_ACTIONS.has(key)) {
+      keys.add(key);
+    }
+  });
+  return keys;
+}
+
 // How long a scene-armed action desire stays live waiting for its sim to become
 // eligible (the conversation to end, the cooldown to pass). Past this, the moment
 // has passed — a desire from an hour-old scene should not fire out of nowhere.
@@ -237,6 +313,10 @@ export type ConversationDesire = {
   sceneId?: string;
   // Stage and choose, but never dispatch (the bench replaying a conversation)
   suggestOnly?: boolean;
+  // Who spoke (tiers/types ConversationActionRequest): a viewer is outside the world
+  speakerKind?: 'sim' | 'player' | 'viewer';
+  // The Sim the line was about, when the scene had exactly one other Sim
+  targetSimId?: string;
 };
 
 export type ConversationActionResult = { acted: boolean; intent?: CognitionIntent; deferred?: boolean };
@@ -360,14 +440,252 @@ export class CognitionService {
   };
 
   // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
-  private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'>;
+  private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
+    Partial<Pick<AutonomyServices, 'modQuery'>>;
 
-  constructor(ctx: ApiContext, autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'>) {
+  // The gate's holds: sim id -> the player click the mod said holds that Sim, until the mod's
+  // hold_released names it (or HOLD_SAFETY_MS passes)
+  private readonly holds = new Map<string, { interaction_id: string; name: string; at: number }>();
+
+  // An older mod answered 'unknown kind': neither the moment nor the vocabulary query exists
+  // there, so every lane fails open at no cost until the mod reconnects
+  private queriesUnsupported = false;
+
+  private readonly gateWarnedAt = new Map<string, number>();
+
+  private pieOverrideWarned = false;
+
+  constructor(
+    ctx: ApiContext,
+    autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> & Partial<Pick<AutonomyServices, 'modQuery'>>,
+  ) {
     this.ctx = ctx;
     this.autonomy = autonomy;
     ctx.simStateCache.onReport((report) => {
       this.onStateReport(report);
     });
+    autonomy.modQuery?.onHoldReleased((event) => {
+      this.releaseHold(event);
+    });
+  }
+
+  // --- the gate (autonomy part 1) ---------------------------------------------------------
+
+  // Every lane asks this before a model call or a rule dispatch. In order: the setting; a
+  // live hold (a player click the mod told us about, for EVERY lane, no query); the mod's
+  // `moment` answer, failing OPEN on a wire failure (warned once a minute per Sim) and
+  // latching fail-open on 'unknown kind' (an older mod); a new hold; a special state or a
+  // travel prompt (every lane); then the rule lanes are through (the -85 rule is the 100%
+  // path, decision 7) and the model lanes close on !ok or at work.
+  private async gateFor(simId: string, lane: GateLane, targetSimId?: string): Promise<GateVerdict> {
+    if (!this.ctx.settings.cognitionGateEnabled) {
+      return { open: true };
+    }
+    const held = this.holds.get(simId);
+    if (held) {
+      if (Date.now() - held.at < HOLD_SAFETY_MS) {
+        return { open: false, key: 'player_click', why: `the player clicked ${held.name}`, hold: held.name };
+      }
+      this.holds.delete(simId);
+    }
+    const modQuery = this.autonomy.modQuery;
+    if (!modQuery || this.queriesUnsupported) {
+      return { open: true };
+    }
+    const args: Record<string, unknown> = { sim_id: simId, lane };
+    if (targetSimId) {
+      args.target_sim_id = targetSimId;
+    }
+    const answer = await modQuery.query<MomentAnswer>('moment', args, MOMENT_QUERY_TIMEOUT_MS);
+    if (!answer.ok) {
+      if (/unknown kind/i.test(answer.error)) {
+        log.info('[Cognition] the mod has no cognition query channel; the gate and the pie vocabulary stand down');
+        this.queriesUnsupported = true;
+      } else {
+        const warnedAt = this.gateWarnedAt.get(simId) ?? 0;
+        if (Date.now() - warnedAt > GATE_WARN_INTERVAL_MS) {
+          this.gateWarnedAt.set(simId, Date.now());
+          log.warn(`[Cognition] moment query for sim ${simId} failed (${answer.error}); gate open`);
+        }
+      }
+      return { open: true };
+    }
+    const moment = answer.result;
+    if (moment.hold?.interaction_id) {
+      const name = moment.hold.name ?? 'an interaction';
+      this.holds.set(simId, { interaction_id: moment.hold.interaction_id, name, at: Date.now() });
+      return { open: false, key: 'player_click', why: moment.why ?? `the player clicked ${name}`, hold: name };
+    }
+    if (moment.special) {
+      return { open: false, key: moment.special, why: moment.why ?? undefined, special: moment.special };
+    }
+    if (moment.travel_prompt) {
+      return { open: false, key: 'travel_prompt', why: moment.why ?? undefined, travel_prompt: true };
+    }
+    if (RULE_LANES.has(lane)) {
+      return { open: true };
+    }
+    if (moment.ok === false || moment.at_work) {
+      return { open: false, key: moment.key ?? (moment.at_work ? 'at_work' : 'moment'), why: moment.why ?? undefined };
+    }
+    return { open: true };
+  }
+
+  // Read after an await, where TypeScript still believes the phase it narrowed before it
+  private inFlight(simId: string): boolean {
+    const { phase } = this.runtime(simId);
+    return phase === 'DELIBERATING' || phase === 'PENDING_OUTCOME';
+  }
+
+  private refuseAtGate(simId: string, lane: GateLane, gate: Exclude<GateVerdict, { open: true }>) {
+    pushdiag(undefined, 'gate', {
+      sim_id: simId,
+      lane,
+      key: gate.key,
+      why: gate.why,
+      hold: gate.hold,
+      special: gate.special,
+      travel_prompt: gate.travel_prompt,
+    });
+    log.info(
+      `[Cognition] sim ${simId} ${lane} lane closed at the gate: ${gate.key}${gate.why ? ` (${gate.why})` : ''}`,
+    );
+    this.toCooldown(simId);
+  }
+
+  // The mod says the click that held a Sim has ended: the hold goes and the Sim may think
+  // again now rather than after the cooldown. A hold a newer click replaced stays.
+  releaseHold(event: CognitionHoldReleased) {
+    const interactionId = event.interaction_id;
+    if (!interactionId) {
+      return;
+    }
+    this.holds.forEach((hold, simId) => {
+      if (hold.interaction_id !== interactionId) {
+        return;
+      }
+      this.holds.delete(simId);
+      const runtime = this.runtimes.get(simId);
+      if (runtime && runtime.phase === 'COOLDOWN') {
+        runtime.phase = 'IDLE';
+      }
+      log.info(`[Cognition] sim ${simId} released from the player's ${hold.name} (${event.finishing ?? 'ended'})`);
+    });
+  }
+
+  // The mod's websocket closed: every hold is stale and the mod that reconnects may know
+  // the queries this one did not
+  onModDisconnected() {
+    this.holds.clear();
+    this.queriesUnsupported = false;
+  }
+
+  // --- the vocabulary (autonomy part 2) ----------------------------------------------------
+
+  private pieVocabularyAvailable(): boolean {
+    return (
+      this.ctx.settings.cognitionVocabulary === 'pie' &&
+      !this.queriesUnsupported &&
+      this.autonomy.modQuery !== undefined
+    );
+  }
+
+  // The mod's pie-menu rows for this Sim (and the desire's target), or undefined when the
+  // setting is 'whitelist' or the query fails: the options prompt then falls back to the
+  // whitelist exactly as before
+  private async vocabularyFor(simId: string, targetSimId?: string): Promise<VocabularyResult | undefined> {
+    if (!this.pieVocabularyAvailable()) {
+      return undefined;
+    }
+    const args: Record<string, unknown> = { sim_id: simId };
+    if (targetSimId) {
+      args.target_sim_id = targetSimId;
+    }
+    const { modQuery } = this.autonomy;
+    if (!modQuery) {
+      return undefined;
+    }
+    const answer = await modQuery.query<VocabularyResult>('vocabulary', args, VOCABULARY_QUERY_TIMEOUT_MS);
+    if (!answer.ok) {
+      if (/unknown kind/i.test(answer.error)) {
+        this.queriesUnsupported = true;
+      }
+      log.warn(`[Cognition] vocabulary query for sim ${simId} failed (${answer.error}); whitelist prompt instead`);
+      return undefined;
+    }
+    if (!Array.isArray(answer.result.rows)) {
+      log.warn(`[Cognition] vocabulary for sim ${simId} had no rows field; whitelist prompt instead`);
+      return undefined;
+    }
+    return answer.result;
+  }
+
+  // --- what the prompt sees (autonomy part 3) ----------------------------------------------
+
+  private promptExtras(
+    simId: string,
+    report: SimStateReport | undefined,
+    vocabulary: CognitionPromptExtras['vocabulary'],
+  ): CognitionPromptExtras {
+    return {
+      vocabulary,
+      householdLines: this.householdLines(simId, report),
+      directorLines: this.directorLines(simId),
+    };
+  }
+
+  // The other household Sims right now (Plum's <live> line for each) and what each is already
+  // on: on 10-21 Jonah and Alex were sent to the same bills 11 s apart
+  private householdLines(simId: string, report: SimStateReport | undefined): string[] {
+    const others = (report?.sims ?? []).filter(
+      (sim) =>
+        sim.sim_id &&
+        sim.sim_id !== simId &&
+        sim.is_household !== false &&
+        speciesWord(sim.self?.species) === undefined,
+    );
+    if (others.length === 0) {
+      return [];
+    }
+    const lines = others.map((sim) => {
+      let line = describeSim(sim, false);
+      const inFlight = this.autonomy.actionDispatcher.getInFlight(sim.sim_id)?.intent;
+      const on = inFlight?.pie?.label ?? inFlight?.action ?? this.runtimes.get(sim.sim_id)?.pendingAction;
+      if (on) {
+        const first = (sim.sim_name ?? '').trim().split(/\s+/)[0] || `sim ${sim.sim_id}`;
+        line += ` ${first} is already on: ${pretty(on)}.`;
+      }
+      return line;
+    });
+    return [`Your household right now: ${lines.join(' | ')}`];
+  }
+
+  // Plum's active beat, read off the wake service's public state: cognition must not kill a
+  // whispered stargaze with clean_up (10-19). Two lines at most; nothing when there is nothing.
+  private directorLines(simId: string): string[] {
+    const lines: string[] = [];
+    try {
+      // The stubs of older tests carry no plum: the catch below answers with no lines
+      for (const trigger of this.ctx.plum.wake.list({ live: true })) {
+        if (!trigger.doing) {
+          continue;
+        }
+        if (trigger.simId === simId) {
+          lines.unshift(
+            `A director has you on "${trigger.doing}"${trigger.note ? ` (${trigger.note})` : ''}; do not override it.`,
+          );
+        } else if (trigger.simName) {
+          lines.push(`A director has ${trigger.simName} doing ${trigger.doing}.`);
+        }
+      }
+      const status = this.ctx.ext.director?.status();
+      if (status?.active && status.arc) {
+        lines.push(`A director is running the scene: ${status.arc}.`);
+      }
+    } catch (error) {
+      log.debug(`[Cognition] director lines unavailable: ${String(error)}`);
+    }
+    return lines.slice(0, 2);
   }
 
   getStats(): CognitionStats {
@@ -425,14 +743,18 @@ export class CognitionService {
     // Rule-based, no LLM: a critical physical need (accident/starvation imminent) gets
     // its fixing action dispatched directly — the model was watched fumbling this
     entries.forEach((entry) => {
-      this.maybeFixCriticalNeed(entry, now);
+      void this.maybeFixCriticalNeed(entry, now).catch((error: unknown) => {
+        log.warn(`[Cognition] critical-need lane failed for sim ${entry.sim_id}`, error);
+      });
     });
 
     // A wrecked sim away from home goes HOME as a rule — checked before the walk-in
     // rule so exhaustion outranks joining the party
     if (report.lot?.is_home === false) {
       entries.forEach((entry) => {
-        this.maybeGoHomeExhausted(entry, now);
+        void this.maybeGoHomeExhausted(entry, now).catch((error: unknown) => {
+          log.warn(`[Cognition] go-home lane failed for sim ${entry.sim_id}`, error);
+        });
       });
     }
 
@@ -441,7 +763,9 @@ export class CognitionService {
     // home — otherwise a sim who was miserable indoors asks to turn around the
     // moment they arrive somewhere.
     entries.forEach((entry) => {
-      this.maybeGoHomeMiserable(entry, now, report.lot?.is_home !== false);
+      void this.maybeGoHomeMiserable(entry, now, report.lot?.is_home !== false).catch((error: unknown) => {
+        log.warn(`[Cognition] miserable lane failed for sim ${entry.sim_id}`, error);
+      });
     });
 
     // Rule-based, no LLM: an idle sim standing OFF the lot can't usefully deliberate —
@@ -450,7 +774,9 @@ export class CognitionService {
     entries
       .filter((entry) => entry.self?.on_active_lot === false)
       .forEach((entry) => {
-        this.maybeRejoinLot(entry, now, report.lot?.is_home === true);
+        void this.maybeRejoinLot(entry, now, report.lot?.is_home === true).catch((error: unknown) => {
+          log.warn(`[Cognition] rejoin lane failed for sim ${entry.sim_id}`, error);
+        });
       });
 
     const candidates = entries
@@ -605,7 +931,7 @@ export class CognitionService {
       return false;
     }
     const runtime = this.runtime(entry.sim_id);
-    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return false;
     }
     if (runtime.phase === 'COOLDOWN') {
@@ -664,7 +990,7 @@ export class CognitionService {
     return isIdle || hasLowMotive || wentIdle || armed;
   }
 
-  private maybeFixCriticalNeed(entry: SimStateEntry, now: number) {
+  private async maybeFixCriticalNeed(entry: SimStateEntry, now: number): Promise<void> {
     const simId = entry.sim_id;
     // NPC entries are desire-only passengers: the game runs their needs and homes
     if (!simId || entry.self?.in_ww_scene || entry.is_household === false) {
@@ -673,7 +999,7 @@ export class CognitionService {
     const runtime = this.runtime(simId);
     // Never-re-push still rules; only true in-flight states block. Cooldown does NOT —
     // this IS the emergency lane.
-    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return;
     }
     // The mod's stuck watchdog proved a pushed rescue starves behind this sim's running
@@ -703,29 +1029,44 @@ export class CognitionService {
       if (!action) {
         continue;
       }
-      if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
-        log.info(`[Cognition][suggest] sim ${simId} ${need} at ${value}; would rule-dispatch ${action}`);
-        this.toCooldown(simId);
-        return;
-      }
+      // The gate: a player's click and the special states hold even the emergency lane;
+      // asleep, mid-social and at work do not (decision 7: the -85 rule is the 100% path)
+      runtime.gating = true;
       try {
-        const requestId = this.autonomy.actionDispatcher.dispatch({
-          sim_id: simId,
-          action,
-          target_object_id: offered.objectActions.get(action),
-          motivation: `${need} is critically low; handling it before anything else.`,
-          source: 'cognition',
-        });
-        runtime.phase = 'PENDING_OUTCOME';
-        runtime.pendingRequestId = requestId;
-        runtime.pendingAction = action;
-        runtime.lastDispatch = { action, at: Date.now() };
-        this.stats.dispatches += 1;
-        this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
-        log.info(`[Cognition] sim ${simId} ${need} at ${value} -> ${action} (rule, ${requestId})`);
-      } catch (error) {
-        log.warn(`[Cognition] critical-need dispatch refused for sim ${simId}`, error);
-        this.toCooldown(simId);
+        const gate = await this.gateFor(simId, 'critical_need');
+        if (this.inFlight(simId)) {
+          return;
+        }
+        if (!gate.open) {
+          this.refuseAtGate(simId, 'critical_need', gate);
+          return;
+        }
+        if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+          log.info(`[Cognition][suggest] sim ${simId} ${need} at ${value}; would rule-dispatch ${action}`);
+          this.toCooldown(simId);
+          return;
+        }
+        try {
+          const requestId = this.autonomy.actionDispatcher.dispatch({
+            sim_id: simId,
+            action,
+            target_object_id: offered.objectActions.get(action),
+            motivation: `${need} is critically low; handling it before anything else.`,
+            source: 'cognition',
+          });
+          runtime.phase = 'PENDING_OUTCOME';
+          runtime.pendingRequestId = requestId;
+          runtime.pendingAction = action;
+          runtime.lastDispatch = { action, at: Date.now() };
+          this.stats.dispatches += 1;
+          this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
+          log.info(`[Cognition] sim ${simId} ${need} at ${value} -> ${action} (rule, ${requestId})`);
+        } catch (error) {
+          log.warn(`[Cognition] critical-need dispatch refused for sim ${simId}`, error);
+          this.toCooldown(simId);
+        }
+      } finally {
+        runtime.gating = false;
       }
       return;
     }
@@ -736,13 +1077,13 @@ export class CognitionService {
   // rule, no LLM; bed and fridge live there (observed live: Energy -79 at the bar while
   // the model kept trying the broken TV). Mid-social sims finish their conversation
   // first; the rule fires on the next report after it ends.
-  private maybeGoHomeExhausted(entry: SimStateEntry, now: number) {
+  private async maybeGoHomeExhausted(entry: SimStateEntry, now: number): Promise<void> {
     const simId = entry.sim_id;
     if (!simId || entry.self?.in_ww_scene || entry.activity?.in_social || entry.is_household === false) {
       return;
     }
     const runtime = this.runtime(simId);
-    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return;
     }
     const needs = entry.self?.needs ?? {};
@@ -759,27 +1100,40 @@ export class CognitionService {
       return;
     }
     const why = exhausted ? `energy ${needs.energy}` : `hunger ${needs.hunger} with no food here`;
-    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
-      log.info(`[Cognition][suggest] sim ${simId} is wrecked away from home (${why}); would go_home`);
-      this.toCooldown(simId);
-      return;
-    }
+    runtime.gating = true;
     try {
-      const requestId = this.autonomy.actionDispatcher.dispatch({
-        sim_id: simId,
-        action: 'go_home',
-        motivation: 'Completely worn out; calling it a night and heading home.',
-        source: 'cognition',
-      });
-      runtime.phase = 'PENDING_OUTCOME';
-      runtime.pendingRequestId = requestId;
-      runtime.pendingAction = 'go_home';
-      this.stats.dispatches += 1;
-      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
-      log.info(`[Cognition] sim ${simId} is wrecked away from home (${why}) -> go_home (rule, ${requestId})`);
-    } catch (error) {
-      log.warn(`[Cognition] go_home dispatch refused for sim ${simId}`, error);
-      this.toCooldown(simId);
+      const gate = await this.gateFor(simId, 'go_home');
+      if (this.inFlight(simId)) {
+        return;
+      }
+      if (!gate.open) {
+        this.refuseAtGate(simId, 'go_home', gate);
+        return;
+      }
+      if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+        log.info(`[Cognition][suggest] sim ${simId} is wrecked away from home (${why}); would go_home`);
+        this.toCooldown(simId);
+        return;
+      }
+      try {
+        const requestId = this.autonomy.actionDispatcher.dispatch({
+          sim_id: simId,
+          action: 'go_home',
+          motivation: 'Completely worn out; calling it a night and heading home.',
+          source: 'cognition',
+        });
+        runtime.phase = 'PENDING_OUTCOME';
+        runtime.pendingRequestId = requestId;
+        runtime.pendingAction = 'go_home';
+        this.stats.dispatches += 1;
+        this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
+        log.info(`[Cognition] sim ${simId} is wrecked away from home (${why}) -> go_home (rule, ${requestId})`);
+      } catch (error) {
+        log.warn(`[Cognition] go_home dispatch refused for sim ${simId}`, error);
+        this.toCooldown(simId);
+      }
+    } finally {
+      runtime.gating = false;
     }
   }
 
@@ -799,7 +1153,7 @@ export class CognitionService {
   // This is a proposal, not a departure. The mod asks the player before anything travels
   // (travel/ss_travel_consent), so firing costs a notification the player can wave away,
   // and the mod keeps its own ten-minute cool-off per sim after they do.
-  private maybeGoHomeMiserable(entry: SimStateEntry, now: number, isHome: boolean) {
+  private async maybeGoHomeMiserable(entry: SimStateEntry, now: number, isHome: boolean): Promise<void> {
     const simId = entry.sim_id;
     if (!simId || entry.is_household === false) {
       return;
@@ -826,7 +1180,7 @@ export class CognitionService {
     if (entry.self?.in_ww_scene || entry.activity?.in_social) {
       return;
     }
-    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return;
     }
     if (this.recentlyFailedActions(runtime).has('go_home')) {
@@ -834,36 +1188,49 @@ export class CognitionService {
     }
     const minutes = Math.round((now - runtime.miserableSince) / 60_000);
     const why = `${mood} for ${minutes} min out`;
-    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
-      log.info(`[Cognition][suggest] sim ${simId} is having a bad time out (${why}); would go_home`);
-      runtime.miserableSince = now;
-      this.toCooldown(simId);
-      return;
-    }
+    runtime.gating = true;
     try {
-      const requestId = this.autonomy.actionDispatcher.dispatch({
-        sim_id: simId,
-        action: 'go_home',
-        motivation: `Been ${mood} this whole time out; this place is not working, time to head home.`,
-        source: 'cognition',
-      });
-      runtime.phase = 'PENDING_OUTCOME';
-      runtime.pendingRequestId = requestId;
-      runtime.pendingAction = 'go_home';
-      // Restart rather than clear: if the player says stay, the sim is still out and
-      // still miserable and may ask again later. The suppression window above is what
-      // keeps that from becoming nagging.
-      runtime.miserableSince = now;
-      this.stats.dispatches += 1;
-      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
-      log.info(`[Cognition] sim ${simId} is having a bad time out (${why}) -> go_home (rule, ${requestId})`);
-    } catch (error) {
-      log.warn(`[Cognition] miserable go_home dispatch refused for sim ${simId}`, error);
-      this.toCooldown(simId);
+      const gate = await this.gateFor(simId, 'go_home');
+      if (this.inFlight(simId)) {
+        return;
+      }
+      if (!gate.open) {
+        this.refuseAtGate(simId, 'go_home', gate);
+        return;
+      }
+      if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+        log.info(`[Cognition][suggest] sim ${simId} is having a bad time out (${why}); would go_home`);
+        runtime.miserableSince = now;
+        this.toCooldown(simId);
+        return;
+      }
+      try {
+        const requestId = this.autonomy.actionDispatcher.dispatch({
+          sim_id: simId,
+          action: 'go_home',
+          motivation: `Been ${mood} this whole time out; this place is not working, time to head home.`,
+          source: 'cognition',
+        });
+        runtime.phase = 'PENDING_OUTCOME';
+        runtime.pendingRequestId = requestId;
+        runtime.pendingAction = 'go_home';
+        // Restart rather than clear: if the player says stay, the sim is still out and
+        // still miserable and may ask again later. The suppression window above is what
+        // keeps that from becoming nagging.
+        runtime.miserableSince = now;
+        this.stats.dispatches += 1;
+        this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action: 'go_home' });
+        log.info(`[Cognition] sim ${simId} is having a bad time out (${why}) -> go_home (rule, ${requestId})`);
+      } catch (error) {
+        log.warn(`[Cognition] miserable go_home dispatch refused for sim ${simId}`, error);
+        this.toCooldown(simId);
+      }
+    } finally {
+      runtime.gating = false;
     }
   }
 
-  private maybeRejoinLot(entry: SimStateEntry, now: number, isHome: boolean) {
+  private async maybeRejoinLot(entry: SimStateEntry, now: number, isHome: boolean): Promise<void> {
     const simId = entry.sim_id;
     const action = isHome ? 'go_home' : 'enter_lot';
     const where = isHome ? 'off the home lot' : 'outside the venue lot';
@@ -871,7 +1238,7 @@ export class CognitionService {
       return;
     }
     const runtime = this.runtime(simId);
-    if (runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return;
     }
     if (runtime.phase === 'COOLDOWN' && now < runtime.cooldownUntil) {
@@ -894,29 +1261,42 @@ export class CognitionService {
     if (this.recentlyFailedActions(runtime).has(action)) {
       return;
     }
-    if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
-      log.info(`[Cognition][suggest] sim ${simId} is idle ${where}; would dispatch ${action}`);
-      this.toCooldown(simId);
-      return;
-    }
+    runtime.gating = true;
     try {
-      const requestId = this.autonomy.actionDispatcher.dispatch({
-        sim_id: simId,
-        action,
-        motivation: isHome
-          ? 'Wandering the street with nothing to do; heading home.'
-          : 'Standing around outside; heading in to where the people are.',
-        source: 'cognition',
-      });
-      runtime.phase = 'PENDING_OUTCOME';
-      runtime.pendingRequestId = requestId;
-      runtime.pendingAction = action;
-      this.stats.dispatches += 1;
-      this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
-      log.info(`[Cognition] sim ${simId} is idle ${where} -> ${action} (${requestId})`);
-    } catch (error) {
-      log.warn(`[Cognition] ${action} dispatch refused for sim ${simId}`, error);
-      this.toCooldown(simId);
+      const gate = await this.gateFor(simId, 'rejoin');
+      if (this.inFlight(simId)) {
+        return;
+      }
+      if (!gate.open) {
+        this.refuseAtGate(simId, 'rejoin', gate);
+        return;
+      }
+      if (this.ctx.settings.cognitionAutonomyLevel === 'suggest') {
+        log.info(`[Cognition][suggest] sim ${simId} is idle ${where}; would dispatch ${action}`);
+        this.toCooldown(simId);
+        return;
+      }
+      try {
+        const requestId = this.autonomy.actionDispatcher.dispatch({
+          sim_id: simId,
+          action,
+          motivation: isHome
+            ? 'Wandering the street with nothing to do; heading home.'
+            : 'Standing around outside; heading in to where the people are.',
+          source: 'cognition',
+        });
+        runtime.phase = 'PENDING_OUTCOME';
+        runtime.pendingRequestId = requestId;
+        runtime.pendingAction = action;
+        this.stats.dispatches += 1;
+        this.armPendingTimeout(simId, runtime, entry, { kind: 'action', action });
+        log.info(`[Cognition] sim ${simId} is idle ${where} -> ${action} (${requestId})`);
+      } catch (error) {
+        log.warn(`[Cognition] ${action} dispatch refused for sim ${simId}`, error);
+        this.toCooldown(simId);
+      }
+    } finally {
+      runtime.gating = false;
     }
   }
 
@@ -948,6 +1328,16 @@ export class CognitionService {
     runtime.deliberatedAt.push(Date.now());
     this.stats.deliberations += 1;
 
+    // The gate, before any model call (autonomy part 1): the armed desire survives a
+    // refusal (its TTL decides), so the next eligible tick asks again
+    const lane: GateLane = runtime.armedDesire ? 'armed' : 'tick';
+    const armedTargetSimId = runtime.armedDesire?.targetSimId;
+    const gate = await this.gateFor(simId, lane, armedTargetSimId);
+    if (!gate.open) {
+      this.refuseAtGate(simId, lane, gate);
+      return;
+    }
+
     // Recently-failed actions are cut from every offering channel before the model ever
     // sees them — retry loops die in code, not in the prompt
     const suppressed = this.recentlyFailedActions(runtime);
@@ -977,6 +1367,8 @@ export class CognitionService {
     // NEVER added to the "NOT possible" line below: the hard filter means ABSENT from
     // the prompt, not named as forbidden
     const offLoadout = offLoadoutActions(plan?.loadout);
+    // Part 4: the loadout never hides a verb a live want needs
+    wantKeys(entry).forEach((key) => offLoadout.delete(key));
     // Verbs this sim's age cannot run are cut the same way: a child offered read_book
     // spends an Action Scene on a guaranteed refusal (live 2026-08-10, Mackenzie Scott)
     const ageBlocked = entry.self?.age_blocked ?? [];
@@ -991,7 +1383,9 @@ export class CognitionService {
     // socials — the exact verb the game refuses her (caught live 2026-08-10).
     const hiddenActions = new Set([...offLoadout, ...ageBlocked]);
 
-    const entryView = this.withoutSuppressedActions(entry, narrowed);
+    // A broken provider's verbs leave the vocabulary (part 3): the game refuses them anyway
+    const brokenObjectIds = brokenProviderIds(report);
+    const entryView = this.withoutSuppressedActions(entry, narrowed, brokenObjectIds);
     const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
 
     // J8: an infant's age gate leaves nothing to pick — no object verb, no lot verb, every
@@ -1040,6 +1434,10 @@ export class CognitionService {
     // survived narrowing (the prompt builder renders nothing otherwise)
     const venues = lotActionKeys.includes('go_out') ? report.venues : undefined;
 
+    // Pie mode (autonomy part 2): the monologue and scores prompts carry the people and the
+    // destinations but no whitelist lists; the options prompt below carries the mod's rows
+    const pieMode = this.pieVocabularyAvailable();
+    const extras = this.promptExtras(simId, report, { mode: pieMode ? 'pie' : 'whitelist' });
     const situationPrompt = buildCognitionUserPrompt(
       entryView,
       reportView,
@@ -1049,6 +1447,7 @@ export class CognitionService {
       hiddenActions,
       factsBlock,
       venues,
+      extras,
     );
 
     const simLabel = entry.sim_name ?? simId;
@@ -1131,19 +1530,100 @@ export class CognitionService {
       return;
     }
 
+    // The vocabulary (autonomy part 2): the mod's pie-menu rows for the options prompt,
+    // or the whitelist prompt when the setting says so or the query fails
+    let rows: VocabularyRow[] | undefined;
+    let optionsPrompt = situationPrompt;
+    if (pieMode) {
+      const vocabulary = await this.vocabularyFor(simId, armedTargetSimId);
+      const built = this.pieOptionsPrompt(vocabulary, narrowed, {
+        entryView,
+        reportView,
+        memoriesBlock,
+        suppressed,
+        planBlock,
+        hiddenActions,
+        factsBlock,
+        venues,
+        lotActionKeys,
+        extras,
+      });
+      rows = built.rows;
+      optionsPrompt = built.prompt;
+    }
+
     // ACTION SCENE: the slow brain steps in — director options, the sim's choice, review
     const intent = await this.runActionScene({
       entryView,
       lotActionKeys,
-      situationPrompt,
+      situationPrompt: optionsPrompt,
       simLabel,
       thought,
       actionReason,
       exchanges: tickExchanges,
       hiddenActions,
       venues,
+      rows,
     });
     this.dispatchChosenIntent({ simId, entry, runtime, intent, source: 'cognition' });
+  }
+
+  // The options prompt over the mod's rows, and the rows validateIntent binds to. A failed
+  // or empty vocabulary means the whitelist prompt, as before.
+  private pieOptionsPrompt(
+    vocabulary: VocabularyResult | undefined,
+    narrowed: Set<string>,
+    parts: {
+      entryView: SimStateEntry;
+      reportView: SimStateReport;
+      memoriesBlock?: string;
+      suppressed: Set<string>;
+      planBlock?: Parameters<typeof buildCognitionUserPrompt>[4];
+      hiddenActions: Set<string>;
+      factsBlock?: string;
+      venues?: VenueEntry[];
+      lotActionKeys: string[];
+      extras: CognitionPromptExtras;
+    },
+  ): { prompt: string; rows?: VocabularyRow[] } {
+    const { entryView, reportView, memoriesBlock, suppressed, planBlock, hiddenActions, factsBlock, venues, extras } =
+      parts;
+    if (!vocabulary) {
+      return {
+        prompt: buildCognitionUserPrompt(
+          entryView,
+          reportView,
+          memoriesBlock,
+          [...suppressed],
+          planBlock,
+          hiddenActions,
+          factsBlock,
+          venues,
+          { ...extras, vocabulary: { mode: 'whitelist' } },
+        ),
+      };
+    }
+    const offerable = offerableRows(vocabulary.rows, narrowed);
+    const whitelist = whitelistRows(offeredActions(entryView, parts.lotActionKeys), hiddenActions);
+    const prompt = buildCognitionUserPrompt(
+      entryView,
+      reportView,
+      memoriesBlock,
+      [...suppressed],
+      planBlock,
+      hiddenActions,
+      factsBlock,
+      venues,
+      {
+        ...extras,
+        vocabulary: {
+          mode: 'pie',
+          rows: { offered: offerable.offered, greyed: offerable.greyed, whitelist },
+          cannotStartNow: vocabulary.cannot_start_now,
+        },
+      },
+    );
+    return { prompt, rows: [...offerable.offered, ...offerable.greyed, ...whitelist] };
   }
 
   // A reply to the player left this sim wanting to act — the scene's action score crossed
@@ -1163,6 +1643,14 @@ export class CognitionService {
     if (desire.score < this.ctx.settings.conversationActionScoreThreshold) {
       return { acted: false };
     }
+    // A viewer is not in the world (part 4): their line is talk, never an order, unless the
+    // player opted in. No arming either: the next tick must not act on it quietly.
+    if (desire.speakerKind === 'viewer' && !this.ctx.settings.conversationActionsFromViewers) {
+      log.info(
+        `[Cognition] sim ${simId}: a viewer's line (${desire.speaker}) scored ${desire.score}; viewers never arm actions`,
+      );
+      return { acted: false };
+    }
     if (!this.ctx.settings.conversationActionsEnabled || this.ctx.settings.cognitionAutonomyLevel === 'off') {
       this.armDesireFromScene(simId, desire);
       return { acted: false };
@@ -1173,10 +1661,29 @@ export class CognitionService {
     const entry = this.ctx.simStateCache.getSim(simId);
     const report = this.ctx.simStateCache.getReport();
     const runtime = this.runtime(simId);
-    if (!entry || !report || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+    if (
+      !entry ||
+      !report ||
+      runtime.gating ||
+      runtime.phase === 'DELIBERATING' ||
+      runtime.phase === 'PENDING_OUTCOME'
+    ) {
       this.armDesireFromScene(simId, desire);
       return { acted: false };
     }
+    // The tick's own gates (part 4): asleep, mid-social or in a WickedWhims scene arms the
+    // desire for later; the hourly budget counts this deliberation like any other
+    if (isAsleep(entry) || entry.activity?.in_social || entry.self?.in_ww_scene) {
+      this.armDesireFromScene(simId, desire);
+      return { acted: false };
+    }
+    const now = Date.now();
+    runtime.deliberatedAt = runtime.deliberatedAt.filter((at) => at > now - 60 * 60 * 1000);
+    if (runtime.deliberatedAt.length >= this.ctx.settings.cognitionPerSimHourlyBudget) {
+      log.info(`[Cognition] sim ${simId} is over the hourly budget; the conversation action is dropped`);
+      return { acted: false };
+    }
+    runtime.deliberatedAt.push(now);
     runtime.phase = 'DELIBERATING';
     this.stats.deliberations += 1;
     const simLabel = entry.sim_name ?? simId;
@@ -1186,7 +1693,16 @@ export class CognitionService {
       }`,
     );
     try {
+      const gate = await this.gateFor(simId, 'conversation', desire.targetSimId);
+      if (!gate.open) {
+        this.refuseAtGate(simId, 'conversation', gate);
+        return { acted: false };
+      }
       const suppressed = this.recentlyFailedActions(runtime);
+      const energy = entry.self?.needs?.energy;
+      if (typeof energy === 'number' && energy < TOO_TIRED_TO_GO_OUT) {
+        suppressed.add('go_out');
+      }
       const ageBlocked = entry.self?.age_blocked ?? [];
       // Idle and self-care verbs the conversation never brought up are off the menu:
       // out of the vocabulary the director sees AND caught by validateIntent if a stage
@@ -1194,7 +1710,8 @@ export class CognitionService {
       const denied = deniedConversationActions(desire.transcript);
       const narrowed = new Set([...suppressed, ...ageBlocked, ...denied]);
       const hiddenActions = new Set([...ageBlocked, ...denied]);
-      const entryView = this.withoutSuppressedActions(entry, narrowed);
+      const brokenObjectIds = brokenProviderIds(report);
+      const entryView = this.withoutSuppressedActions(entry, narrowed, brokenObjectIds);
       const lotActionKeys = (report.lot?.action_keys ?? []).filter((key) => !narrowed.has(key));
       const reportView: SimStateReport =
         narrowed.size === 0 || !report.lot
@@ -1219,16 +1736,40 @@ export class CognitionService {
       const memoriesBlock = await this.relevantMemoriesBlock(entryView, absoluteDay);
       const factsBlock = this.knownFactsBlock(simId, entry, absoluteDay);
       const venues = lotActionKeys.includes('go_out') ? report.venues : undefined;
-      const situationPrompt = `${buildCognitionUserPrompt(
-        entryView,
-        reportView,
-        memoriesBlock,
-        [...suppressed],
-        planBlock,
-        hiddenActions,
-        factsBlock,
-        venues,
-      )}\n\nWhat was just said to you, in conversation with ${desire.speaker}:\n${desire.transcript}`;
+      const pieMode = this.pieVocabularyAvailable();
+      const extras = this.promptExtras(simId, report, { mode: pieMode ? 'pie' : 'whitelist' });
+      const vocabulary = pieMode ? await this.vocabularyFor(simId, desire.targetSimId) : undefined;
+      const built = pieMode
+        ? this.pieOptionsPrompt(vocabulary, narrowed, {
+            entryView,
+            reportView,
+            memoriesBlock,
+            suppressed,
+            planBlock,
+            hiddenActions,
+            factsBlock,
+            venues,
+            lotActionKeys,
+            extras,
+          })
+        : {
+            prompt: buildCognitionUserPrompt(
+              entryView,
+              reportView,
+              memoriesBlock,
+              [...suppressed],
+              planBlock,
+              hiddenActions,
+              factsBlock,
+              venues,
+              extras,
+            ),
+          };
+      const viewerNote =
+        desire.speakerKind === 'viewer'
+          ? `\n${desire.speaker} is a viewer watching from outside the world: you cannot talk to, leave or confront them in the world.`
+          : '';
+      const situationPrompt = `${built.prompt}\n\nWhat was just said to you, in conversation with ${desire.speaker}:\n${desire.transcript}${viewerNote}`;
       const exchanges: LLMExchange[] = [];
       const intent = await this.runActionScene({
         entryView,
@@ -1240,6 +1781,7 @@ export class CognitionService {
         exchanges,
         hiddenActions,
         venues,
+        rows: built.rows,
       });
       const acted = this.dispatchChosenIntent({
         simId,
@@ -1354,10 +1896,14 @@ export class CognitionService {
     // doing (reverse index, fallbacks included); dispatching that same verb would only
     // interrupt the fast brain's own rescue to restart it. Counted as continue.
     const runningKey = entry.activity?.running_action_key;
-    if (runningKey && runningKey === intent.action) {
+    const runningTuning = entry.activity?.running ?? '';
+    if (
+      (runningKey && runningKey === intent.action) ||
+      (intent.pie && runningTuning && runningTuning === intent.action)
+    ) {
       this.stats.continues += 1;
       log.info(
-        `[Cognition] sim ${simId} is already doing '${runningKey}' (autonomy); '${intent.action}' counted as continue`,
+        `[Cognition] sim ${simId} is already doing '${runningKey ?? runningTuning}' (autonomy); '${intent.action}' counted as continue`,
       );
       this.toCooldown(simId);
       return false;
@@ -1406,6 +1952,7 @@ export class CognitionService {
         // action score of 7+ means changing course now; live, that cancelled the voiced
         // reply it came from and the player's own clicks. It now queues like any push.
         source,
+        pie: intent.pie,
       });
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;
@@ -1428,7 +1975,10 @@ export class CognitionService {
   // A directed scene's Reflection stage found this sim wanting a change (action score at
   // or over threshold). Mid-scene is not the moment to dispatch — the desire is armed and
   // the next eligible tick stages the Action Scene from a fresh snapshot.
-  armDesireFromScene(simId: string, desire: { score: number; reason?: string; thought?: string }) {
+  armDesireFromScene(
+    simId: string,
+    desire: { score: number; reason?: string; thought?: string; targetSimId?: string },
+  ) {
     if (!simId || desire.score < this.ctx.settings.cognitionActionScoreThreshold) {
       return;
     }
@@ -1457,6 +2007,8 @@ export class CognitionService {
     hiddenActions?: Set<string>;
     // go_out destinations from the report; validateIntent resolves option.destination
     venues?: VenueEntry[];
+    // The pie vocabulary this scene offers (autonomy part 2); undefined = the whitelist
+    rows?: VocabularyRow[];
   }): Promise<CognitionIntent | undefined> {
     const {
       entryView,
@@ -1468,12 +2020,23 @@ export class CognitionService {
       exchanges,
       hiddenActions,
       venues,
+      rows,
     } = params;
+    const pie = rows !== undefined;
+    if (pie && !this.pieOverrideWarned) {
+      const override = this.ctx.settings.stagePromptOverrides?.[StageId.BASAL_GANGLIA_OPTIONS];
+      if (typeof override === 'string' && override.trim().length > 0) {
+        this.pieOverrideWarned = true;
+        log.warn(
+          '[Cognition] a user prompt override exists for basal_ganglia_options while the pie vocabulary is on; it replaces the row-id JSON shape',
+        );
+      }
+    }
     try {
       const optionsShot = await runStage(this.ctx.generationQueue, 'action options', () =>
         this.ctx.ai.runOneShot(
           `Action Options: ${simLabel}`,
-          ACTION_OPTIONS_SYSTEM_PROMPT,
+          pie ? ACTION_OPTIONS_PIE_SYSTEM_PROMPT : ACTION_OPTIONS_SYSTEM_PROMPT,
           `${situationPrompt}\n\n${simLabel}'s inner monologue: ${thought ?? '(none)'}${
             actionReason ? `\nWhat is pulling at them: ${actionReason}` : ''
           }`,
@@ -1494,7 +2057,7 @@ export class CognitionService {
 
       // Bind every option to the offered vocabulary; invented actions and targets die
       // here, silently — the menu the sim sees contains only executable choices
-      const valid: { intent: CognitionIntent; label: string; key: string }[] = [];
+      const valid: { intent: CognitionIntent; label: string; key: string; tag: string }[] = [];
       parsedOptions.options.forEach((option) => {
         const validated = validateIntent(
           {
@@ -1503,22 +2066,36 @@ export class CognitionService {
             target_sim_id: option.target_sim_id,
             target_object_id: option.target_object_id,
             destination: option.destination,
+            row: option.row,
+            option: option.option,
           },
           entryView,
           lotActionKeys,
           venues,
+          rows,
         );
         if (!validated.ok || validated.intent.kind !== 'action' || !validated.intent.action) {
+          if (!validated.ok) {
+            log.debug(`[Cognition] ${simLabel} action scene dropped an option: ${validated.reason}`);
+          }
           return;
         }
-        if (hiddenActions?.has(validated.intent.action)) {
+        // The hidden set is whitelist keys; a pie row carries a tuning key the mod built
+        if (!validated.intent.pie && hiddenActions?.has(validated.intent.action)) {
           log.debug(`[Cognition] ${simLabel} action scene dropped hidden option '${validated.intent.action}'`);
           return;
         }
-        // zone_id in the key: two go_out options with different destinations both survive
-        const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}|${validated.intent.zone_id ?? ''}`;
+        // zone_id and the option in the key: two go_out options with different destinations,
+        // or two channels of one stereo row, both survive
+        const key = `${validated.intent.action}|${validated.intent.target_sim_id ?? ''}|${validated.intent.target_object_id ?? ''}|${validated.intent.zone_id ?? ''}|${validated.intent.pie?.option ?? ''}`;
         if (!valid.some((existing) => existing.key === key)) {
-          valid.push({ intent: validated.intent, label: option.label ?? validated.intent.action, key });
+          const row = validated.intent.row
+            ? rows?.find((candidate) => candidate.id === validated.intent.row)
+            : undefined;
+          const tag = validated.intent.pie
+            ? `${validated.intent.pie.label ?? validated.intent.action} -> ${row?.target ?? validated.intent.pie.target_kind}`
+            : validated.intent.action;
+          valid.push({ intent: validated.intent, label: option.label ?? tag, key, tag });
         }
       });
       if (valid.length === 0) {
@@ -1531,7 +2108,7 @@ export class CognitionService {
         log.debug(`[Cognition] ${simLabel} action scene dropped ${dropped} invalid option(s)`);
       }
 
-      const menu = valid.map((option, index) => `${index + 1}. [${option.intent.action}] ${option.label}`).join('\n');
+      const menu = valid.map((option, index) => `${index + 1}. [${option.tag}] ${option.label}`).join('\n');
 
       // A single valid option needs no choice call — the sim takes it, review still runs
       let pickedIndex = 0;
@@ -1565,7 +2142,7 @@ export class CognitionService {
         this.ctx.ai.runOneShot(
           `Action Review: ${simLabel}`,
           ACTION_REVIEW_SYSTEM_PROMPT,
-          `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].intent.action}] ${valid[pickedIndex].label}${
+          `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].tag}] ${valid[pickedIndex].label}${
             motivation ? `\nTheir motivation: ${motivation}` : ''
           }`,
           60,
@@ -1608,15 +2185,22 @@ export class CognitionService {
     return new Set(runtime.suppressedUntil.keys());
   }
 
-  private withoutSuppressedActions(entry: SimStateEntry, suppressed: Set<string>): SimStateEntry {
-    if (suppressed.size === 0) {
+  private withoutSuppressedActions(
+    entry: SimStateEntry,
+    suppressed: Set<string>,
+    brokenObjectIds?: Set<string>,
+  ): SimStateEntry {
+    if (suppressed.size === 0 && !brokenObjectIds?.size) {
       return entry;
     }
     return {
       ...entry,
       objects: (entry.objects ?? []).map((object) => ({
         ...object,
-        action_keys: (object.action_keys ?? []).filter((key) => !suppressed.has(key)),
+        // A broken provider keeps its place in the room with no verb (part 3)
+        action_keys: brokenObjectIds?.has(String(object.object_id))
+          ? []
+          : (object.action_keys ?? []).filter((key) => !suppressed.has(key)),
       })),
     };
   }
@@ -1810,8 +2394,10 @@ export class CognitionService {
           action,
           target_sim_id: pending.intent.target_sim_id,
           target_object_id: pending.intent.target_object_id,
+          zone_id: pending.intent.zone_id,
           motivation: pending.intent.motivation ?? pending.intent.thought,
           source: 'cognition',
+          pie: pending.intent.pie,
         });
         runtime.phase = 'PENDING_OUTCOME';
         runtime.pendingRequestId = requestId;

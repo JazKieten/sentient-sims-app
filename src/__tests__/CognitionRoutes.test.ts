@@ -104,6 +104,50 @@ describe('cognition routes', () => {
     expect(duplicate).toMatchObject({ ok: true, correlated: false });
   });
 
+  it('a pie click is echoed to the mod and its outcome reads by the label', async () => {
+    createdMemories.length = 0;
+    sentToMod.length = 0;
+    const enqueue = await post('/cognition/debug/enqueue', {
+      sim_id: '123',
+      action: 'mixer_social_AskAboutDay',
+      target_sim_id: '456',
+      pie: { target_id: '456', target_kind: 'sim', item: 'mixer_social_AskAboutDay', label: 'Ask about Day' },
+    });
+    const requestId = enqueue.request_id as string;
+    expect(sentToMod[0]).toMatchObject({
+      type: 'enqueue_interaction',
+      request_id: requestId,
+      pie: { target_id: '456', target_kind: 'sim', item: 'mixer_social_AskAboutDay', label: 'Ask about Day' },
+    });
+    await post('/cognition/outcome', {
+      request_id: requestId,
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      target_sim_id: '456',
+      target_sim_name: 'Peyton Puckett',
+      action: 'mixer_social_AskAboutDay',
+      label: 'Ask about Day',
+      interaction_name: 'mixer_social_AskAboutDay_targeted_Friendly_alwaysOn',
+      outcome: 'success',
+    });
+    expect(createdMemories[0].memory.observation).toBe(
+      "Marisol Rocca tried 'Ask about Day' with Peyton Puckett and it succeeded.",
+    );
+    expect(createdMemories[0].memory.action).toBe('mixer_social_AskAboutDay');
+  });
+
+  it('an uncorrelated outcome with a label reads by the label too', async () => {
+    createdMemories.length = 0;
+    await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'stereo_Listen',
+      label: 'Jazz',
+      outcome: 'failure',
+    });
+    expect(createdMemories[0].memory.observation).toBe("Marisol Rocca tried 'Jazz' and it failed.");
+  });
+
   it('writes an uncorrelated failure outcome using the reported names', async () => {
     createdMemories.length = 0;
 

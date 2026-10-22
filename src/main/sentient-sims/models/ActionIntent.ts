@@ -1,3 +1,34 @@
+import type { PieIntent } from './ModWebsocketMessage';
+
+export type { PieIntent } from './ModWebsocketMessage';
+
+// One row of the mod's pie-menu vocabulary (interactions/ss_cognition_query.py, kind
+// `vocabulary`): what the actor could click on `target` right now. `source: 'whitelist'` marks
+// a synthetic row the app adds for a kept whitelist verb (util/formatVocabulary.ts).
+export type VocabularyRow = {
+  id: string;
+  target: string;
+  target_id?: string;
+  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone';
+  category?: string;
+  label: string;
+  key: string;
+  picker?: boolean;
+  options?: string[];
+  greyed?: boolean;
+  reason?: string;
+  source?: 'pie' | 'whitelist';
+};
+
+export type VocabularyResult = {
+  rows: VocabularyRow[];
+  cannot_start_now?: { reason?: string; why?: string };
+  interrupts?: string;
+  targets?: { target: string; target_id?: string; kind: string; rows: number }[];
+  ms?: number;
+  truncated?: boolean;
+};
+
 // An action the app wants a sim to take, expressed in the mod's whitelisted action
 // vocabulary (ss_affordance_whitelist.py). Dispatched over the mod websocket as an
 // ENQUEUE_INTERACTION message; the mod reports the result to POST /cognition/outcome.
@@ -18,6 +49,8 @@ export type ActionIntent = {
   // The thought that motivated the action; carried into the outcome memory's pre_action so
   // future cognition ticks can see why the action was attempted
   motivation?: string;
+  // A pie-menu row instead of a whitelist verb: the mod clicks this item
+  pie?: PieIntent;
 };
 
 // What the mod reports back after a dispatched interaction finishes
@@ -32,6 +65,8 @@ export type InteractionOutcomeEvent = {
   // 'ineligible' = the mod's preflight ran the game's own tests and the intent cannot
   // execute right now (broken fix object, departed target) — nothing was ever pushed
   outcome: 'success' | 'failure' | 'canceled' | 'ineligible';
+  // The pie-menu label the click was made by ("Ask about Day"), when the push was a click
+  label?: string;
   // The game's actual failure reason ("Missing relationship bit has_met between X and Y",
   // "Object is not in an active zone") — this is what teaches cognition not to retry
   // impossible actions

@@ -13,7 +13,33 @@ export type ModLogWebsocketMessage = {
   voice_key?: VoiceKeyEvent;
   // Plum, Claude in the game (plum/ss_plum_listener.py -> PlumService)
   plum?: PlumModMessage;
+  // Cognition's query channel (interactions/ss_cognition_query.py -> the autonomy tier's
+  // ModQueryService): the answer to a cognition_query, or a held click's end
+  cognition?: CognitionModMessage;
 };
+
+// The answer to a cognition_query, same request_id
+export type CognitionQueryResult = {
+  kind: 'query_result';
+  request_id: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  elapsed_ms?: number;
+};
+
+// A player click the mod reported as a hold (moment.hold) has ended: the Sim may deliberate
+export type CognitionHoldReleased = {
+  kind: 'hold_released';
+  sim_id: string;
+  interaction_id: string;
+  held_sim_id?: string;
+  name?: string;
+  finishing?: string;
+  ran?: boolean;
+};
+
+export type CognitionModMessage = CognitionQueryResult | CognitionHoldReleased;
 
 // One tool as the mod's registry describes it (plum/ss_plum_tools.py catalogue())
 export type PlumModToolDef = {

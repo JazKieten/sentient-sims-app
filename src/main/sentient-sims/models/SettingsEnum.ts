@@ -68,6 +68,11 @@ export enum SettingsEnum {
   COGNITION_PIPELINE = 'cognitionPipeline', // legacy review dial; unused since the Action Scene pipeline
   // Full Autonomy: a tick/scene action score at or above this stages an Action Scene
   COGNITION_ACTION_SCORE_THRESHOLD = 'cognitionActionScoreThreshold',
+  // Autonomy part 2 (2026-10-21): the options stage offers the game's pie menu ('pie', the
+  // mod's cognition vocabulary) or the 61-verb whitelist ('whitelist')
+  COGNITION_VOCABULARY = 'cognitionVocabulary',
+  // Autonomy part 1: every cognition lane asks the mod's moment predicate before a model call
+  COGNITION_GATE_ENABLED = 'cognitionGateEnabled',
   // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
   DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
   DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',
@@ -115,6 +120,9 @@ export enum SettingsEnum {
   // The scorer's action verdict a reply must reach before it may act (its own bar, above
   // the tick's: a chat is not an invitation to go do chores)
   CONVERSATION_ACTION_SCORE_THRESHOLD = 'conversationActionScoreThreshold',
+  // A Twitch viewer's line may turn into an action (off: viewers never arm or stage one; the
+  // 10-19 stream had viewers' heckles waking a sleeping Sim into clean_up)
+  CONVERSATION_ACTIONS_FROM_VIEWERS = 'conversationActionsFromViewers',
   // Pets, babies and infants (the sims the player cannot control) take speaking turns.
   // Off: they still think, as a private monologue row, but never say a line aloud
   NON_CONTROLLABLE_SIMS_SPEAK = 'nonControllableSimsSpeak',

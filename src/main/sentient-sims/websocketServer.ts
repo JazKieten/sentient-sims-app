@@ -101,6 +101,8 @@ export const startWebSocketServer = (ctx: ApiContext) => {
       ctx.simStateCache.reset();
       // Plum's pending tool calls can never be answered now
       ctx.plum.onModDisconnected();
+      // Nor a tier's (the autonomy tier's cognition queries and click holds)
+      ctx.tiers.forEach((tier) => tier.onModDisconnected?.(ctx));
       ctx.sceneFreshness.reset();
       notifyWebsocketStatus({
         type: 'mod',

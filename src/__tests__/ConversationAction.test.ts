@@ -3,7 +3,7 @@ import { CognitionService } from 'main/sentient-sims/services/CognitionService';
 import { autonomyOf, type AutonomyServices } from 'main/sentient-sims/tiers/autonomy';
 import { SimStateCache } from 'main/sentient-sims/services/SimStateCache';
 import { ApiContext } from 'main/sentient-sims/services/ApiContext';
-import { SimStateReport } from 'main/sentient-sims/models/SimStateReport';
+import { SimStateEntry, SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { ActionIntent } from 'main/sentient-sims/models/ActionIntent';
 import { deniedConversationActions } from 'main/sentient-sims/util/conversationActions';
 import { mockApiContext } from './util';
@@ -31,6 +31,10 @@ type CtxOptions = {
   enabled?: boolean;
   autonomyLevel?: 'off' | 'suggest' | 'full';
   pick?: string;
+  // Autonomy parts 1 and 4 (2026-10-21)
+  fromViewers?: boolean;
+  hourlyBudget?: number;
+  moment?: { ok: boolean; result?: Record<string, unknown>; error?: string };
 };
 
 function buildCtx(options: CtxOptions = {}) {
@@ -38,6 +42,7 @@ function buildCtx(options: CtxOptions = {}) {
   const dispatched: ActionIntent[] = [];
   const oneShotCalls: string[] = [];
   const prompts: string[] = [];
+  const queries: { kind: string; args: Record<string, unknown> }[] = [];
   const ctx = {
     settings: {
       // The tick loop stays off: only actOnConversation deliberates here
@@ -45,13 +50,17 @@ function buildCtx(options: CtxOptions = {}) {
       cognitionAutonomyLevel: options.autonomyLevel ?? 'full',
       cognitionTickIntervalSeconds: 0,
       cognitionMaxConcurrent: 1,
-      cognitionPerSimHourlyBudget: 100,
+      cognitionPerSimHourlyBudget: options.hourlyBudget ?? 100,
       cognitionActionScoreThreshold: options.threshold ?? 6,
       conversationActionScoreThreshold: options.conversationThreshold ?? 8,
       conversationActionsEnabled: options.enabled ?? true,
+      conversationActionsFromViewers: options.fromViewers ?? false,
+      cognitionGateEnabled: true,
+      cognitionVocabulary: 'whitelist',
     },
     simStateCache: cache,
     db: { isLoaded: () => true },
+    ext: {},
     generationQueue: { runCognition: <T>(task: () => Promise<T>) => task() },
     ai: {
       runOneShot: (label: string, _system: string, userPrompt: string) => {
@@ -72,6 +81,7 @@ function buildCtx(options: CtxOptions = {}) {
         return `req-${dispatched.length}`;
       },
       release: () => undefined,
+      getInFlight: () => undefined,
     },
     memoryRepository: { createMemory: () => ({ id: 1 }) },
     memoryRetrieval: { retrieve: () => Promise.resolve([]) },
@@ -81,10 +91,21 @@ function buildCtx(options: CtxOptions = {}) {
       needsLazyPlan: () => false,
       generateLazy: () => Promise.resolve(),
     },
+    ...(options.moment
+      ? {
+          modQuery: {
+            query: (kind: string, args: Record<string, unknown>) => {
+              queries.push({ kind, args });
+              return Promise.resolve(options.moment);
+            },
+            onHoldReleased: () => undefined,
+          },
+        }
+      : {}),
   } as unknown as ApiContext;
   // The stub carries the autonomy siblings (actionDispatcher, dailyPlan) itself
   const cognition = new CognitionService(ctx, ctx as unknown as AutonomyServices);
-  return { ctx, cache, cognition, dispatched, oneShotCalls, prompts };
+  return { ctx, cache, cognition, dispatched, oneShotCalls, prompts, queries };
 }
 
 function report(): SimStateReport {
@@ -106,6 +127,14 @@ function report(): SimStateReport {
       },
     ],
   };
+}
+
+// The standard report with its one Sim changed in place
+function reportWith(mutate: (entry: SimStateEntry) => void): SimStateReport {
+  const built = report();
+  const [entry] = built.sims ?? [];
+  mutate(entry);
+  return built;
 }
 
 const desire = {
@@ -294,5 +323,95 @@ describe('what a conversation may turn into', () => {
     expect(prompts[0]).toContain('grab snack');
     expect(result.acted).toBe(true);
     expect(dispatched[0]).toMatchObject({ action: 'grab_snack', target_object_id: '900' });
+  });
+});
+
+// Autonomy parts 1 and 4 (2026-10-21): a viewer is not in the world, the conversation lane
+// takes the tick's own gates and the hourly budget, and it asks the mod's moment first.
+describe('acting on a conversation: viewers and the gate', () => {
+  const viewerDesire = { ...desire, speaker: 'Chat (WoolyWolfee)', speakerKind: 'viewer' as const };
+
+  it("a viewer's line never acts or arms with the setting off", async () => {
+    const { cache, cognition, dispatched, oneShotCalls } = buildCtx();
+    cache.ingest(report());
+    const result = await cognition.actOnConversation('100', viewerDesire);
+    expect(result.acted).toBe(false);
+    expect(oneShotCalls).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(cognition.getPhase('100')).toBe('IDLE');
+    // Not armed either: the next tick must not act on it quietly
+    cache.ingest({ ...report(), seq: 2 });
+    expect(cognition.getStats().deliberations).toBe(0);
+  });
+
+  it('with the setting on, the prompt says the speaker is a viewer', async () => {
+    const { cache, cognition, prompts } = buildCtx({ fromViewers: true });
+    cache.ingest(report());
+    const result = await cognition.actOnConversation('100', viewerDesire);
+    expect(result.acted).toBe(true);
+    expect(prompts[0]).toContain(
+      'Chat (WoolyWolfee) is a viewer watching from outside the world: you cannot talk to, leave or confront them in the world.',
+    );
+  });
+
+  it('asleep or mid-conversation arms the desire instead of staging', async () => {
+    for (const activity of [
+      { queue: [], running: 'bed_sleep', in_social: false },
+      { queue: [], running: 'sim_Chat', in_social: true },
+    ]) {
+      const { cache, cognition, oneShotCalls } = buildCtx();
+      cache.ingest(
+        reportWith((entry) => {
+          entry.activity = activity;
+          if (activity.running === 'bed_sleep') {
+            entry.self = { ...entry.self, asleep: true };
+          }
+        }),
+      );
+      const result = await cognition.actOnConversation('100', desire);
+      expect(result.acted).toBe(false);
+      expect(oneShotCalls).toEqual([]);
+    }
+  });
+
+  it('the hourly budget counts conversation actions', async () => {
+    const { cache, cognition, dispatched, oneShotCalls } = buildCtx({ hourlyBudget: 1 });
+    cache.ingest(report());
+    expect((await cognition.actOnConversation('100', desire)).acted).toBe(true);
+    cognition.onOutcome({ sim_id: '100', outcome: 'success', request_id: 'req-1', action: 'chat' });
+    const callsAfterFirst = oneShotCalls.length;
+    const second = await cognition.actOnConversation('100', desire);
+    expect(second.acted).toBe(false);
+    expect(oneShotCalls).toHaveLength(callsAfterFirst);
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('too tired to go out keeps go_out off the conversation menu', async () => {
+    const { cache, cognition, prompts } = buildCtx();
+    const tired = reportWith((entry) => {
+      entry.self = { mood: 'Fine', needs: { hunger: 50, energy: -50 }, age: 'ADULT' };
+    });
+    tired.lot = { ...tired.lot, action_keys: ['go_out'] };
+    tired.venues = [{ zone_id: '77', name: 'Rattlesnake Juice', venue: 'bar', same_world: true }];
+    cache.ingest(tired);
+    await cognition.actOnConversation('100', {
+      ...desire,
+      transcript: `${desire.transcript}\nConscience: go out and find her`,
+    });
+    expect(prompts[0]).not.toContain('OFFERED household actions');
+    expect(prompts[0]).toContain('NOT possible right now, do not choose: go out.');
+  });
+
+  it("asks the mod's moment on the 'conversation' lane and stands down when it is closed", async () => {
+    const { cache, cognition, dispatched, oneShotCalls, queries } = buildCtx({
+      moment: { ok: true, result: { ok: false, key: 'head_busy', why: 'Jonah is busy with mentor Cooking' } },
+    });
+    cache.ingest(report());
+    const result = await cognition.actOnConversation('100', { ...desire, targetSimId: '200' });
+    expect(result.acted).toBe(false);
+    expect(oneShotCalls).toEqual([]);
+    expect(dispatched).toEqual([]);
+    expect(queries[0]).toEqual({ kind: 'moment', args: { sim_id: '100', lane: 'conversation', target_sim_id: '200' } });
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
   });
 });

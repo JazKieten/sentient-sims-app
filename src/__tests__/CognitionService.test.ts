@@ -98,6 +98,7 @@ function buildCtx(options: CtxOptions = {}) {
           released.push(requestId);
         }
       },
+      getInFlight: () => undefined,
     },
     memoryRepository: {
       createMemory: (request: unknown) => {

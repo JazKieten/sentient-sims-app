@@ -2775,6 +2775,11 @@ ${factsBlock}
         return;
       }
       try {
+        // A Twitch line always carries a flavor ("a viewer in chat"); the player's own voice,
+        // chat window and conscience never do. Core code cannot name the stream tier's
+        // speaker constant, so the flavor is the viewer mark (part 4).
+        const speakerKind: 'player' | 'viewer' = options.playerLineFlavor ? 'viewer' : 'player';
+        const others = performers.filter((other) => other.sim_id !== sim.sim_id);
         void conversationActions
           .actOnConversation(sim.sim_id, {
             score: score.action,
@@ -2784,6 +2789,8 @@ ${factsBlock}
             transcript,
             sceneId,
             suggestOnly: options.suggestActionsOnly,
+            speakerKind,
+            ...(others.length === 1 ? { targetSimId: others[0].sim_id } : {}),
           })
           .then((result) => {
             options.onConversationAction?.({
@@ -2832,10 +2839,14 @@ ${factsBlock}
       }
       const sim = matches[0];
       try {
+        // The scene's other participant, when there was exactly one: the desire's target,
+        // whose pie menu the vocabulary builds first
+        const others = event.sentient_sims.filter((other) => other.sim_id !== sim.sim_id);
         conversationActions.armDesireFromScene(sim.sim_id, {
           score: score.action,
           reason: score.action_reason,
           thought: monologueBySim.get(sim.sim_id),
+          ...(event.sentient_sims.length === 2 && others.length === 1 ? { targetSimId: others[0].sim_id } : {}),
         });
       } catch (error) {
         log.debug(`[Pipeline] could not arm cognition desire for ${name}: ${String(error)}`);

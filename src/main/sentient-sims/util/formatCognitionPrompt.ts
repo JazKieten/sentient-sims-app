@@ -10,6 +10,26 @@ import { TEEN_PLUS_TARGET_SOCIALS, isRomanceAge } from '../models/ActionLoadout'
 import { relationshipWords } from './relationshipWords';
 import { firstJsonBlock } from './jsonBlock';
 import { formatSelfStatusSections, TodaysPlanBlock } from './formatSelfStatus';
+import { formatVocabularyRows } from './formatVocabulary';
+import type { VocabularyRow } from '../models/ActionIntent';
+
+// What the prompt sees beyond the entry and the report (autonomy parts 2 and 3, 2026-10-21)
+export type CognitionPromptExtras = {
+  // 'pie' with rows: the OFFERED block is the mod's pie-menu rows; 'pie' without rows (the
+  // monologue / scores prompt) keeps the people and the destinations and drops the whitelist
+  // object and social lists; 'whitelist' is the prompt as it was
+  vocabulary?:
+    | { mode: 'whitelist' }
+    | {
+        mode: 'pie';
+        rows?: { offered: VocabularyRow[]; greyed: VocabularyRow[]; whitelist?: VocabularyRow[] };
+        cannotStartNow?: { reason?: string; why?: string };
+      };
+  // The other household Sims right now, and what they are already on
+  householdLines?: string[];
+  // Plum's active beat (a director has <sim> on <doing>), never more than two lines
+  directorLines?: string[];
+};
 
 // Core since release 4.5 (util/jsonBlock, util/formatSelfStatus); re-exported for the
 // autonomy callers that always imported them from here
@@ -85,7 +105,18 @@ export type ActionOption = {
   // go_out only: the venue NAME chosen from the prompt's destination list
   destination?: string;
   label?: string;
+  // Pie vocabulary: the row id and the option chosen from a collapsed row
+  row?: string;
+  option?: string;
 };
+
+function cleanIdText(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed === '' || ['null', 'none', 'undefined'].includes(trimmed.toLowerCase()) ? undefined : trimmed;
+}
 
 export function parseActionOptions(raw: string): { scene?: string; options: ActionOption[] } | undefined {
   const parsed = firstJsonBlock(raw);
@@ -100,12 +131,17 @@ export function parseActionOptions(raw: string): { scene?: string; options: Acti
     .filter((option): option is Record<string, unknown> => Boolean(option) && typeof option === 'object')
     .map((option) => ({
       action: typeof option.action === 'string' ? option.action : '',
-      target_sim_id: typeof option.target_sim_id === 'string' ? option.target_sim_id : undefined,
-      target_object_id: typeof option.target_object_id === 'string' ? option.target_object_id : undefined,
+      target_sim_id: cleanIdText(option.target_sim_id),
+      target_object_id: cleanIdText(option.target_object_id),
       destination: typeof option.destination === 'string' ? option.destination : undefined,
       label: typeof option.label === 'string' ? option.label : undefined,
+      row:
+        typeof option.row === 'string' || typeof option.row === 'number'
+          ? String(option.row).trim() || undefined
+          : undefined,
+      option: typeof option.option === 'string' ? option.option : undefined,
     }))
-    .filter((option) => option.action.length > 0);
+    .filter((option) => option.action.length > 0 || option.row !== undefined);
   return { scene: typeof body.scene === 'string' ? body.scene : undefined, options };
 }
 
@@ -148,6 +184,7 @@ export function buildCognitionUserPrompt(
   // go_out destinations (the mod's venue directory, same-world first); rendered only
   // when go_out is actually offered this tick
   venues?: VenueEntry[],
+  extras?: CognitionPromptExtras,
 ): string {
   const sections: string[] = [];
   // || not ??: an older mod sends '' for a nameless sim, and 'You are  (sim_id ...)' is
@@ -156,15 +193,42 @@ export function buildCognitionUserPrompt(
   sections.push(`You are ${name} (sim_id ${entry.sim_id}).`);
 
   sections.push(formatPerception(entry));
-  sections.push(...formatSelfStatusSections(entry, plan));
+  sections.push(...formatSelfStatusSections(entry, plan, report?.lot?.clock));
+
+  const pieMode = extras?.vocabulary?.mode === 'pie';
+  const pieRows = extras?.vocabulary?.mode === 'pie' ? extras.vocabulary.rows : undefined;
 
   const lot = report?.lot;
   if (lot) {
     const lotLines: string[] = [];
+    // Where you are, first: the venue decides what an evening can be (order_drink was never
+    // offered at two clubs on 10-21 because nothing said "this is a lounge")
+    if (lot.is_home !== undefined) {
+      const place = lot.lot_name || 'this lot';
+      const venue = lot.venue_type ?? lot.venue;
+      if (lot.is_home) {
+        lotLines.push(`You are at home (${place}).`);
+      } else {
+        lotLines.push(`You are at ${place}${venue ? ` (${pretty(venue)})` : ''}, not your home.`);
+      }
+    }
     if (lot.clock?.hour !== undefined) {
       lotLines.push(`It is ${lot.clock.hour}:${String(lot.clock.minute ?? 0).padStart(2, '0')}.`);
     }
-    if (lot.bills?.due) {
+    if (typeof lot.funds === 'number') {
+      // Money next to the bills: pay_bills x9 with no funds on 10-19
+      let money = `Household funds: $${Math.round(lot.funds).toLocaleString('en-US')}`;
+      if (lot.bills?.due) {
+        const amount = lot.bills.amount;
+        const cut = lot.bills.shut_off?.length ? ` (${lot.bills.shut_off.join(' and ')} already shut off)` : '';
+        const afford =
+          typeof amount === 'number' ? (lot.funds >= amount ? 'you can afford them' : 'you cannot afford them') : '';
+        money += `; bills of $${typeof amount === 'number' ? amount.toLocaleString('en-US') : '?'} are due${
+          afford ? `: ${afford}` : ''
+        }${cut}`;
+      }
+      lotLines.push(`${money}.`);
+    } else if (lot.bills?.due) {
       const cut = lot.bills.shut_off?.length ? ` — ${lot.bills.shut_off.join(' and ')} already shut off` : '';
       lotLines.push(`Household bills of $${lot.bills.amount ?? '?'} are due${cut}.`);
     }
@@ -191,6 +255,12 @@ export function buildCognitionUserPrompt(
       sections.push(lotLines.join(' '));
     }
   }
+  if (extras?.householdLines?.length) {
+    sections.push(extras.householdLines.join('\n'));
+  }
+  if (extras?.directorLines?.length) {
+    sections.push(extras.directorLines.slice(0, 2).join('\n'));
+  }
 
   // Facts before memories: what is TRUE anchors how the recalled episodes are read, and
   // a fact block that gets truncated away is worse than a short one that survives.
@@ -210,11 +280,21 @@ export function buildCognitionUserPrompt(
   // Live 2026-08-16: three 'chat' pushes at a napping sim, all INTERACTION_INCOMPATIBILITY.
   const awakeTargets = [...offered.simTargets.entries()].filter(([, target]) => !target.asleep);
   const simList = awakeTargets.map(([simId, target]) => describeTarget(simId, target)).join('; ') || '(no one)';
-  sections.push(`OFFERED object actions: ${objectList}`);
-  if (offered.lotActions.size > 0) {
-    sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
+  if (pieRows) {
+    // The options prompt in pie mode: the mod's rows ARE the vocabulary
+    sections.push(
+      formatVocabularyRows(pieRows, extras?.vocabulary?.mode === 'pie' ? extras.vocabulary.cannotStartNow : undefined),
+    );
+  } else if (!pieMode) {
+    sections.push(`OFFERED object actions: ${objectList}`);
+    if (offered.lotActions.size > 0) {
+      sections.push(`OFFERED household actions: ${[...offered.lotActions].map(pretty).join(', ')}`);
+    }
   }
-  if (offered.lotActions.has('go_out') && venues && venues.length > 0) {
+  const goOutOffered = pieRows
+    ? (pieRows.whitelist ?? []).some((row) => row.key === 'go_out')
+    : offered.lotActions.has('go_out');
+  if (goOutOffered && venues && venues.length > 0) {
     // Names only — zone ids never reach the model. Same-world entries lead (the mod
     // sorts them first) and the cap keeps the prompt from ballooning; anywhere in the
     // directory stays reachable because validateIntent matches by name, not by list
@@ -237,8 +317,10 @@ export function buildCognitionUserPrompt(
       sections.push('The evening is young and nobody is around — going out (go_out) would put people nearby.');
     }
   }
-  sections.push(`OFFERED people to talk to: ${simList}`);
-  if (awakeTargets.length > 0) {
+  if (!pieRows) {
+    sections.push(`OFFERED people to talk to: ${simList}`);
+  }
+  if (awakeTargets.length > 0 && !pieMode) {
     // The model can't name a social it was never shown — before this line existed every
     // conversation degraded to plain 'chat' (the vocabulary was validation-only).
     // Off-loadout socials are simply not shown ('chat' is always available).

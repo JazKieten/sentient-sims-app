@@ -1,10 +1,64 @@
 // A Sim's own status as prompts render it. Core: the player-facing reply carries it
 // (AIService.runDirectedGeneration), and so does the autonomy tick (re-exported from
 // formatCognitionPrompt). Moved here for release 4.5 so a build without autonomy keeps it.
-import { SimStateEntry } from '../models/SimStateReport';
+import { LotClock, SimCareer, SimStateEntry } from '../models/SimStateReport';
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
+}
+
+// Buffs that are the weather, not a feeling: they get their own plain line
+const WEATHER_BUFF = /weather|umbrella|rain|snow|thunder|storm|heat|cold|windy|sunny/i;
+// Buffs the player never sees as a moodlet (hidden trackers, trait carriers, WickedWhims
+// bookkeeping): dropped from Feelings
+const HIDDEN_BUFF = /hidden|trait|tracker|turbodriver/i;
+
+function isBedtime(clock: LotClock | undefined): boolean {
+  const hour = clock?.hour;
+  return typeof hour === 'number' && (hour >= 21 || hour < 7);
+}
+
+// The mod sends `next_shift` as str(DateAndTime): "HH:MM:SS.mmm day:D week:W" (verified in
+// ../sentient-sims-base/date_and_time.py, 2026-10-21). Parsed tolerantly; printed raw otherwise.
+export function parseNextShift(text: string | undefined): { hour: number; minute: number; day?: number } | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const time = /(\d{1,2}):(\d{2})/.exec(text);
+  if (!time) {
+    return undefined;
+  }
+  const day = /day:?\s*(\d+)/i.exec(text);
+  return { hour: Number(time[1]), minute: Number(time[2]), day: day ? Number(day[1]) : undefined };
+}
+
+// "You are at work." / "Your shift at X starts at 09:00." / "You are late for work at X."
+export function careerLines(careers: SimCareer[] | undefined, clock?: LotClock): string[] {
+  const lines: string[] = [];
+  (careers ?? []).forEach((career) => {
+    const name = pretty(career.career ?? 'work');
+    if (career.at_work) {
+      lines.push(`You are at work (${name}).`);
+      return;
+    }
+    const shift = parseNextShift(career.next_shift);
+    if (!shift) {
+      if (career.next_shift) {
+        lines.push(`Your next shift at ${name}: ${career.next_shift}.`);
+      }
+      return;
+    }
+    const starts = `${String(shift.hour).padStart(2, '0')}:${String(shift.minute).padStart(2, '0')}`;
+    const sameDay = shift.day === undefined || clock?.day === undefined || shift.day === clock.day;
+    const clockMinutes = typeof clock?.hour === 'number' ? clock.hour * 60 + (clock.minute ?? 0) : undefined;
+    const late = sameDay && clockMinutes !== undefined && clockMinutes > shift.hour * 60 + shift.minute;
+    if (late) {
+      lines.push(`You are late for work at ${name} (your shift started at ${starts}).`);
+    } else {
+      lines.push(`Your shift at ${name} starts at ${starts}${sameDay ? '' : ' (not today)'}.`);
+    }
+  });
+  return lines;
 }
 
 // The day's plan as the prompt sees it: goal labels + the persona stage direction.
@@ -34,7 +88,7 @@ export function describePlanGoal(goal: { label: string; action_keys?: string[]; 
 // "what do you want" answers from the same ground truth the tick deliberates over —
 // measured 09-19..09-21, replies without it were "I don't know" nine times out of ten
 // direct questions, because the chat prompt carried no wants at all.
-export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlanBlock): string[] {
+export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlanBlock, clock?: LotClock): string[] {
   const sections: string[] = [];
   const self = entry.self;
   if (self) {
@@ -55,8 +109,13 @@ export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlan
     if (self.wants?.length) {
       selfLines.push(`Current wants: ${self.wants.map(pretty).join(', ')}`);
     }
-    if (self.buffs?.length) {
-      selfLines.push(`Feelings: ${self.buffs.map(pretty).join(', ')}`);
+    const weather = (self.buffs ?? []).filter((buff) => WEATHER_BUFF.test(buff));
+    const feelings = (self.buffs ?? []).filter((buff) => !WEATHER_BUFF.test(buff) && !HIDDEN_BUFF.test(buff));
+    if (feelings.length > 0) {
+      selfLines.push(`Feelings: ${feelings.map(pretty).join(', ')}`);
+    }
+    if (weather.length > 0) {
+      selfLines.push(`Weather: ${weather.map(pretty).join(', ')}.`);
     }
     if (self.next_objective) {
       const objective = self.next_objective;
@@ -69,6 +128,16 @@ export function formatSelfStatusSections(entry: SimStateEntry, plan?: TodaysPlan
         `Career: ${pretty(career.career ?? '')} level ${career.level ?? '?'}${career.at_work ? ' (at work now)' : ''}`,
       );
     });
+    selfLines.push(...careerLines(self.careers, clock));
+    // Bedtime for the young: the hour alone never told a child's tick to stop
+    if (isBedtime(clock)) {
+      const age = (self.age ?? '').toUpperCase();
+      if (age === 'CHILD' || age === 'TODDLER') {
+        selfLines.push('It is late; children should be in bed.');
+      } else if (age === 'TEEN') {
+        selfLines.push('It is late; you should be in bed.');
+      }
+    }
     selfLines.push('</STATUS>');
     sections.push(selfLines.join('\n'));
   }

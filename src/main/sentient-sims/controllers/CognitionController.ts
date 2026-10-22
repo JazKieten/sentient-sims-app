@@ -153,7 +153,10 @@ export class CognitionController {
         event.target_sim_name ||
         lookupParticipantName(this.ctx, event.target_sim_id) ||
         (event.target_sim_id ? `Sim ${event.target_sim_id}` : undefined);
-      const attempt = target ? `${actor} tried '${action}' with ${target}` : `${actor} tried '${action}'`;
+      // A pie-menu click reads by its label ("tried 'Ask about Day'"); the key stays on
+      // memory.action for the suppression maps
+      const tried = pending?.intent.pie?.label ?? known?.intent.pie?.label ?? event.label ?? action;
+      const attempt = target ? `${actor} tried '${tried}' with ${target}` : `${actor} tried '${tried}'`;
       const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action, verdict);
 
       const participants: ParticipantDTO[] = [{ id: event.sim_id }];

@@ -44,6 +44,8 @@ export interface TierRegistration {
   onSceneClosed?(ctx: ApiContext, closed: SceneClosed): void;
   // A websocket message from the mod that core did not handle. True means handled.
   onModMessage?(ctx: ApiContext, message: ModLogWebsocketMessage): boolean;
+  // The mod's websocket closed: nothing pending on it can be answered now
+  onModDisconnected?(ctx: ApiContext): void;
   onMemoryUpserted?(ctx: ApiContext, memory: MemoryEntity): void;
   // App quit (main.ts will-quit).
   shutdown?(ctx: ApiContext): void;
@@ -79,6 +81,10 @@ export type ConversationActionRequest = {
   transcript: string;
   sceneId?: string;
   suggestOnly?: boolean;
+  // Who spoke: a Sim, the player (chat window, voice, conscience) or a Twitch viewer. A
+  // viewer is not in the world: the Sim cannot talk to, leave or confront them there, and
+  // their lines never arm an action unless conversationActionsFromViewers is on.
+  speakerKind?: 'sim' | 'player' | 'viewer';
 };
 
 export type ConversationActionOutcome = { acted: boolean; action?: string; target?: string };
@@ -87,7 +93,10 @@ export type ConversationActionOutcome = { acted: boolean; action?: string; targe
 // any other scene arms a desire for the sim's next tick.
 export interface ConversationActionsSlot {
   actOnConversation(simId: string, request: ConversationActionRequest): Promise<ConversationActionOutcome>;
-  armDesireFromScene(simId: string, desire: { score: number; reason?: string; thought?: string }): void;
+  armDesireFromScene(
+    simId: string,
+    desire: { score: number; reason?: string; thought?: string; targetSimId?: string },
+  ): void;
 }
 
 // AUTONOMY: the nightly planner riding the sleep diary. prepare() returns undefined when

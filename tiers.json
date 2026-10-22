@@ -27,6 +27,8 @@
     "src/main/sentient-sims/services/DirectorService.ts",
     "src/main/sentient-sims/services/CognitionService.ts",
     "src/main/sentient-sims/services/ActionDispatcherService.ts",
+    "src/main/sentient-sims/services/ModQueryService.ts",
+    "src/main/sentient-sims/util/formatVocabulary.ts",
     "src/main/sentient-sims/services/AskActionService.ts",
     "src/main/sentient-sims/services/DailyPlanService.ts",
     "src/main/sentient-sims/services/OutcomeVerdictService.ts",
@@ -57,6 +59,8 @@
     "src/__tests__/CognitionVocabulary.test.ts",
     "src/__tests__/FormatPerception.test.ts",
     "src/__tests__/CognitionRoutes.test.ts",
+    "src/__tests__/ModQueryService.test.ts",
+    "src/__tests__/CognitionAutonomy.test.ts",
     "src/__tests__/FactsInPrompts.test.ts",
     "src/__tests__/DirectorService.test.ts",
     "src/__tests__/PlumWhisper.test.ts"

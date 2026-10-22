@@ -303,6 +303,17 @@ export function defaultStore(cwd?: string) {
         // reports) and every failure path fails open to pre-plan behavior
         default: true,
       },
+      [SettingsEnum.COGNITION_VOCABULARY.toString()]: {
+        type: 'string',
+        // 'pie' offers the game's own pie menu through the mod; an older mod (no
+        // cognition_query listener) falls back to the whitelist prompt on its own
+        default: 'pie',
+      },
+      [SettingsEnum.COGNITION_GATE_ENABLED.toString()]: {
+        type: 'boolean',
+        // The moment gate before every model lane; off = the pre-2026-10-21 behaviour
+        default: true,
+      },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
         // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
@@ -382,6 +393,11 @@ export function defaultStore(cwd?: string) {
         // Above the tick's 6: on the 09-22 stream 78 of 119 player-facing beats crossed
         // 6 and most of them were casual lines. 8 is "I really should" territory.
         default: 8,
+      },
+      [SettingsEnum.CONVERSATION_ACTIONS_FROM_VIEWERS.toString()]: {
+        type: 'boolean',
+        // A viewer is not in the world; their lines are talk, never an order (10-19 review)
+        default: false,
       },
       [SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS.toString()]: {
         type: 'boolean',
@@ -1291,6 +1307,14 @@ export class SettingsService {
     return this.get(SettingsEnum.DAILY_GOALS_ENABLED) as boolean;
   }
 
+  get cognitionVocabulary(): 'pie' | 'whitelist' {
+    return (this.get(SettingsEnum.COGNITION_VOCABULARY) as string) === 'whitelist' ? 'whitelist' : 'pie';
+  }
+
+  get cognitionGateEnabled(): boolean {
+    return this.get(SettingsEnum.COGNITION_GATE_ENABLED) !== false;
+  }
+
   get dailyLoadoutSize(): number {
     return Math.min(10, Math.max(3, this.get(SettingsEnum.DAILY_LOADOUT_SIZE) as number));
   }
@@ -1417,6 +1441,10 @@ export class SettingsService {
   get conversationActionScoreThreshold(): number {
     const raw = Number(this.get(SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD));
     return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
+  }
+
+  get conversationActionsFromViewers(): boolean {
+    return this.get(SettingsEnum.CONVERSATION_ACTIONS_FROM_VIEWERS) === true;
   }
 
   get voiceInputProvider(): VoiceInputProvider {

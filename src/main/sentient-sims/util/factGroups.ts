@@ -229,11 +229,19 @@ export function groupFacts<F extends GroupableFact>(input: {
     const death = one(FactPredicate.DEATH_TYPE);
     add('Status', death ? `ghost (${factValueWords(FactPredicate.DEATH_TYPE, death)})` : 'ghost', FactPredicate.ALIVE);
   }
-  const household = one(FactPredicate.HOUSEHOLD);
-  if (household) {
-    add('Household', household, FactPredicate.HOUSEHOLD);
-  }
   add('Home', one(FactPredicate.HOME), FactPredicate.HOME);
+  // Who lives there, by name. The household's own name is a Manage Worlds label that says
+  // nothing a player needs here.
+  const housemates = [
+    ...new Set(
+      current
+        .filter((fact) => fact.predicate === FactPredicate.HOUSEHOLD_MEMBER && fact.objectSimId)
+        .map((fact) => factLabel(fact, names, species)),
+    ),
+  ];
+  if (housemates.length > 0) {
+    add('Household Members', housemates.join(', '), FactPredicate.HOUSEHOLD_MEMBER);
+  }
   const job = one(FactPredicate.JOB);
   if (job) {
     // "Bodybuilder (Athletic, level 10)" once the sim has branched, "Athletic, level 3" before
@@ -352,8 +360,8 @@ export function groupFacts<F extends GroupableFact>(input: {
       case FactPredicate.ASPIRATION:
       case FactPredicate.HOUSEHOLD:
       case FactPredicate.HOME:
-        // The aspiration, the household's name and its home are on the summary line;
-        // the household category is who lives there
+        // The aspiration and the home are on the summary line and the household's name
+        // is shown nowhere; the household category is who lives there
         break;
       case FactPredicate.HOUSEHOLD_MEMBER:
       case FactPredicate.PET:

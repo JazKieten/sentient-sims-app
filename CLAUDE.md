@@ -124,7 +124,7 @@ Facts dialog, so never prettify in one place only. A pet gets no HUMAN occult (d
 known; recordSpecies retires one already stored). PUT /sims/:id/facts/:factId rewords a non-game fact: new row, old row
 retired with supersededBy (SemanticMemoryService.editFact); the dialog's Edit button on player facts uses it.
 The dialog's layout is util/factGroups.groupFacts (pure, tested in FactGroups.test.ts): a summary line (age, gender,
-species or occult, ghost, household, job, aspiration), then "Custom (Player Added)" first in the info colour (always
+species or occult, ghost, home, household members, job, aspiration), then "Custom (Player Added)" first in the info colour (always
 shown, even empty; the add box is its own component so typing never re-renders the rows), then categories A to Z
 with rows A to Z, one Accordion each,
 "People met" folded, Likes/Dislikes/Turn-ons/Turn-offs split under sub-headings (factWords.preferenceParts: Colors,
@@ -136,6 +136,8 @@ Home (2026-10-19): the mod's dossier household carries `home` {lot_id, name, wor
 (ss_sim_dossier.build_home; mod builds from 2026-10-19). dossierFacts.homeText makes the single-valued `home` fact
 'Inner Circle, Mirage Park, Del Sol Valley' (neighborhood from descriptions/lotNeighborhoods, else the reported world);
 it is the FIRST line of the prompt's "About you" ("your home is ...") and a Home tag on the Facts dialog's summary.
+The household's NAME (a Manage Worlds label, often not a surname: "BFF") is stored but shown nowhere: the prompt says
+"you live with A and B" or "you live alone", and the dialog's summary lists the household members by name.
 Traits beyond Create a Sim (2026-10-13): the dossier's `reward_traits` (aspiration rewards like Business Savvy, child
 skill rewards, Top-Notch Infant/Toddler) become `reward_trait` facts and ride the prompt's personality line; `phases`
 (childhood phases and a child's confidence level, mod builds from 2026-10-13) become `phase` facts and a "right now:"
@@ -156,7 +158,7 @@ mod) are their own categories and their own prompt lines ("your turn-ons: ...", 
 Aspirations, career branches, businesses (2026-10-13): the base game names aspiration tracks by letter
 (Track_Family_A = Successful Lineage; factWords ASPIRATION_NAMES, read as the bare name "Successful Lineage"
 with no category after it; an unknown letter falls back to the category alone). The dialog's summary tags carry a heading each (Age, Gender,
-Household, Career, Business, Aspiration; FactSummaryItem.title) and there is no Aspiration category. The mod
+Home, Household Members, Career, Business, Aspiration; FactSummaryItem.title) and there is no Aspiration category. The mod
 sends `track` per career (Athletic_Track3_BodyBuilder; mod builds from 2026-10-13) and the claim becomes
 `career_Adult_Athletic/Athletic_Track3_BodyBuilder (level 10)` ONLY once a branch is chosen (careerBranchWords
 ignores Track1 and NPC tracks), read as "Bodybuilder (Athletic, level 10)" and "the Athletic career

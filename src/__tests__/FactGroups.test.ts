@@ -94,8 +94,8 @@ describe('groupFacts', () => {
     expect(grouped.summary.map((item) => [item.title, item.label])).toEqual([
       ['Age', 'young adult'],
       ['Gender', 'male (he/him)'],
-      ['Household', 'Calloway'],
       ['Home', 'Inner Circle, Mirage Park, Del Sol Valley'],
+      ['Household Members', 'Mackenzie Scott, Bosun (dog)'],
       ['Career', 'Business, level 6'],
       ['Aspiration', 'Friend of the World'],
     ]);

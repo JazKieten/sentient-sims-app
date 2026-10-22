@@ -184,11 +184,11 @@ function selfLine(
   }
 }
 
-// Household and its members are one sentence, not a name plus a silent list of ids: the
-// members were rendered nowhere at all before, which is how a sim living with three named
-// people answered "who do you live with" with the household's name.
+// Who the sim lives with, by name. The household's own name stays out: it is a Manage
+// Worlds label the player can set to anything, and a sim asked who they live with
+// answered with it ("BFF", live 2026-09-03).
 function householdLine(facts: RenderableFact[], names: Record<string, string | undefined>): string | undefined {
-  const household = facts.find((fact) => fact.predicate === FactPredicate.HOUSEHOLD)?.objectText;
+  const hasHousehold = facts.some((fact) => fact.predicate === FactPredicate.HOUSEHOLD);
   // Pets are housemates too, but they get their own line: listed beside the people they
   // were taken for people (Anker introduced his dog Bosun as a man, live 2026-10-12)
   const pets = new Set(facts.filter((fact) => fact.predicate === FactPredicate.PET).map((fact) => fact.objectSimId));
@@ -198,14 +198,11 @@ function householdLine(facts: RenderableFact[], names: Record<string, string | u
     )
     .map((fact) => names[fact.objectSimId as string] ?? `sim ${fact.objectSimId as string}`);
   if (members.length > 0) {
-    return household
-      ? `you live with ${joinWords(members, 'and')} (the ${household} household)`
-      : `you live with ${joinWords(members, 'and')}`;
+    return `you live with ${joinWords(members, 'and')}`;
   }
-  if (household) {
-    // A one-sim household is a real answer, and so is a household whose members the
-    // dossier could not name
-    return `you live with the ${household} household`;
+  // A household with no other people: alone, or alone with pets (the pets line says so)
+  if (hasHousehold && pets.size === 0) {
+    return 'you live alone';
   }
   return undefined;
 }

@@ -290,7 +290,7 @@ export function SimFactsDialog({ open, simId, simName, onClose }: SimFactsDialog
                 <Chip size="small" label={item.label} />
               </Box>
             ))}
-            <HelpIcon title="Who this Sim is right now, from the game: life stage, gender, household, career, business and aspiration." />
+            <HelpIcon title="Who this Sim is right now, from the game: life stage, gender, home, who they live with, career, business and aspiration." />
           </Box>
         ) : null}
 

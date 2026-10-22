@@ -216,7 +216,7 @@ describe('semantic memory', () => {
     expect(pet?.source).toBe('game');
 
     const block = ctx.semanticMemory.recall('100');
-    expect(block).toContain('you live with Mackenzie Scott (the BFF household)');
+    expect(block).toContain('you live with Mackenzie Scott');
     expect(block).toContain('your pet: Bosun the dog');
     // The dog is in the sim's life, labelled as a dog
     expect(block).toContain('- Bosun (dog): your dog');
@@ -329,7 +329,7 @@ describe('semantic memory', () => {
     // a bare acquaintance does not earn a line
     expect(block).not.toContain('Alice Landgraab');
     // ...and the household is named with its members, not just its name
-    expect(block).toContain('you live with Mackenzie Scott and Liberty Lee (the BFF household)');
+    expect(block).toContain('you live with Mackenzie Scott and Liberty Lee');
   });
 
   it('a person named in the text the sim is about to read gets their fact line', () => {

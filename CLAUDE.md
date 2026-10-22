@@ -334,3 +334,11 @@ gemini-3.8-flash), so GeminiService sends thinkingBudget 0, else thinkingLevel L
 1024 tokens of headroom, and remembers per model which one it accepted. Publishing refuses text naming a sim in the
 save (findSavedNames); everyday words a townie is called (savedNames COMMON_WORDS: story, blue, white, house, street,
 bright, someone) only count inside a full name.
+
+ElevenLabs mood delivery (2026-10-03): an automatically cast voice is scored on the sim's traits only
+(CastableVoice), so an unpinned sim keeps one voice all day; the mood shapes the delivery instead. playTTSLines
+gives each line a deliveryNote from the speaker's current mood (util/moodDeliveryTags: Anxious -> nervous, Happy
+-> cheerful...) unless the line already has one from the screenplay, and v3/v4 send it as a leading `[tag]`
+(elevenLabsLineText); other models ignore it. Tag words are voice qualities only, since v4 plays a noun tag as a
+sound effect, and bookkeeping moods (fine, asleep, possessed, recharging, hyper) get none. Switch: moodTags on
+the ElevenLabs settings (checkbox on the ElevenLabs tab, on by default). Tests: moodDeliveryTags, PlayTTS.

@@ -850,6 +850,8 @@ ${factsBlock}
         event.sentient_sims.length,
         event.interaction_display_name,
         event.interaction_display_name_template,
+        // Names the label carries keep their case in the line
+        this.ctx.interactions.namesFromSaveIn(event.interaction_display_name),
       );
       if (synthesized?.ignored) {
         log.debug(`[PreAction] unmapped '${event.interaction_name}' looks like scaffolding; ignored`);

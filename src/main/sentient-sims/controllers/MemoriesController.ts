@@ -31,7 +31,10 @@ export class MemoriesController {
 
   getMemories = (req: Request, res: Response) => {
     try {
-      const result = this.ctx.memoryRepository.getMemories();
+      // ?exclude_event_types=outcome,... (the memories window leaves the bookkeeping out)
+      const raw = req.query.exclude_event_types;
+      const excluded = typeof raw === 'string' ? raw.split(',').map((type) => type.trim()) : [];
+      const result = this.ctx.memoryRepository.getMemories(excluded);
       return res.json(result);
     } catch (err) {
       if (err instanceof DatabaseNotLoadedError) {

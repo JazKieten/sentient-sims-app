@@ -1,12 +1,13 @@
 // N-3: a weak-but-TRUE pre-action for an interaction nobody has mapped yet. The
 // 08-04..08-14 playtest log carried 280 UNMAPPED_INTERACTION events; the ones that reached
 // the model as contentless scenes are where the "popup/code glitch" hallucination came
-// from. A synthesized line says only what the tuning name says — the character is busy
-// with <that> — and never invents an object, a mood or an outcome.
+// from. A synthesized line says only what the label or tuning name says and never
+// invents an object, a mood or an outcome.
 //
-// When the mod sends the interaction's pie-menu label the line is the game's own words,
-// "Audrey Bennett: Talk about Recent Studies (with Yuki Behr)", instead of the tuning
-// name picked apart ("is busy with 'archetype sage talk about recent studies'").
+// When the mod sends the interaction's pie-menu label the line is the game's own words
+// in the mappings' style (util/labelNarration): "Audrey Bennett is talking about recent
+// studies with Yuki Behr.", instead of the tuning name picked apart. Never "Audrey
+// Bennett: Talk about...", which every reader of the line takes for Audrey speaking.
 //
 // The game renders that label against THIS save, so it can carry a real name: "Play with
 // Elliot Jr". The mod sends a second form with {actor.N} where the names were, and it is
@@ -18,6 +19,7 @@
 // than synthesized: nobody wants a scene about sim_Stand.
 
 import { InteractionDescription } from '../descriptions/interactionDescriptions';
+import { narrateLabel } from './labelNarration';
 
 const IGNORE_FRAGMENTS = [
   'idle',
@@ -119,6 +121,7 @@ export function synthesizeInteractionDescription(
   simCount: number,
   displayName?: string,
   displayNameTemplate?: string,
+  savedNames: string[] = [],
 ): InteractionDescription | undefined {
   if (!interactionName) {
     return undefined;
@@ -135,17 +138,17 @@ export function synthesizeInteractionDescription(
     // A label that already names its target ("Chat with Yuki", "Give {actor.1} a hug")
     // says so itself
     const withTarget = simCount >= 2 && !/\bwith\b/i.test(label) && !label.includes('{actor.1}');
-    return {
-      pre_actions: [`{actor.0}: ${label}${withTarget ? ' (with {actor.1})' : ''}`],
-    };
+    const line = narrateLabel(label, { withTarget, keepCase: savedNames });
+    if (line) {
+      return { pre_actions: [line] };
+    }
   }
   const words = tokens(interactionName);
   if (words.length === 0) {
     return { ignored: true };
   }
   const phrase = words.join(' ');
-  const withTarget = simCount >= 2 && !/\bsolo\b/.test(phrase);
-  return {
-    pre_actions: [`{actor.0} is busy with '${phrase}'${withTarget ? ' with {actor.1}' : ''}.`],
-  };
+  const withTarget = simCount >= 2 && !/\b(solo|with)\b/.test(phrase);
+  const line = narrateLabel(phrase, { withTarget, fromTuningName: true });
+  return line ? { pre_actions: [line] } : { ignored: true };
 }

@@ -9,6 +9,8 @@ import { CognitionIntent, offeredActions, SOCIAL_ACTIONS, validateIntent } from 
 import { DISCRETIONARY_ACTIONS, isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent, VocabularyResult, VocabularyRow } from '../models/ActionIntent';
 import { CognitionHoldReleased } from '../models/ModLogWebsocketMessage';
+import type { IntentionRow } from '../models/IntentionRow';
+import type { IntentionService } from './intentions/IntentionService';
 import { ACTION_OPTIONS_PIE_SYSTEM_PROMPT } from '../pipeline/prompts/action';
 import { offerableRows, whitelistRows } from '../util/formatVocabulary';
 import { describeSim } from './plum/plumLiveSims';
@@ -87,6 +89,11 @@ type SimRuntime = {
   // When this sim's unbroken run of feeling bad AWAY from home started, for the
   // "I want to go home" rule. Cleared the moment the mood turns or they are home.
   miserableSince?: number;
+  // The intention row the lane is firing right now (autonomy part 5): markInFlight clears
+  // it on a dispatch, toCooldown reports it stood down otherwise
+  activeRowId?: string;
+  // The armed desire came from a row: a refused gate must clear it (collision 2)
+  rowArmed?: boolean;
 };
 
 // G-10: outcome causes (mod's ss_failure_reasons) that mean "the moment was wrong, the
@@ -236,7 +243,7 @@ const VOCABULARY_QUERY_TIMEOUT_MS = 5_000;
 const HOLD_SAFETY_MS = 180_000;
 const GATE_WARN_INTERVAL_MS = 60_000;
 
-type GateLane = 'tick' | 'armed' | 'conversation' | 'critical_need' | 'go_home' | 'rejoin';
+type GateLane = 'tick' | 'armed' | 'conversation' | 'critical_need' | 'go_home' | 'rejoin' | 'row';
 const RULE_LANES = new Set<GateLane>(['critical_need', 'go_home', 'rejoin']);
 
 // What the mod's `moment` query answers (interactions/ss_cognition_query.py)
@@ -441,7 +448,7 @@ export class CognitionService {
 
   // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
   private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-    Partial<Pick<AutonomyServices, 'modQuery'>>;
+    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions'>>;
 
   // The gate's holds: sim id -> the player click the mod said holds that Sim, until the mod's
   // hold_released names it (or HOLD_SAFETY_MS passes)
@@ -457,7 +464,8 @@ export class CognitionService {
 
   constructor(
     ctx: ApiContext,
-    autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> & Partial<Pick<AutonomyServices, 'modQuery'>>,
+    autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
+      Partial<Pick<AutonomyServices, 'modQuery' | 'intentions'>>,
   ) {
     this.ctx = ctx;
     this.autonomy = autonomy;
@@ -580,6 +588,25 @@ export class CognitionService {
     this.queriesUnsupported = false;
   }
 
+  // --- the intention rows (autonomy part 5) ------------------------------------------------
+
+  // The row list, when the tier carries it and the setting is on (collision 12: stubs
+  // without either stay on the legacy paths)
+  private rows(): IntentionService | undefined {
+    return this.ctx.settings.intentionRowsEnabled ? this.autonomy.intentions : undefined;
+  }
+
+  // The suspension the rule lanes skip and the row lane must not: off lot, a WickedWhims
+  // scene, mid-social, asleep (factored out of isEligible)
+  private suspended(entry: SimStateEntry): boolean {
+    return (
+      entry.self?.on_active_lot === false ||
+      entry.self?.in_ww_scene === true ||
+      entry.activity?.in_social === true ||
+      isAsleep(entry)
+    );
+  }
+
   // --- the vocabulary (autonomy part 2) ----------------------------------------------------
 
   private pieVocabularyAvailable(): boolean {
@@ -631,6 +658,7 @@ export class CognitionService {
       vocabulary,
       householdLines: this.householdLines(simId, report),
       directorLines: this.directorLines(simId),
+      intentionLines: this.rows()?.promptLines(simId) ?? [],
     };
   }
 
@@ -779,7 +807,56 @@ export class CognitionService {
         });
       });
 
+    // The row lane (autonomy part 5): rows go first. For each household Sim not in flight,
+    // not gating, not cooling down and not suspended, sync the list and fire the first row
+    // whose preconditions hold; the legacy tick below deliberates a Sim only when no row
+    // fired for them this report and none is in flight (decision 11).
+    const intentions = this.rows();
+    const rowFired = new Set<string>();
+    if (intentions) {
+      entries
+        .filter((entry) => entry.is_household !== false && entry.sim_id)
+        .forEach((entry) => {
+          try {
+            intentions.sync(entry, report);
+          } catch (error) {
+            log.warn(`[Rows] sync failed for sim ${entry.sim_id}`, error);
+            return;
+          }
+          const runtime = this.runtime(entry.sim_id);
+          if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+            return;
+          }
+          if (runtime.phase === 'COOLDOWN' && now < runtime.cooldownUntil) {
+            return;
+          }
+          if (this.suspended(entry)) {
+            return;
+          }
+          const row = intentions.pick(entry, report, {
+            suppressed: (key) =>
+              this.recentlyFailedActions(runtime).has(key) || (runtime.fixIneligibleUntil.get(key) ?? 0) > now,
+            usable: this.usableVerbs(entry, report),
+          });
+          if (!row) {
+            return;
+          }
+          if (row.what.kind === 'deliberate') {
+            if (deliberating >= maxConcurrent) {
+              return;
+            }
+            deliberating += 1;
+          }
+          rowFired.add(entry.sim_id);
+          void this.fireRow(entry, report, row).catch((error: unknown) => {
+            log.error(`[Rows] firing ${row.id} crashed for sim ${entry.sim_id}`, error);
+            this.toCooldown(entry.sim_id);
+          });
+        });
+    }
+
     const candidates = entries
+      .filter((entry) => !rowFired.has(entry.sim_id) && !(intentions?.hasInFlight(entry.sim_id) ?? false))
       .filter((entry) => this.isEligible(entry, report, now))
       .sort((a, b) => this.urgencyScore(b, report) - this.urgencyScore(a, report));
 
@@ -811,6 +888,8 @@ export class CognitionService {
     if (event.request_id && runtime.pendingRequestId && event.request_id !== runtime.pendingRequestId) {
       return;
     }
+    // The row that fired this push hears every outcome, late ones included (part 5)
+    this.autonomy.intentions?.onOutcome(event);
     const suspect = event.outcome === 'success' && event.verdict === 'suspect';
     if (runtime.phase !== 'PENDING_OUTCOME') {
       pushdiag(event.request_id, 'outcome', {
@@ -1352,6 +1431,10 @@ export class CognitionService {
     if (typeof energy === 'number' && energy < TOO_TIRED_TO_GO_OUT) {
       suppressed.add('go_out');
     }
+    // A live note row (work in an hour, a visitor due) holds the travel verbs (part 5)
+    this.rows()
+      ?.heldKeys(simId, report)
+      .forEach((key) => suppressed.add(key));
 
     // Daily plan: household sims carry a per-game-day plan (goals + persona + action
     // loadout). No plan for today yet (app restart, never slept) — fire the lazy
@@ -1664,17 +1747,22 @@ export class CognitionService {
     if (
       !entry ||
       !report ||
-      runtime.gating ||
+      (runtime.gating && !runtime.activeRowId) ||
       runtime.phase === 'DELIBERATING' ||
       runtime.phase === 'PENDING_OUTCOME'
     ) {
-      this.armDesireFromScene(simId, desire);
+      // A row firing this very desire must not arm a second one (part 5)
+      if (!runtime.activeRowId) {
+        this.armDesireFromScene(simId, desire);
+      }
       return { acted: false };
     }
     // The tick's own gates (part 4): asleep, mid-social or in a WickedWhims scene arms the
     // desire for later; the hourly budget counts this deliberation like any other
     if (isAsleep(entry) || entry.activity?.in_social || entry.self?.in_ww_scene) {
-      this.armDesireFromScene(simId, desire);
+      if (!runtime.activeRowId) {
+        this.armDesireFromScene(simId, desire);
+      }
       return { acted: false };
     }
     const now = Date.now();
@@ -1703,6 +1791,9 @@ export class CognitionService {
       if (typeof energy === 'number' && energy < TOO_TIRED_TO_GO_OUT) {
         suppressed.add('go_out');
       }
+      this.rows()
+        ?.heldKeys(simId, report)
+        .forEach((key) => suppressed.add(key));
       const ageBlocked = entry.self?.age_blocked ?? [];
       // Idle and self-care verbs the conversation never brought up are off the menu:
       // out of the vocabulary the director sees AND caught by validateIntent if a stage
@@ -1854,6 +1945,16 @@ export class CognitionService {
       }
       runtime.pendingConversation = undefined;
       clearTimeout(pending.timer);
+      // Part 5: for a household Sim the follow-through becomes a row that waits for a moment
+      const intentions = this.rows();
+      if (intentions && this.ctx.simStateCache.getSim(simId)?.is_household === true) {
+        const added = intentions.addDeliberateRow(simId, { source: 'conversation', desire: pending.desire });
+        if (added) {
+          log.info(`[Cognition] sim ${simId}: scene ${sceneId} closed; the conversation action is row ${added.id}`);
+          pending.resolve({ acted: false, deferred: true });
+          return;
+        }
+      }
       log.info(`[Cognition] sim ${simId}: scene ${sceneId} closed; acting on the conversation now`);
       void this.actOnReleasedConversation(simId, pending);
     });
@@ -1905,6 +2006,11 @@ export class CognitionService {
       log.info(
         `[Cognition] sim ${simId} is already doing '${runningKey ?? runningTuning}' (autonomy); '${intent.action}' counted as continue`,
       );
+      if (runtime.activeRowId) {
+        // Collision 8: an echo satisfies the row (the beat is taken, a one-shot row is done)
+        this.autonomy.intentions?.onStoodDown(runtime.activeRowId, { echo: true });
+        runtime.activeRowId = undefined;
+      }
       this.toCooldown(simId);
       return false;
     }
@@ -1953,6 +2059,7 @@ export class CognitionService {
         // reply it came from and the player's own clicks. It now queues like any push.
         source,
         pie: intent.pie,
+        row_id: runtime.activeRowId,
       });
       runtime.phase = 'PENDING_OUTCOME';
       runtime.pendingRequestId = requestId;
@@ -1962,6 +2069,10 @@ export class CognitionService {
       runtime.pendingIntent = { intent, entry, retriesLeft: Math.min(3, Math.max(0, intent.retries ?? 1)) };
       this.stats.dispatches += 1;
       this.armPendingTimeout(simId, runtime, entry, intent);
+      if (runtime.activeRowId) {
+        this.autonomy.intentions?.markInFlight(runtime.activeRowId, requestId, intent.target_object_id);
+        runtime.activeRowId = undefined;
+      }
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId}, ${source})`);
       return true;
     } catch (error) {
@@ -1983,10 +2094,176 @@ export class CognitionService {
       return;
     }
     const runtime = this.runtime(simId);
+    // Part 5: a household Sim's desire becomes a row that waits for a moment (collision 1:
+    // before the first report, or for an NPC, today's armed path)
+    const intentions = this.rows();
+    if (intentions && this.ctx.simStateCache.getSim(simId)?.is_household === true) {
+      const added = intentions.addDeliberateRow(simId, { source: 'scene', desire });
+      if (added) {
+        return;
+      }
+    }
     runtime.armedDesire = { ...desire, at: Date.now() };
     log.info(
       `[Cognition] sim ${simId} armed action desire ${desire.score}${desire.reason ? ` (${desire.reason})` : ''}`,
     );
+  }
+
+  // --- firing a row (autonomy part 5) -------------------------------------------------------
+
+  // A whitelist verb this report can serve: a provider object the mod listed, a lot verb
+  // (pay_bills while bills are due), or a social (the mod finds the Sim)
+  private usableVerbs(entry: SimStateEntry, report: SimStateReport): (key: string) => boolean {
+    const offered = offeredActions(entry, report.lot?.action_keys);
+    return (key) => offered.objectActions.has(key) || offered.lotActions.has(key) || SOCIAL_ACTIONS.has(key);
+  }
+
+  // The intent a pie or action row dispatches: the mod resolves the target ('find') unless
+  // the row names a Sim; retries 0 so maybeRetryTransient never re-dispatches under a request
+  // id the row never knew (collision 4)
+  private rowIntent(
+    row: IntentionRow,
+    intentions: IntentionService,
+    usable: (key: string) => boolean,
+  ): CognitionIntent | undefined {
+    if (row.what.kind === 'action') {
+      const action = intentions.actionFor(row, usable);
+      if (!action) {
+        return undefined;
+      }
+      return {
+        kind: 'action',
+        action,
+        target_sim_id: row.target?.sim_id,
+        motivation: row.why,
+        retries: 0,
+      };
+    }
+    if (row.what.kind === 'pie') {
+      const [first] = row.what.candidates;
+      if (!first) {
+        return undefined;
+      }
+      return {
+        kind: 'action',
+        action: first,
+        target_sim_id: row.target?.sim_id,
+        motivation: row.why,
+        retries: 0,
+        pie: {
+          target_kind: 'find',
+          target_id: row.target?.sim_id,
+          item: first,
+          candidates: [...row.what.candidates],
+          label: row.what.label,
+        },
+      };
+    }
+    return undefined;
+  }
+
+  // Fire one row: the `row` gate for a click (a deliberate row gates itself on its own
+  // lane), then the dispatch (action / pie), the existing deliberation with the row as the
+  // armed desire (scene), or the existing conversation follow-through (conversation).
+  // Every path that does not dispatch ends in toCooldown, which reports the row stood down.
+  private async fireRow(entry: SimStateEntry, report: SimStateReport, row: IntentionRow): Promise<void> {
+    const simId = entry.sim_id;
+    const runtime = this.runtime(simId);
+    const intentions = this.autonomy.intentions;
+    if (!intentions) {
+      return;
+    }
+    runtime.activeRowId = row.id;
+    if (row.what.kind === 'deliberate') {
+      intentions.markFired(row.id, '');
+      const { desire } = row.what;
+      if (row.source === 'conversation' && desire.transcript !== undefined && desire.speaker !== undefined) {
+        await this.actOnConversation(simId, {
+          score: desire.score,
+          reason: desire.reason,
+          thought: desire.thought,
+          speaker: desire.speaker,
+          transcript: desire.transcript,
+          speakerKind: desire.speakerKind,
+          targetSimId: desire.targetSimId,
+          sceneId: undefined,
+        });
+      } else {
+        runtime.armedDesire = {
+          score: Math.max(desire.score, this.ctx.settings.cognitionActionScoreThreshold),
+          reason: desire.reason,
+          thought: desire.thought,
+          at: Date.now(),
+          targetSimId: desire.targetSimId,
+        };
+        runtime.rowArmed = true;
+        try {
+          await this.deliberate(entry, report);
+        } finally {
+          runtime.rowArmed = false;
+        }
+      }
+      if (runtime.activeRowId === row.id) {
+        intentions.onStoodDown(row.id, { reason: 'no dispatch' });
+        runtime.activeRowId = undefined;
+      }
+      return;
+    }
+    const intent = this.rowIntent(row, intentions, this.usableVerbs(entry, report));
+    if (!intent) {
+      intentions.onStoodDown(row.id, { reason: 'nothing to click' });
+      runtime.activeRowId = undefined;
+      return;
+    }
+    runtime.gating = true;
+    try {
+      const gate = await this.gateFor(simId, 'row', row.target?.sim_id);
+      if (this.inFlight(simId)) {
+        intentions.onStoodDown(row.id, { gate: true });
+        runtime.activeRowId = undefined;
+        return;
+      }
+      if (!gate.open) {
+        // The moment, not the row, said no: the row stays waiting at no cost
+        intentions.onStoodDown(row.id, { gate: true });
+        runtime.activeRowId = undefined;
+        this.refuseAtGate(simId, 'row', gate);
+        return;
+      }
+    } finally {
+      runtime.gating = false;
+    }
+    intentions.markFired(row.id, `-> ${intent.action}${intent.pie ? ' (pie)' : ''}`);
+    this.dispatchChosenIntent({ simId, entry, runtime, intent, source: 'cognition' });
+  }
+
+  // The debug route: fire a row now, past the pace and the preconditions (the gate still
+  // applies). Returns what happened in a word.
+  async fireRowNow(simId: string, rowId: string): Promise<{ ok: boolean; error?: string; row?: IntentionRow }> {
+    const intentions = this.rows();
+    if (!intentions) {
+      return { ok: false, error: 'intention rows are off or not part of this build' };
+    }
+    const entry = this.ctx.simStateCache.getSim(simId);
+    const report = this.ctx.simStateCache.getReport();
+    if (!entry || !report) {
+      return { ok: false, error: `no state report for sim ${simId}` };
+    }
+    const row = intentions.rowsFor(simId).find((candidate) => candidate.id === rowId);
+    if (!row) {
+      return { ok: false, error: `sim ${simId} has no row ${rowId}` };
+    }
+    if (row.status !== 'waiting' && row.status !== 'asleep') {
+      return { ok: false, error: `row ${rowId} is ${row.status}` };
+    }
+    const runtime = this.runtime(simId);
+    if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
+      return { ok: false, error: `sim ${simId} is ${runtime.phase}` };
+    }
+    row.status = 'waiting';
+    row.sleep = undefined;
+    await this.fireRow(entry, report, row);
+    return { ok: true, row: intentions.rowsFor(simId).find((candidate) => candidate.id === rowId) };
   }
 
   // The Action Scene: a choose-your-own-adventure beat. The director writes 3-5 options
@@ -2329,6 +2606,8 @@ export class CognitionService {
       if (runtime.pendingAction) {
         runtime.suppressedUntil.set(runtime.pendingAction, Date.now() + BENIGN_CLOSE_SUPPRESS_MS);
       }
+      // The row that fired it goes back to waiting (part 5)
+      this.autonomy.intentions?.onTimeout(runtime.pendingRequestId);
       // Release the dispatcher's in-flight entry too — otherwise a lost dispatch (mod
       // websocket down) blocks every future dispatch for this sim until the 10-min TTL
       this.autonomy.actionDispatcher.release?.(runtime.pendingRequestId);
@@ -2429,5 +2708,14 @@ export class CognitionService {
     const runtime = this.runtime(simId);
     runtime.phase = 'COOLDOWN';
     runtime.cooldownUntil = Date.now() + this.ctx.settings.cognitionTickIntervalSeconds * 1000 * multiplier;
+    // A row that was firing and never dispatched stood down (part 5); a desire it armed must
+    // not linger for the legacy tick (collision 2)
+    if (runtime.activeRowId) {
+      this.autonomy.intentions?.onStoodDown(runtime.activeRowId);
+      runtime.activeRowId = undefined;
+    }
+    if (runtime.rowArmed) {
+      runtime.armedDesire = undefined;
+    }
   }
 }

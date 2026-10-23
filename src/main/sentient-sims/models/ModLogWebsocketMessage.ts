@@ -39,7 +39,17 @@ export type CognitionHoldReleased = {
   ran?: boolean;
 };
 
-export type CognitionModMessage = CognitionQueryResult | CognitionHoldReleased;
+// The game marked a goal done (interactions/ss_goal_events.py): WhimCompleted names the want,
+// AspirationGoalComplete is a nudge to re-read the goal pool (autonomy part 5)
+export type CognitionGoalCompleted = {
+  kind: 'goal_completed';
+  sim_id: string;
+  sim_name?: string;
+  whim?: string;
+  source: 'whim' | 'aspiration';
+};
+
+export type CognitionModMessage = CognitionQueryResult | CognitionHoldReleased | CognitionGoalCompleted;
 
 // One tool as the mod's registry describes it (plum/ss_plum_tools.py catalogue())
 export type PlumModToolDef = {

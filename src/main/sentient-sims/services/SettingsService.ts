@@ -314,6 +314,21 @@ export function defaultStore(cwd?: string) {
         // The moment gate before every model lane; off = the pre-2026-10-21 behaviour
         default: true,
       },
+      [SettingsEnum.INTENTION_ROWS_ENABLED.toString()]: {
+        type: 'boolean',
+        // The row lane (autonomy part 5); off = chat 1's behaviour, rows never seeded or fired
+        default: true,
+      },
+      [SettingsEnum.INTENTION_BEAT_MINUTES.toString()]: {
+        type: 'number',
+        // One beat per Sim per this many sim-minutes (need rows are exempt)
+        default: 120,
+      },
+      [SettingsEnum.INTENTION_NEED_FLOOR.toString()]: {
+        type: 'number',
+        // A need under this gets a row; the -85 critical rule lane sits below it untouched
+        default: -60,
+      },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
         // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
@@ -1313,6 +1328,20 @@ export class SettingsService {
 
   get cognitionGateEnabled(): boolean {
     return this.get(SettingsEnum.COGNITION_GATE_ENABLED) !== false;
+  }
+
+  get intentionRowsEnabled(): boolean {
+    return this.get(SettingsEnum.INTENTION_ROWS_ENABLED) !== false;
+  }
+
+  get intentionBeatMinutes(): number {
+    const raw = Number(this.get(SettingsEnum.INTENTION_BEAT_MINUTES));
+    return Math.min(480, Math.max(15, Number.isFinite(raw) ? raw : 120));
+  }
+
+  get intentionNeedFloor(): number {
+    const raw = Number(this.get(SettingsEnum.INTENTION_NEED_FLOOR));
+    return Math.min(-20, Math.max(-84, Number.isFinite(raw) ? raw : -60));
   }
 
   get dailyLoadoutSize(): number {

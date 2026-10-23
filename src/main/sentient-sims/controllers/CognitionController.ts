@@ -274,6 +274,33 @@ export class CognitionController {
     );
   };
 
+  // Intention rows (autonomy part 5): the whole list per Sim, or one Sim's (decision 13:
+  // this and the mod's `[Rows]` log lines are the inspection surface)
+  @CatchErrors()
+  getRows = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    if (simId) {
+      res.json({ sim_id: simId, rows: this.autonomy.intentions.rowsFor(simId) });
+      return;
+    }
+    res.json(this.autonomy.intentions.all());
+  };
+
+  // Dev seam: fire one row now, past the pace and the preconditions (the gate still applies)
+  debugFireRow = async (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId, row_id: rowId } = req.body as { sim_id?: string; row_id?: string };
+      if (!simId || !rowId) {
+        return res.status(400).json({ error: 'sim_id and row_id are required' });
+      }
+      const result = await this.autonomy.cognitionService.fireRowNow(simId, rowId);
+      return res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      log.error('Error firing an intention row', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
   // Dev seam: ask the mod for a sim's perception snapshot; the mod replies by POSTing
   // it back to /cognition/perception with the same request_id
   debugRequestPerception = (req: Request, res: Response) => {

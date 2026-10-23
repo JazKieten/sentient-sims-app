@@ -12,7 +12,7 @@
 import log from 'electron-log';
 import { randomUUID } from 'crypto';
 import { ModCognitionQuery, ModWebsocketMessageType, WebsocketNotification } from '../models/ModWebsocketMessage';
-import { CognitionHoldReleased, CognitionModMessage } from '../models/ModLogWebsocketMessage';
+import { CognitionGoalCompleted, CognitionHoldReleased, CognitionModMessage } from '../models/ModLogWebsocketMessage';
 import { isWebSocketConnected, sendModNotification } from '../websocketServer';
 
 export type ModQueryResult<T> = { ok: true; result: T } | { ok: false; error: string };
@@ -31,6 +31,9 @@ export class ModQueryService {
   private readonly pending = new Map<string, PendingQuery>();
 
   private readonly holdListeners: ((event: CognitionHoldReleased) => void)[] = [];
+
+  // The game marked a goal done (autonomy part 5; the mod's ss_goal_events)
+  private readonly goalListeners: ((event: CognitionGoalCompleted) => void)[] = [];
 
   // Seam for tests; production sends over the mod websocket
   sendToMod(message: WebsocketNotification) {
@@ -112,6 +115,15 @@ export class ModQueryService {
           }
         });
         return true;
+      case 'goal_completed':
+        this.goalListeners.forEach((listener) => {
+          try {
+            listener(message);
+          } catch (error) {
+            log.warn('[ModQuery] goal listener failed', error);
+          }
+        });
+        return true;
       default:
         // A kind a newer mod may add: not ours to drop on the floor loudly
         return false;
@@ -120,6 +132,10 @@ export class ModQueryService {
 
   onHoldReleased(listener: (event: CognitionHoldReleased) => void) {
     this.holdListeners.push(listener);
+  }
+
+  onGoalCompleted(listener: (event: CognitionGoalCompleted) => void) {
+    this.goalListeners.push(listener);
   }
 
   // The websocket closed: nothing pending can be answered now

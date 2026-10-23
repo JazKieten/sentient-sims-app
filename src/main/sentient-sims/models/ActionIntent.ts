@@ -51,6 +51,8 @@ export type ActionIntent = {
   motivation?: string;
   // A pie-menu row instead of a whitelist verb: the mod clicks this item
   pie?: PieIntent;
+  // The intention row this push fires (autonomy part 5)
+  row_id?: string;
 };
 
 // What the mod reports back after a dispatched interaction finishes
@@ -98,4 +100,6 @@ export type InteractionOutcomeEvent = {
   // wedged in the head SI that starved the push is not a success.
   sim_running?: string;
   game_clock?: { absolute_day?: number; hour?: number; minute?: number };
+  // The intention row the push fired (autonomy part 5), echoed by the mod
+  row_id?: string;
 };

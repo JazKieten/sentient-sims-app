@@ -48,6 +48,30 @@ describe('cognition routes', () => {
     });
   });
 
+  it('the intention rows are inspectable and the debug fire answers without a report', async () => {
+    const list = await fetch(`${apiUrl}/cognition/rows/555`).then(
+      (response) => response.json() as Promise<Record<string, unknown>>,
+    );
+    expect(list).toEqual({ sim_id: '555', rows: [] });
+    const all = await fetch(`${apiUrl}/cognition/rows`).then(
+      (response) => response.json() as Promise<Record<string, unknown>>,
+    );
+    expect(all).toEqual({});
+    const missing = await fetch(`${apiUrl}/cognition/debug/rows/fire`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555' }),
+    });
+    expect(missing.status).toBe(400);
+    const fire = await fetch(`${apiUrl}/cognition/debug/rows/fire`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555', row_id: 'i000001' }),
+    });
+    expect(fire.status).toBe(409);
+    expect(await fire.json()).toMatchObject({ ok: false });
+  });
+
   it('debug enqueue dispatches an ENQUEUE_INTERACTION message and the outcome becomes a memory', async () => {
     const enqueue = await post('/cognition/debug/enqueue', {
       sim_id: '123',

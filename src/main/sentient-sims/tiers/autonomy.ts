@@ -21,15 +21,21 @@ import { CognitionController } from '../controllers/CognitionController';
 import { createSleepPlanner } from '../services/SleepPlanner';
 import { DirectorService } from '../services/DirectorService';
 import { ModQueryService } from '../services/ModQueryService';
+import { IntentionRepository } from '../db/IntentionRepository';
+import { IntentionService } from '../services/intentions/IntentionService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
+  // The intention rows' own table (autonomy part 5)
+  intentionRepository: IntentionRepository;
   actionOutcomeRepository: ActionOutcomeRepository;
   actionDispatcher: ActionDispatcherService;
   // Cognition's questions to the mod before a model call (the moment gate, the vocabulary)
   modQuery: ModQueryService;
   outcomeVerdict: OutcomeVerdictService;
   dailyPlan: DailyPlanService;
+  // The ordered row list per household Sim (autonomy part 5)
+  intentions: IntentionService;
   cognitionService: CognitionService;
   askAction: AskActionService;
   voiceCommand: VoiceCommandService;
@@ -52,11 +58,14 @@ function construct(ctx: ApiContext) {
   // from it when it runs
   const autonomy = {} as AutonomyServices;
   autonomy.dailyPlanRepository = new DailyPlanRepository(ctx.db);
+  autonomy.intentionRepository = new IntentionRepository(ctx.db);
   autonomy.actionOutcomeRepository = new ActionOutcomeRepository(ctx.db);
   autonomy.actionDispatcher = new ActionDispatcherService();
   autonomy.modQuery = new ModQueryService();
   autonomy.outcomeVerdict = new OutcomeVerdictService(autonomy.actionOutcomeRepository);
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
+  // Needs modQuery for the game's goal_completed events
+  autonomy.intentions = new IntentionService(ctx, autonomy);
   // Subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
   autonomy.cognitionService = new CognitionService(ctx, autonomy);
   autonomy.askAction = new AskActionService(ctx, autonomy);
@@ -136,6 +145,10 @@ function routes(app: Express, ctx: ApiContext) {
   app.post('/cognition/debug/perception', controller.debugRequestPerception);
   // F5: graded outcomes for the loaded save
   app.get('/ai/outcomes', controller.getOutcomes);
+  // Intention rows (part 5): the inspection surface and the debug fire
+  app.get('/cognition/rows', controller.getRows);
+  app.get('/cognition/rows/:simId', controller.getRows);
+  app.post('/cognition/debug/rows/fire', controller.debugFireRow);
 }
 
 export const autonomyTier: TierRegistration = {
@@ -149,10 +162,13 @@ export const autonomyTier: TierRegistration = {
     const autonomy = autonomyOf(ctx);
     autonomy.modQuery.onModDisconnected();
     autonomy.cognitionService.onModDisconnected();
+    autonomy.intentions.onModDisconnected();
   },
   onDatabaseLoaded: (ctx) => {
     // The bounding pass for the graded outcomes this save holds (F5)
     autonomyOf(ctx).outcomeVerdict.pruneOnLoad();
+    // Rows are per save
+    autonomyOf(ctx).intentions.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {
     // A reply to the player that wanted to act may act now that it has been heard
@@ -160,5 +176,6 @@ export const autonomyTier: TierRegistration = {
   },
   shutdown: (ctx) => {
     autonomyOf(ctx).director.stop();
+    autonomyOf(ctx).intentions.flush();
   },
 };

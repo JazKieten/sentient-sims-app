@@ -73,6 +73,11 @@ export enum SettingsEnum {
   COGNITION_VOCABULARY = 'cognitionVocabulary',
   // Autonomy part 1: every cognition lane asks the mod's moment predicate before a model call
   COGNITION_GATE_ENABLED = 'cognitionGateEnabled',
+  // Autonomy part 5: the intention rows (the day loop's ordered list), the pace between
+  // beats in sim-minutes, and the need floor under which a need row exists
+  INTENTION_ROWS_ENABLED = 'intentionRowsEnabled',
+  INTENTION_BEAT_MINUTES = 'intentionBeatMinutes',
+  INTENTION_NEED_FLOOR = 'intentionNeedFloor',
   // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
   DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
   DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',

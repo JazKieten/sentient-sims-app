@@ -167,10 +167,14 @@ export type ModAddBuff = ModWebsocketMessage & {
 // carries it in every build; only the autonomy tier ever fills it.
 export type PieIntent = {
   target_id?: string;
-  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone';
+  // 'find' (autonomy part 5): an intention row with no target of its own; the mod resolves a Sim
+  // id in target_id or the nearest object providing one of the candidates
+  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone' | 'find';
   item: string;
   label?: string;
   option?: string;
+  // Tuning names tried in order on the built menu; the first runnable one is clicked
+  candidates?: string[];
 };
 
 // Pushes a whitelisted action into a sim's interaction queue. The mod resolves the action key
@@ -194,6 +198,8 @@ export type ModEnqueueInteraction = ModWebsocketMessage & {
   source: string;
   // A pie-menu click instead of a whitelist verb (autonomy part 2, 2026-10-21)
   pie?: PieIntent;
+  // The intention row this push fires (autonomy part 5); rides the outcome body for the log
+  row_id?: string;
 };
 
 // Asks the mod for one sim's perception snapshot; the mod replies by POSTing the

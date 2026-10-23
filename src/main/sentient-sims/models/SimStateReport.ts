@@ -127,6 +127,26 @@ export type GoalPoolEntry = {
   // Absent on older mods (treated as unknown, never as unreachable).
   action_keys?: string[];
   reachable?: boolean;
+  // Autonomy part 5: the tuning names the goal's own test counts (a row's pie candidates), the
+  // Sim a targeted want is about, and the want's first-person text (the row's `why`)
+  affordances?: string[];
+  target_sim_id?: string;
+  target_name?: string;
+  text?: string;
+};
+
+// A scheduled drama node inside the next day that names this Sim (perception/ss_drama_ahead.py,
+// autonomy tier of the mod): the row list holds travel around it and the prompt hears of it
+export type DramaAhead = {
+  node: string;
+  uid?: string;
+  hour?: number;
+  minute?: number;
+  absolute_day?: number;
+  in_minutes: number;
+  role: 'receiver' | 'sender';
+  other_sim_id?: string;
+  other_name?: string;
 };
 
 export type SimSelfStatus = {
@@ -154,6 +174,8 @@ export type SimSelfStatus = {
   asleep?: boolean;
   // Household sims only; capped at 12 (durable goals first, wants fill the rest)
   goal_pool?: GoalPoolEntry[];
+  // Autonomy part 5: drama ahead for a household Sim (absent on a core mod)
+  drama?: DramaAhead[];
 };
 
 export type SimActivity = {

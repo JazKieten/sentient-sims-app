@@ -29,6 +29,8 @@ export type CognitionPromptExtras = {
   householdLines?: string[];
   // Plum's active beat (a director has <sim> on <doing>), never more than two lines
   directorLines?: string[];
+  // The Sim's intention rows for the day, in order, with what each waits for (part 5)
+  intentionLines?: string[];
 };
 
 // Core since release 4.5 (util/jsonBlock, util/formatSelfStatus); re-exported for the
@@ -257,6 +259,9 @@ export function buildCognitionUserPrompt(
   }
   if (extras?.householdLines?.length) {
     sections.push(extras.householdLines.join('\n'));
+  }
+  if (extras?.intentionLines?.length) {
+    sections.push(extras.intentionLines.join('\n'));
   }
   if (extras?.directorLines?.length) {
     sections.push(extras.directorLines.slice(0, 2).join('\n'));

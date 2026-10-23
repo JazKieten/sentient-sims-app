@@ -430,6 +430,18 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       );
       `);
     },
+    // Intention rows (autonomy part 5, 2026-10-21): a household Sim's ordered row list for
+    // one game day, as JSON. Its OWN table, never a daily_plan column: that row's existence is
+    // what the lazy planner keys on, and a Sim with rows but no plan must not get a plan row.
+    '026-create-intention-rows': `
+      CREATE TABLE intention_rows (
+        sim_id               TEXT NOT NULL  ,
+        absolute_day         INTEGER NOT NULL  ,
+        rows                 TEXT     ,
+        updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        PRIMARY KEY ( sim_id, absolute_day )
+      );
+    `,
   }),
 );
 

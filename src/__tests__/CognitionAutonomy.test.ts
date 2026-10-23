@@ -6,6 +6,8 @@ import { ApiContext } from 'main/sentient-sims/services/ApiContext';
 import { SimStateEntry, SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { ActionIntent, VocabularyRow } from 'main/sentient-sims/models/ActionIntent';
 import type { ModQueryResult } from 'main/sentient-sims/services/ModQueryService';
+import { IntentionService } from 'main/sentient-sims/services/intentions/IntentionService';
+import type { IntentionRow } from 'main/sentient-sims/models/IntentionRow';
 
 // Autonomy parts 1-4 (2026-10-21): every lane asks the mod's moment predicate before a model
 // call (the gate), the options stage offers the mod's pie-menu rows and the choice goes back
@@ -28,6 +30,8 @@ type CtxOptions = {
   arc?: string;
   tickIntervalSeconds?: number;
   maxConcurrent?: number;
+  // Part 5: the row lane on, with a REAL IntentionService over a Map repository
+  rows?: boolean;
 };
 
 const HIGH_SCORES = '{"memory": 4, "action": 9, "action_reason": "I want a snack."}';
@@ -81,6 +85,10 @@ function buildCtx(options: CtxOptions = {}) {
       cognitionActionScoreThreshold: 7,
       cognitionGateEnabled: options.gateEnabled ?? true,
       cognitionVocabulary: options.vocabulary ?? 'whitelist',
+      // Off by default so the parts 1-4 cases keep the legacy paths (collision 12)
+      intentionRowsEnabled: options.rows ?? false,
+      intentionBeatMinutes: 120,
+      intentionNeedFloor: -60,
       conversationActionsFromViewers: false,
       conversationActionsEnabled: true,
       conversationActionScoreThreshold: 8,
@@ -138,6 +146,8 @@ function buildCtx(options: CtxOptions = {}) {
       onHoldReleased: (listener: (event: { sim_id: string; interaction_id: string }) => void) => {
         holdListeners.push(listener);
       },
+      // The rows' listener for the game's goal events (part 5); no test fires one here
+      onGoalCompleted: () => undefined,
     },
     memoryRepository: { createMemory: () => ({ id: 1 }) },
     memoryRetrieval: { retrieve: () => Promise.resolve([]) },
@@ -148,13 +158,24 @@ function buildCtx(options: CtxOptions = {}) {
       generateLazy: () => Promise.resolve(),
     },
   } as unknown as ApiContext;
+  const storedRows = new Map<string, IntentionRow[]>();
+  (ctx as unknown as { intentions: IntentionService }).intentions = new IntentionService(ctx, {
+    intentionRepository: {
+      getRows: (simId: string, day: number) => storedRows.get(`${simId}|${day}`),
+      saveRows: (simId: string, day: number, rows: IntentionRow[]) => {
+        storedRows.set(`${simId}|${day}`, rows);
+      },
+    } as never,
+    modQuery: (ctx as unknown as { modQuery: AutonomyServices['modQuery'] }).modQuery,
+  });
   const cognition = new CognitionService(ctx, ctx as unknown as AutonomyServices);
   const release = (interactionId: string) => {
     holdListeners.forEach((listener) => {
       listener({ sim_id: '100', interaction_id: interactionId });
     });
   };
-  return { ctx, cache, cognition, dispatched, oneShotCalls, prompts, queries, release };
+  const intentions = (ctx as unknown as { intentions: IntentionService }).intentions;
+  return { ctx, cache, cognition, dispatched, oneShotCalls, prompts, queries, release, intentions };
 }
 
 function report(
@@ -618,5 +639,131 @@ describe('what the prompt sees (part 3)', () => {
     );
     await settle();
     expect(late.prompts[0]).toContain('You are late for work at career Tech (your shift started at 09:00).');
+  });
+});
+
+describe('the intention rows (part 5)', () => {
+  const DAY_CLOCK = { hour: 10, minute: 0, absolute_day: 40, day: 2, paused: false };
+
+  it('a bills row fires as a click through the row gate with no model call, and the tick leaves that Sim alone', async () => {
+    const { cache, cognition, dispatched, oneShotCalls, queries, intentions } = buildCtx({ rows: true });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true },
+        { clock: DAY_CLOCK, bills: { due: true, amount: 300 }, action_keys: ['pay_bills'], funds: 900 },
+      ),
+    );
+    await settle();
+    expect(oneShotCalls).toEqual([]);
+    expect(queries[0]).toEqual({ kind: 'moment', args: { sim_id: '100', lane: 'row' } });
+    expect(dispatched).toHaveLength(1);
+    const rows = intentions.rowsFor('100');
+    expect(dispatched[0]).toMatchObject({
+      sim_id: '100',
+      action: 'pay_bills',
+      source: 'cognition',
+      row_id: rows[0].id,
+    });
+    expect(rows[0].status).toBe('in_flight');
+    expect(cognition.getPhase('100')).toBe('PENDING_OUTCOME');
+    // The outcome closes the row (one-shot until) and the pending state
+    cognition.onOutcome({
+      request_id: 'req-1',
+      sim_id: '100',
+      outcome: 'success',
+      action: 'pay_bills',
+      verdict: 'confirmed',
+    } as never);
+    expect(intentions.rowsFor('100')[0].status).toBe('done');
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+  });
+
+  it('a closed row gate leaves the row waiting at no cost', async () => {
+    const { cache, dispatched, intentions } = buildCtx({
+      rows: true,
+      moment: { ok: true, result: { ok: false, key: 'head_busy', why: 'cooking' } },
+    });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true },
+        { clock: DAY_CLOCK, bills: { due: true, amount: 300 }, action_keys: ['pay_bills'], funds: 900 },
+      ),
+    );
+    await settle();
+    expect(dispatched).toEqual([]);
+    const [bills] = intentions.rowsFor('100');
+    expect(bills.status).toBe('waiting');
+    expect(bills.attempts).toBe(0);
+  });
+
+  it('a scene desire on a household Sim becomes a deliberate row that fires on the next fitting report with the armed lane', async () => {
+    const { cache, cognition, dispatched, oneShotCalls, queries, intentions } = buildCtx({ rows: true });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true, activity: { queue: ['cook'], running: 'cook', in_social: false } },
+        { clock: DAY_CLOCK },
+      ),
+    );
+    await settle();
+    cognition.armDesireFromScene('100', { score: 9, reason: 'wants to clear the air with Adrian', targetSimId: '200' });
+    const [row] = intentions.rowsFor('100');
+    expect(row).toMatchObject({ source: 'scene', status: 'waiting' });
+    expect(row.what.kind).toBe('deliberate');
+    expect(oneShotCalls).toEqual([]);
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    expect(oneShotCalls.some((label) => label.startsWith('Cognition Monologue'))).toBe(false);
+    expect(oneShotCalls.some((label) => label.startsWith('Action Options'))).toBe(true);
+    expect(queries.filter((query) => query.kind === 'moment').map((query) => query.args.lane)).toContain('armed');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].row_id).toBe(row.id);
+    expect(intentions.rowsFor('100')[0].status).toBe('in_flight');
+  });
+
+  it('a live work note holds go_out out of the tick vocabulary', async () => {
+    const careers = [{ career: 'Culinary', next_shift: '10:30:00.000 day:2 week:1', at_work: false }];
+    const on = buildCtx({ rows: true });
+    on.cache.ingest(
+      report(
+        1,
+        { is_household: true, self: { mood: 'Fine', needs: { hunger: 50 }, age: 'ADULT', careers } },
+        { clock: DAY_CLOCK, action_keys: ['go_out'] },
+        { venues: [{ zone_id: '5', name: 'The Blue Velvet', venue: 'bar' }] },
+      ),
+    );
+    await settle();
+    expect([...on.intentions.heldKeys('100', on.cache.getReport())]).toEqual(['go_out', 'travel_to_zone']);
+    expect(on.intentions.rowsFor('100')[0]).toMatchObject({ source: 'work', status: 'waiting' });
+    expect(on.oneShotCalls.some((label) => label.startsWith('Cognition Monologue'))).toBe(true);
+    expect(on.prompts.join('\n')).not.toContain('go_out');
+    const off = buildCtx({ rows: false });
+    off.cache.ingest(
+      report(
+        1,
+        { is_household: true, self: { mood: 'Fine', needs: { hunger: 50 }, age: 'ADULT', careers } },
+        { clock: DAY_CLOCK, action_keys: ['go_out'] },
+        { venues: [{ zone_id: '5', name: 'The Blue Velvet', venue: 'bar' }] },
+      ),
+    );
+    await settle();
+    expect(off.prompts.join('\n')).toContain('go_out');
+  });
+
+  it('with the rows off, bills due means the legacy tick deliberates as in chat 1', async () => {
+    const { cache, dispatched, oneShotCalls, intentions } = buildCtx({ rows: false });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true },
+        { clock: DAY_CLOCK, bills: { due: true, amount: 300 }, action_keys: ['pay_bills'], funds: 900 },
+      ),
+    );
+    await settle();
+    expect(oneShotCalls.some((label) => label.startsWith('Cognition Monologue'))).toBe(true);
+    expect(intentions.rowsFor('100')).toEqual([]);
+    expect(dispatched.every((intent) => intent.row_id === undefined)).toBe(true);
   });
 });

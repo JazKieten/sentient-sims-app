@@ -168,6 +168,47 @@ describe('MemoryRepository', () => {
     expect(ctx.memoryRepository.getMemory({ id: String(memories[1].id) }).content).toBeNull();
   });
 
+  it('should leave excluded event types out of the memories list before the 100-row cap', () => {
+    const ctx = mockApiContext();
+    fs.mkdirSync(ctx.directory.getSentientSimsFolder(), {
+      recursive: true,
+    });
+    ctx.db.loadDatabase({
+      sessionId: '4444444',
+      saveId: '1',
+    });
+
+    const store = (eventType: string | undefined, text: string) =>
+      createMemory(ctx, {
+        memory: { location_id: 1, content: text, event_type: eventType },
+        participants: [],
+      });
+    store('outcome', "Julian Vance tried 'pay_bills' and it succeeded.");
+    store('interaction', 'Julian Vance strikes up a conversation with Adrian House.');
+    store(undefined, 'A row with no event type.');
+
+    // The default list is unchanged: DirectorService and Plum read the outcome rows
+    expect(ctx.memoryRepository.getMemories()).toHaveLength(3);
+
+    const shown = ctx.memoryRepository.getMemories(['outcome']);
+    expect(shown.map((memory) => memory.content).sort()).toEqual([
+      'A row with no event type.',
+      'Julian Vance strikes up a conversation with Adrian House.',
+    ]);
+
+    // A busy lot: the cap counts only the rows that are kept
+    for (let index = 0; index < 120; index += 1) {
+      store('interaction', `Julian Vance does thing number ${index}.`);
+      if (index < 60) {
+        store('outcome', `Julian Vance tried 'verb_${index}' and it succeeded.`);
+      }
+    }
+    const busy = ctx.memoryRepository.getMemories(['outcome']);
+    expect(busy).toHaveLength(100);
+    expect(busy.some((memory) => memory.event_type === 'outcome')).toBe(false);
+    expect(ctx.memoryRepository.getMemories([''])).toHaveLength(100);
+  });
+
   it('should store interaction_name from normal interactions', () => {
     const ctx = mockApiContext();
     fs.mkdirSync(ctx.directory.getSentientSimsFolder(), {

@@ -13,14 +13,14 @@ describe('synthesizeInteractionDescription', () => {
       2,
       'Talk about Recent Studies',
     );
-    expect(description?.pre_actions).toEqual(['{actor.0}: Talk about Recent Studies (with {actor.1})']);
+    expect(description?.pre_actions).toEqual(['{actor.0} is talking about recent studies with {actor.1}.']);
   });
 
   it('does not name the target twice, or at all when the sim is alone', () => {
-    expect(synthesizeInteractionDescription('sim_Chat', 2, 'Chat with Yuki')?.pre_actions).toEqual([
-      '{actor.0}: Chat with Yuki',
-    ]);
-    expect(synthesizeInteractionDescription('seating_Sit', 1, 'Sit')?.pre_actions).toEqual(['{actor.0}: Sit']);
+    expect(synthesizeInteractionDescription('sim_Chat', 2, 'Chat with Yuki', undefined, ['Yuki'])?.pre_actions).toEqual(
+      ['{actor.0} is chatting with Yuki.'],
+    );
+    expect(synthesizeInteractionDescription('seating_Sit', 1, 'Sit')?.pre_actions).toEqual(['{actor.0} is sitting.']);
   });
 
   it('renders to a line the degenerate check lets through', () => {
@@ -28,7 +28,7 @@ describe('synthesizeInteractionDescription', () => {
     const template = description?.pre_actions?.[0] as string;
     const location = { name: 'Home', lot_type: 'Residential', description: '' } as unknown as LocationEntity;
     const rendered = formatAction(template, sims, location);
-    expect(rendered).toEqual('Audrey Bennett: Sit');
+    expect(rendered).toEqual('Audrey Bennett is sitting.');
     expect(isDegeneratePreAction(rendered, template)).toBe(false);
   });
 
@@ -41,13 +41,13 @@ describe('synthesizeInteractionDescription', () => {
       'Play with Elliot Jr',
       'Play with {actor.1}',
     );
-    expect(description?.pre_actions).toEqual(['{actor.0}: Play with {actor.1}']);
+    expect(description?.pre_actions).toEqual(['{actor.0} is playing with {actor.1}.']);
   });
 
   it('does not add the target twice when the template already names them', () => {
     expect(
       synthesizeInteractionDescription('mixer_social_Hug', 2, 'Give Yuki a hug', 'Give {actor.1} a hug')?.pre_actions,
-    ).toEqual(['{actor.0}: Give {actor.1} a hug']);
+    ).toEqual(['{actor.0} is giving {actor.1} a hug.']);
   });
 
   it('renders a template line back to the words the player saw', () => {
@@ -55,7 +55,7 @@ describe('synthesizeInteractionDescription', () => {
     const template = description?.pre_actions?.[0] as string;
     const location = { name: 'Home', lot_type: 'Residential', description: '' } as unknown as LocationEntity;
     const rendered = formatAction(template, sims, location);
-    expect(rendered).toEqual('Audrey Bennett: Chat with Yuki Behr');
+    expect(rendered).toEqual('Audrey Bennett is chatting with Yuki Behr.');
     expect(isDegeneratePreAction(rendered, template)).toBe(false);
   });
 
@@ -65,7 +65,16 @@ describe('synthesizeInteractionDescription', () => {
 
   it('falls back to the tuning name without a label', () => {
     expect(synthesizeInteractionDescription('mixer_social_BabyTalk_targeted', 2)?.pre_actions).toEqual([
-      "{actor.0} is busy with 'baby talk' with {actor.1}.",
+      '{actor.0} is busy with baby talk with {actor.1}.',
+    ]);
+    expect(synthesizeInteractionDescription('sim_Chat_Targeted', 2)?.pre_actions).toEqual([
+      '{actor.0} is chatting with {actor.1}.',
+    ]);
+  });
+
+  it('never writes the label as a line the sim says', () => {
+    expect(synthesizeInteractionDescription('bills_PayBills', 1, 'Pay Bills')?.pre_actions).toEqual([
+      '{actor.0} is paying bills.',
     ]);
   });
 });

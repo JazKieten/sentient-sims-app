@@ -90,13 +90,22 @@ export class MemoryRepository extends Repository {
 
   // This list feeds the in-game memories window, which can't render a null content
   // (see withDisplayContent) — every row it hands out gets a string content.
-  getMemories(): MemoryEntity[] {
+  //
+  // excludeEventTypes is filtered before the 100-row cap, so the window gets 100 rows it
+  // shows rather than 100 rows thinned afterwards (it hides the 'outcome' bookkeeping).
+  getMemories(excludeEventTypes: string[] = []): MemoryEntity[] {
+    const excluded = excludeEventTypes.filter((type) => type.length > 0);
+    const where =
+      excluded.length > 0
+        ? `WHERE event_type IS NULL OR event_type NOT IN (${excluded.map(() => '?').join(', ')})`
+        : '';
     const memories = this.dbService
       .getDb()
       .prepare(
         `
           SELECT * FROM (
             SELECT * FROM memory
+            ${where}
             ORDER BY timestamp DESC
             LIMIT 100
           ) AS subquery
@@ -104,7 +113,7 @@ export class MemoryRepository extends Repository {
         `,
       )
       .safeIntegers()
-      .all() as MemoryRow[];
+      .all(...excluded) as MemoryRow[];
 
     return this.withNameTags(memories.map(toMemoryEntity)).map((memory) => withDisplayContent(memory));
   }

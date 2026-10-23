@@ -12,6 +12,7 @@ import type { InteractionOutcomeEvent } from '../../models/ActionIntent';
 import type { CognitionGoalCompleted } from '../../models/ModLogWebsocketMessage';
 import {
   DeliberateDesire,
+  IntentionEdits,
   IntentionRow,
   RowClears,
   RowClockContext,
@@ -22,7 +23,17 @@ import {
   promptLine,
   untilReached,
 } from '../../models/IntentionRow';
-import { desireRow, mergeSeeds, orderRows, seedRows } from './IntentionSeeds';
+import { desireRow, isImpulseRow, mergeSeeds, orderRows, seedRows, storyRow } from './IntentionSeeds';
+
+// A Sim's day ended as this service saw it: the first sync with a new absolute_day
+// (autonomy part 6: the night call edits the new day's list from the ending one)
+export type DayRollover = {
+  simId: string;
+  endingDay: number;
+  // The ending day's rows as they stood in memory (not a re-read)
+  endingRows: IntentionRow[];
+  newDay: number;
+};
 
 type SimRows = {
   day: number;
@@ -94,6 +105,16 @@ function firstName(entry: SimStateEntry | undefined, simId: string): string {
   return (entry?.sim_name ?? '').trim().split(/\s+/)[0] || `sim ${simId}`;
 }
 
+// A row the list still carries: not finished, not struck
+function isLive(item: IntentionRow): boolean {
+  return item.status !== 'done' && item.status !== 'expired' && item.status !== 'dropped';
+}
+
+// A story row is one beat: done on its first success, whatever its until says
+function doneOnSuccess(item: IntentionRow): boolean {
+  return isOneShotUntil(item.until) || item.source === 'story';
+}
+
 export class IntentionService {
   private readonly ctx: ApiContext;
 
@@ -103,6 +124,11 @@ export class IntentionService {
 
   // Lot-level claims completed recently: claim -> absolute minute (decision 8)
   private readonly claimsDone = new Map<string, number>();
+
+  private readonly rolloverListeners: ((rollover: DayRollover) => void)[] = [];
+
+  // How many edit_intentions calls landed per Sim (the night call reads it around its turn)
+  private readonly editCounts = new Map<string, number>();
 
   constructor(ctx: ApiContext, deps: IntentionServiceDeps) {
     this.ctx = ctx;
@@ -134,6 +160,10 @@ export class IntentionService {
     }
   }
 
+  onDayRollover(listener: (rollover: DayRollover) => void) {
+    this.rolloverListeners.push(listener);
+  }
+
   private stateFor(simId: string, day: number): SimRows {
     let state = this.sims.get(simId);
     if (state && state.day === day) {
@@ -142,6 +172,16 @@ export class IntentionService {
     if (state?.saveTimer) {
       clearTimeout(state.saveTimer);
       this.persist(simId, state);
+    }
+    if (state && day > state.day) {
+      const rollover: DayRollover = { simId, endingDay: state.day, endingRows: state.rows, newDay: day };
+      this.rolloverListeners.forEach((listener) => {
+        try {
+          listener(rollover);
+        } catch (error) {
+          log.warn(`[Rows] a day rollover listener failed for sim ${simId}`, error);
+        }
+      });
     }
     let rows: IntentionRow[] = [];
     if (this.dbLoaded()) {
@@ -246,8 +286,8 @@ export class IntentionService {
       if (item.status === 'waiting' && item.until.kind !== 'once' && untilReached(item, ctx)) {
         // A goal the game marked done before we ever fired it, a bill paid by hand, a need
         // that recovered on its own, a window that closed
-        item.status = item.source === 'scene' || item.source === 'conversation' ? 'expired' : 'done';
-        if (item.until.kind === 'game_time' && (item.source === 'scene' || item.source === 'conversation')) {
+        item.status = isImpulseRow(item) ? 'expired' : 'done';
+        if (item.until.kind === 'game_time' && isImpulseRow(item)) {
           log.info(`[Rows] ${firstName(entry, simId)} ${item.id} expired: ${item.why}`);
         }
       }
@@ -262,15 +302,17 @@ export class IntentionService {
     state.rows = merged;
     if (shape !== state.shape) {
       state.shape = shape;
-      const listed = merged
-        .filter((item) => item.status !== 'done' && item.status !== 'expired')
-        .map((item, index) => `${index + 1}. ${describeRow(item)}`);
-      log.info(`[Rows] ${firstName(entry, simId)} list: ${listed.join(' ') || '(empty)'}`);
+      log.info(`[Rows] ${firstName(entry, simId)} list: ${IntentionService.listLine(merged)}`);
     }
     if (changed) {
       this.markDirty(simId, state);
     }
     void rowsById;
+  }
+
+  private static listLine(rows: IntentionRow[]): string {
+    const listed = rows.filter(isLive).map((item, index) => `${index + 1}. ${describeRow(item)}`);
+    return listed.join(' ') || '(empty)';
   }
 
   private sleepClears(clears: RowClears, ctx: RowClockContext): boolean {
@@ -494,7 +536,7 @@ export class IntentionService {
     }
     if (options.echo) {
       item.history.push({ at: Date.now(), outcome: 'echo' });
-      item.status = isOneShotUntil(item.until) ? 'done' : 'waiting';
+      item.status = doneOnSuccess(item) ? 'done' : 'waiting';
       log.info(`[Rows] ${this.simName(simId)} ${item.id} already doing it${item.status === 'done' ? '; done' : ''}`);
     } else {
       state.lastBeat = state.beatBefore;
@@ -553,7 +595,7 @@ export class IntentionService {
       if (item.claim && now !== undefined) {
         this.claimsDone.set(item.claim, now);
       }
-      if (isOneShotUntil(item.until)) {
+      if (doneOnSuccess(item)) {
         item.status = 'done';
         log.info(`[Rows] ${name} ${item.id} done: ${item.why}`);
       } else {
@@ -663,6 +705,94 @@ export class IntentionService {
     return item;
   }
 
+  // --- the night call's edits (autonomy part 6) ---------------------------------------------
+
+  // Drop, reword, re-rank and add story rows on today's list. Throws when the Sim has no list
+  // today or a row id is unknown, before anything changes (the tool reports the error).
+  applyEdits(simId: string, edits: IntentionEdits): { changed: string } {
+    const state = this.sims.get(simId);
+    const name = this.simName(simId);
+    if (!state) {
+      throw new Error(`no list for ${name} today; the first report of the day seeds it`);
+    }
+    const byId = new Map(state.rows.map((item) => [item.id, item]));
+    const unknown = [...edits.drop, ...edits.rewrite.map((edit) => edit.row_id)].filter((id) => !byId.has(id));
+    if (unknown.length > 0) {
+      const live = state.rows.filter(isLive).map((item) => item.id);
+      throw new Error(`no row ${unknown.join(', ')} on ${name}'s list today (rows: ${live.join(', ') || 'none'})`);
+    }
+    const needDrops = edits.drop.filter((id) => byId.get(id)?.source === 'need');
+    if (needDrops.length > 0) {
+      throw new Error(
+        `${needDrops.join(', ')} ${needDrops.length > 1 ? 'are need rows' : 'is a need row'}; needs are never dropped`,
+      );
+    }
+    const now = Date.now();
+    edits.drop.forEach((id) => {
+      const item = byId.get(id);
+      if (item && item.status !== 'in_flight') {
+        item.status = 'dropped';
+        item.history.push({ at: now, outcome: 'dropped', cause: 'night call' });
+      }
+    });
+    edits.rewrite.forEach((edit) => {
+      const item = byId.get(edit.row_id);
+      if (!item) {
+        return;
+      }
+      if (edit.why) {
+        item.why = edit.why;
+      }
+      if (edit.say) {
+        item.say = edit.say;
+      }
+      if (edit.rank !== undefined) {
+        item.rank = edit.rank;
+      }
+    });
+    const threshold = this.ctx.settings.cognitionActionScoreThreshold;
+    const added = edits.add.map((edit) => storyRow(edit, state.day, threshold));
+    state.rows.push(...added);
+    orderRows(state.rows);
+    state.shape = state.rows.map((item) => item.seedKey).join(',');
+    this.editCounts.set(simId, (this.editCounts.get(simId) ?? 0) + 1);
+    const changed =
+      `${name}'s list: dropped ${edits.drop.length}, rewrote ${edits.rewrite.length}, ` +
+      `added ${added.length} story row${added.length === 1 ? '' : 's'}`;
+    log.info(
+      `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${edits.rewrite.length}, added ${added.length} story rows`,
+    );
+    log.info(`[Rows] ${name} list: ${IntentionService.listLine(state.rows)}`);
+    this.markDirty(simId, state);
+    return { changed };
+  }
+
+  // Whether the Sim has a list for this day (empty or not): edits need one
+  hasList(simId: string, day: number): boolean {
+    return this.sims.get(simId)?.day === day;
+  }
+
+  editsApplied(simId: string): number {
+    return this.editCounts.get(simId) ?? 0;
+  }
+
+  // A day's stored list (the debug night call reads yesterday's)
+  rowsForDay(simId: string, day: number): IntentionRow[] {
+    const state = this.sims.get(simId);
+    if (state && state.day === day) {
+      return [...state.rows];
+    }
+    if (!this.dbLoaded()) {
+      return [];
+    }
+    try {
+      return this.deps.intentionRepository?.getRows(simId, day) ?? [];
+    } catch (error) {
+      log.debug(`[Rows] load failed for sim ${simId} day ${day}: ${String(error)}`);
+      return [];
+    }
+  }
+
   // --- views --------------------------------------------------------------------------------
 
   hasInFlight(simId: string): boolean {
@@ -687,7 +817,7 @@ export class IntentionService {
     if (!state) {
       return [];
     }
-    const live = state.rows.filter((item) => item.status !== 'done' && item.status !== 'expired');
+    const live = state.rows.filter(isLive);
     if (live.length === 0) {
       return [];
     }

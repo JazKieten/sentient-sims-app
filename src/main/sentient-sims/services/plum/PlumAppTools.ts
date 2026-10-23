@@ -18,7 +18,7 @@ import { PlumWhisperService, WhisperItem } from './PlumWhisper';
 import { DIRECTOR_NOTE_MAX_CHARS } from './plumPrompt';
 import { sendModNotification } from '../../websocketServer';
 import { ModWebsocketMessageType, ModWebsocketNotificationType } from '../../models/ModWebsocketMessage';
-import type { ChatPollView } from '../../tiers/types';
+import type { ChatPollView, IntentionEdits, IntentionRewrite, IntentionStoryAdd } from '../../tiers/types';
 
 // The one thing the director_note tool needs of the PlumService running the turn
 export type DirectorNoteStore = { setDirectorNote(note: string): void };
@@ -29,6 +29,12 @@ export const MAX_POLL_OPTION_CHARS = 25;
 export const MAX_POLL_OPTIONS = 5;
 export const MIN_POLL_SECONDS = 30;
 export const MAX_POLL_SECONDS = 600;
+
+// edit_intentions: what one call may change (the night call adds 0 to 4 story rows)
+export const MAX_STORY_ROWS_A_CALL = 4;
+export const MAX_ROW_EDITS_A_CALL = 12;
+export const MAX_SAY_CHARS = 160;
+export const MAX_WHY_CHARS = 200;
 
 const MEMORY_TEXT_CHARS = 400;
 const DEFAULT_MEMORIES = 10;
@@ -136,6 +142,120 @@ function scriptBeats(ctx: ApiContext, raw: unknown): ScriptBeat[] {
     }
     return { simId, simName: ctx.simStateCache.getSim(simId)?.sim_name ?? spec, line, item };
   });
+}
+
+function optionalText(value: unknown, max: number, what: string): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`${what} must be a string or null`);
+  }
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (text.length > max) {
+    throw new Error(`${what} is ${text.length} characters; at most ${max}`);
+  }
+  return text || undefined;
+}
+
+function optionalHour(value: unknown, what: string): number | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 23) {
+    throw new Error(`${what} must be an hour 0..23 or null`);
+  }
+  return Math.floor(value);
+}
+
+// The Sims the report lists, for a refusal that names who is known
+function knownNames(ctx: ApiContext): string {
+  const names = (ctx.simStateCache.getReport()?.sims ?? []).map((sim) => sim.sim_name).filter(Boolean);
+  return names.length > 0 ? names.join(', ') : 'nobody in the state report';
+}
+
+function editList(value: unknown, what: string): unknown[] {
+  if (value === null || value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`\`${what}\` must be a list ([] = none)`);
+  }
+  return value;
+}
+
+function rewriteEdit(raw: unknown, index: number): IntentionRewrite {
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const rowId = typeof entry.row_id === 'string' ? entry.row_id.trim() : '';
+  if (!rowId) {
+    throw new Error(`rewrite[${index}] needs \`row_id\``);
+  }
+  const edit: IntentionRewrite = { row_id: rowId };
+  const why = optionalText(entry.why, MAX_WHY_CHARS, `rewrite[${index}].why`);
+  const say = optionalText(entry.say, MAX_SAY_CHARS, `rewrite[${index}].say`);
+  if (why) {
+    edit.why = why;
+  }
+  if (say) {
+    edit.say = say;
+  }
+  if (entry.rank !== null && entry.rank !== undefined) {
+    if (typeof entry.rank !== 'number' || !Number.isFinite(entry.rank)) {
+      throw new Error(`rewrite[${index}].rank must be a number or null`);
+    }
+    edit.rank = entry.rank;
+  }
+  return edit;
+}
+
+function storyAdd(ctx: ApiContext, raw: unknown, index: number): IntentionStoryAdd {
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const why = optionalText(entry.why, MAX_WHY_CHARS, `add[${index}].why`);
+  const say = optionalText(entry.say, MAX_SAY_CHARS, `add[${index}].say`);
+  if (!why || !say) {
+    throw new Error(`add[${index}] needs \`why\` and \`say\``);
+  }
+  const story: IntentionStoryAdd = { why, say };
+  const fromHour = optionalHour(entry.from_hour, `add[${index}].from_hour`);
+  const toHour = optionalHour(entry.to_hour, `add[${index}].to_hour`);
+  if (fromHour !== undefined && toHour !== undefined && fromHour > toHour) {
+    throw new Error(`add[${index}]: from_hour ${fromHour} is after to_hour ${toHour}`);
+  }
+  if (fromHour !== undefined) {
+    story.from_hour = fromHour;
+  }
+  if (toHour !== undefined) {
+    story.to_hour = toHour;
+  }
+  const targetSpec = optionalText(entry.target, 80, `add[${index}].target`);
+  if (targetSpec) {
+    const targetId = resolveSimId(ctx, targetSpec);
+    if (!targetId) {
+      throw new Error(`add[${index}]: no Sim called '${targetSpec}' is known (known: ${knownNames(ctx)})`);
+    }
+    story.target_sim_id = targetId;
+    story.target_name = ctx.simStateCache.getSim(targetId)?.sim_name ?? targetSpec;
+  }
+  return story;
+}
+
+// edit_intentions' arguments checked by hand (the object arrays keep the tool non-strict)
+export function intentionEdits(ctx: ApiContext, args: Record<string, unknown>): IntentionEdits {
+  const drop = editList(args.drop, 'drop').map((id, index) => {
+    if (typeof id !== 'string' || !id.trim()) {
+      throw new Error(`drop[${index}] must be a row id`);
+    }
+    return id.trim();
+  });
+  const rewrite = editList(args.rewrite, 'rewrite').map((raw, index) => rewriteEdit(raw, index));
+  const add = editList(args.add, 'add').map((raw, index) => storyAdd(ctx, raw, index));
+  if (add.length > MAX_STORY_ROWS_A_CALL) {
+    throw new Error(`at most ${MAX_STORY_ROWS_A_CALL} story rows a call, not ${add.length}`);
+  }
+  if (drop.length > MAX_ROW_EDITS_A_CALL || rewrite.length > MAX_ROW_EDITS_A_CALL) {
+    throw new Error(`at most ${MAX_ROW_EDITS_A_CALL} drops and ${MAX_ROW_EDITS_A_CALL} rewrites a call`);
+  }
+  return { drop, rewrite, add };
 }
 
 // `wakeOf` names the PlumService whose wake-ups wake_me sets (the one running the turn);
@@ -871,6 +991,80 @@ export function buildAppTools(
     },
   };
 
+  // A Sim's intention rows for today (autonomy tier: IntentionService behind ctx.ext.intentions).
+  // The night call's one write; a chat turn may use it when the player asks.
+  const editIntentions: AppTool = {
+    definition: {
+      name: 'edit_intentions',
+      description:
+        "Edit one Sim's intention list for today: the ordered things they mean to do, which the day loop " +
+        'clicks from the pie menu when the moment fits. Row ids come from the night call text (or GET ' +
+        '/cognition/rows). `drop`: row ids that are stale or impossible today (never a need row). `rewrite`: ' +
+        "change a row's `why` (what it is for), `say` (one first-person sentence the Sim says aloud when it " +
+        'fires) or `rank` (lower runs first; null = keep). `add`: 0 to 4 story rows, each something a person ' +
+        "would mean to do, phrased as the Sim's own wish (`why`) with a `say` line in their voice; `target` " +
+        'names a Sim who must be present, `from_hour`/`to_hour` the hours of the day it may fire (null = any). ' +
+        'Never name tuning keys: the day loop picks the click at the moment. [] = no change of that kind.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          sim_id: { type: 'string', description: 'The Sim whose list this is (id or name)' },
+          drop: { type: 'array', items: { type: 'string' }, description: 'Row ids to drop for today' },
+          rewrite: {
+            type: 'array',
+            description: 'Rows to reword or re-rank',
+            items: {
+              type: 'object',
+              properties: {
+                row_id: { type: 'string', description: 'The row' },
+                why: { type: ['string', 'null'], description: `What it is for, at most ${MAX_WHY_CHARS} chars` },
+                say: { type: ['string', 'null'], description: `The line said aloud, at most ${MAX_SAY_CHARS} chars` },
+                rank: { type: ['number', 'null'], description: 'Order (lower first); null = keep' },
+              },
+              required: ['row_id', 'why', 'say', 'rank'],
+              additionalProperties: false,
+            },
+          },
+          add: {
+            type: 'array',
+            description: `Story rows, at most ${MAX_STORY_ROWS_A_CALL}`,
+            items: {
+              type: 'object',
+              properties: {
+                why: { type: 'string', description: "The Sim's wish, first person" },
+                say: { type: 'string', description: 'One sentence the Sim says aloud when it fires' },
+                target: { type: ['string', 'null'], description: 'A Sim it involves (name or id); null = none' },
+                from_hour: { type: ['integer', 'null'], description: 'Earliest hour (0..23); null = any' },
+                to_hour: { type: ['integer', 'null'], description: 'Latest hour (0..23); null = the day end' },
+              },
+              required: ['why', 'say', 'target', 'from_hour', 'to_hour'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['sim_id', 'drop', 'rewrite', 'add'],
+        additionalProperties: false,
+      },
+      risk: 'write',
+      timeout_ms: 5000,
+      tier: 'autonomy',
+    },
+    onlyWith: 'intentions',
+    // A throw here is the tool's error (runTool awaits inside its try)
+    run: (args) => {
+      const slot = ctx.ext.intentions;
+      if (!slot) {
+        throw new Error('this build has no intention rows');
+      }
+      const spec = typeof args.sim_id === 'string' ? args.sim_id.trim() : '';
+      const simId = spec ? resolveSimId(ctx, spec) : undefined;
+      if (!simId) {
+        throw new Error(`no Sim called '${spec}' is known (known: ${knownNames(ctx)})`);
+      }
+      return Promise.resolve(slot.applyEdits(simId, intentionEdits(ctx, args)));
+    },
+  };
+
   // The stream's chat votes on a crossroads (stream tier: ChatPollService behind ctx.ext.chatPoll)
   const pollChat: AppTool = {
     definition: {
@@ -1029,6 +1223,7 @@ export function buildAppTools(
     planScript,
     script,
     directorNote,
+    editIntentions,
     pollChat,
     cancelPoll,
     handOff,

@@ -183,6 +183,33 @@ export interface PlumBrainSlot {
   onThreadReset?(): void;
 }
 
+// AUTONOMY: edits to one Sim's intention rows for today (the night call's edit_intentions
+// tool, also open to a chat turn). Plain data, defined here so core's PlumAppTools never
+// names the tier's row model; models/IntentionRow.ts re-exports them.
+export type IntentionRewrite = { row_id: string; why?: string; say?: string; rank?: number };
+
+// A story row: something the Sim means to do today, in their own words. `from_hour` /
+// `to_hour` are hours of the day (0..23) the row may fire in; a named Sim must be present.
+export type IntentionStoryAdd = {
+  why: string;
+  say: string;
+  target_sim_id?: string;
+  target_name?: string;
+  from_hour?: number;
+  to_hour?: number;
+};
+
+export type IntentionEdits = {
+  drop: string[];
+  rewrite: IntentionRewrite[];
+  add: IntentionStoryAdd[];
+};
+
+export interface IntentionEditSlot {
+  // Throws when the Sim has no list today or an id is unknown; `changed` is the row summary
+  applyEdits(simId: string, edits: IntentionEdits): { changed: string };
+}
+
 // STREAM: a vote Twitch chat casts for Plum (ChatPollService), one at a time. The result
 // wakes Plum with a <chat_poll> turn (PlumWakeService.wakeWith).
 export type ChatPollMode = 'native' | 'chat';
@@ -225,4 +252,6 @@ export interface TierExtensions {
   // AUTONOMY: today's plan as the self-status block renders it
   selfStatusPlan?: (simId: string, absoluteDay: number) => TodaysPlanBlock | undefined;
   plumBrain?: PlumBrainSlot;
+  // AUTONOMY: the intention rows' edit door (edit_intentions)
+  intentions?: IntentionEditSlot;
 }

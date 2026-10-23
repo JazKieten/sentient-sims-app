@@ -32,6 +32,8 @@ import {
 import { memoryRecallText } from '../util/memoryRecallText';
 import { deniedConversationActions } from '../util/conversationActions';
 import { speciesWord } from '../util/alsoPresent';
+import { canSpeak } from '../util/speechCapability';
+import { markScenePaced } from '../util/pacedScenes';
 
 // A sleeping sim has no tick. isAsleep lives in util/simSleep.ts (core: Plum's <live> block
 // reads it too) and is re-exported here for the tier's own callers.
@@ -448,7 +450,7 @@ export class CognitionService {
 
   // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
   private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions'>>;
+    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall'>>;
 
   // The gate's holds: sim id -> the player click the mod said holds that Sim, until the mod's
   // hold_released names it (or HOLD_SAFETY_MS passes)
@@ -462,10 +464,13 @@ export class CognitionService {
 
   private pieOverrideWarned = false;
 
+  // The one INFO line that says the legacy tick is off (part 7)
+  private legacyTickLogged = false;
+
   constructor(
     ctx: ApiContext,
     autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-      Partial<Pick<AutonomyServices, 'modQuery' | 'intentions'>>,
+      Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall'>>,
   ) {
     this.ctx = ctx;
     this.autonomy = autonomy;
@@ -594,6 +599,12 @@ export class CognitionService {
   // without either stay on the legacy paths)
   private rows(): IntentionService | undefined {
     return this.ctx.settings.intentionRowsEnabled ? this.autonomy.intentions : undefined;
+  }
+
+  // The per-tick deliberation (monologue, scores) and the Action Scene's review stage
+  // (autonomy part 7): on only when cognitionLegacyTick says so, whether or not rows are on
+  private legacyTick(): boolean {
+    return this.ctx.settings.cognitionLegacyTick;
   }
 
   // The suspension the rule lanes skip and the row lane must not: off lot, a WickedWhims
@@ -827,6 +838,15 @@ export class CognitionService {
           if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
             return;
           }
+          // A desire armed before this Sim's first report (no list to add a row to then)
+          // would wait for a legacy tick that no longer runs: it becomes a scene row now
+          if (!this.legacyTick() && runtime.armedDesire && !runtime.rowArmed) {
+            const { at, ...desire } = runtime.armedDesire;
+            runtime.armedDesire = undefined;
+            if (Date.now() - at < ARMED_DESIRE_TTL_MS) {
+              intentions.addDeliberateRow(entry.sim_id, { source: 'scene', desire });
+            }
+          }
           if (runtime.phase === 'COOLDOWN' && now < runtime.cooldownUntil) {
             return;
           }
@@ -854,6 +874,23 @@ export class CognitionService {
           });
         });
     }
+
+    // The night call (part 6): a queued Sim's turn starts here when Plum is idle
+    try {
+      this.autonomy.nightCall?.tick(report);
+    } catch (error) {
+      log.warn('[Night] tick failed', error);
+    }
+
+    // Part 7: the legacy per-tick deliberation runs only behind cognitionLegacyTick
+    if (!this.legacyTick()) {
+      if (!this.legacyTickLogged) {
+        this.legacyTickLogged = true;
+        log.info('[Cognition] legacy tick off: rows decide (cognitionLegacyTick)');
+      }
+      return;
+    }
+    this.legacyTickLogged = false;
 
     const candidates = entries
       .filter((entry) => !rowFired.has(entry.sim_id) && !(intentions?.hasInFlight(entry.sim_id) ?? false))
@@ -2069,17 +2106,67 @@ export class CognitionService {
       runtime.pendingIntent = { intent, entry, retriesLeft: Math.min(3, Math.max(0, intent.retries ?? 1)) };
       this.stats.dispatches += 1;
       this.armPendingTimeout(simId, runtime, entry, intent);
-      if (runtime.activeRowId) {
-        this.autonomy.intentions?.markInFlight(runtime.activeRowId, requestId, intent.target_object_id);
+      const rowId = runtime.activeRowId;
+      if (rowId) {
+        this.autonomy.intentions?.markInFlight(rowId, requestId, intent.target_object_id);
         runtime.activeRowId = undefined;
       }
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId}, ${source})`);
+      if (rowId) {
+        // Part 7: the row's own line, said as the click goes out (pie, action and deliberate
+        // rows all dispatch here)
+        const row = this.autonomy.intentions?.rowsFor(simId).find((candidate) => candidate.id === rowId);
+        if (row?.say) {
+          this.voiceWhy(entry, row);
+        }
+      }
       return true;
     } catch (error) {
       // Dispatcher refused (already in flight — a race with a player push): back off
       log.warn(`[Cognition] dispatch refused for sim ${simId}`, error);
       this.toCooldown(simId);
       return false;
+    }
+  }
+
+  // The why, voiced (part 7, the design's D4): a fired row's `say` as a "(to self)" line
+  // through the existing scene_line path (balloon, mouth, memories row), stored as the Sim's
+  // monologue. No model call: the line was written by a seed or the night call.
+  private voiceWhy(entry: SimStateEntry, row: IntentionRow) {
+    const say = row.say?.trim();
+    const name = entry.sim_name?.trim();
+    if (!say || !name || !this.ctx.settings.intentionVoiceWhy) {
+      return;
+    }
+    // Older test stubs carry no TTS
+    const ai = this.ctx.ai as Partial<Pick<ApiContext['ai'], 'playTtsLines'>> | undefined;
+    if (typeof ai?.playTtsLines !== 'function') {
+      return;
+    }
+    try {
+      if (!canSpeak(this.ctx, { sim_id: entry.sim_id })) {
+        return;
+      }
+      const speaker = `${name} (to self)`;
+      const finalText = `${speaker}: ${say}`;
+      this.ctx.memoryRepository.createMemory({
+        memory: {
+          content: finalText,
+          location_id: entry.location?.zone_id ?? 0,
+          event_type: 'monologue',
+          action: row.why,
+        },
+        participants: [{ id: entry.sim_id }],
+        index: { owner: entry.sim_id },
+      });
+      markScenePaced(finalText);
+      this.ctx.ai.playTtsLines([{ speaker, text: say, simId: entry.sim_id }], undefined, {
+        paced: true,
+        pacedText: finalText,
+      });
+      log.info(`[Rows] ${name.split(/\s+/)[0]} says: "${say}"`);
+    } catch (error) {
+      log.warn(`[Rows] could not voice ${row.id} for sim ${entry.sim_id}`, error);
     }
   }
 
@@ -2097,11 +2184,19 @@ export class CognitionService {
     // Part 5: a household Sim's desire becomes a row that waits for a moment (collision 1:
     // before the first report, or for an NPC, today's armed path)
     const intentions = this.rows();
-    if (intentions && this.ctx.simStateCache.getSim(simId)?.is_household === true) {
+    const known = this.ctx.simStateCache.getSim(simId);
+    if (intentions && known?.is_household === true) {
       const added = intentions.addDeliberateRow(simId, { source: 'scene', desire });
       if (added) {
         return;
       }
+    }
+    // Part 7: an NPC never gets rows, and with the legacy tick off nothing would act on it
+    if (intentions && known?.is_household === false && !this.legacyTick()) {
+      log.info(
+        `[Cognition] sim ${simId} (not household) desire ${desire.score} dropped: the legacy tick is off and NPCs have no rows`,
+      );
+      return;
     }
     runtime.armedDesire = { ...desire, at: Date.now() };
     log.info(
@@ -2415,32 +2510,35 @@ export class CognitionService {
         retries = choice?.retries;
       }
 
-      const reviewShot = await runStage(this.ctx.generationQueue, 'action review', () =>
-        this.ctx.ai.runOneShot(
-          `Action Review: ${simLabel}`,
-          ACTION_REVIEW_SYSTEM_PROMPT,
-          `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].tag}] ${valid[pickedIndex].label}${
-            motivation ? `\nTheir motivation: ${motivation}` : ''
-          }`,
-          60,
-          undefined,
-          AIActionType.ACTION_SCENE,
-          undefined,
-          { stageId: StageId.BASAL_GANGLIA_REVIEW },
-        ),
-      );
-      exchanges.push(reviewShot.exchange);
-      const review = parseActionChoice(reviewShot.text);
-      if (review) {
-        if (review.choice === 0) {
-          log.info(`[Cognition] ${simLabel} action review stood the scene down`);
-          return undefined;
-        }
-        if (review.choice >= 1 && review.choice <= valid.length && review.choice - 1 !== pickedIndex) {
-          log.info(
-            `[Cognition] ${simLabel} action review adjusted choice: ${valid[pickedIndex].intent.action} -> ${valid[review.choice - 1].intent.action}`,
-          );
-          pickedIndex = review.choice - 1;
+      // Part 7: the review stage runs only with the legacy tick (the row already decided)
+      if (this.legacyTick()) {
+        const reviewShot = await runStage(this.ctx.generationQueue, 'action review', () =>
+          this.ctx.ai.runOneShot(
+            `Action Review: ${simLabel}`,
+            ACTION_REVIEW_SYSTEM_PROMPT,
+            `${situationPrompt}\n\nOptions:\n${menu}\n\n${simLabel} chose: ${pickedIndex + 1} — [${valid[pickedIndex].tag}] ${valid[pickedIndex].label}${
+              motivation ? `\nTheir motivation: ${motivation}` : ''
+            }`,
+            60,
+            undefined,
+            AIActionType.ACTION_SCENE,
+            undefined,
+            { stageId: StageId.BASAL_GANGLIA_REVIEW },
+          ),
+        );
+        exchanges.push(reviewShot.exchange);
+        const review = parseActionChoice(reviewShot.text);
+        if (review) {
+          if (review.choice === 0) {
+            log.info(`[Cognition] ${simLabel} action review stood the scene down`);
+            return undefined;
+          }
+          if (review.choice >= 1 && review.choice <= valid.length && review.choice - 1 !== pickedIndex) {
+            log.info(
+              `[Cognition] ${simLabel} action review adjusted choice: ${valid[pickedIndex].intent.action} -> ${valid[review.choice - 1].intent.action}`,
+            );
+            pickedIndex = review.choice - 1;
+          }
         }
       }
 

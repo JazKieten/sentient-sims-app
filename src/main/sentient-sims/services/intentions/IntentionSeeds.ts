@@ -6,6 +6,7 @@ import type { GoalPoolEntry, SimStateEntry, SimStateReport } from '../../models/
 import {
   DeliberateDesire,
   IntentionRow,
+  IntentionStoryAdd,
   Precondition,
   RowSource,
   RowWhat,
@@ -43,9 +44,12 @@ const DRAMA_AFTER_MINUTES = 60;
 const SCENE_ROW_MINUTES = 120;
 const NEED_CLEAR_MARGIN = 20;
 
+// What the Sim says aloud when the bills row fires (decision 7: a natural line where one exists)
+export const BILLS_SAY = "I'd better pay the bills before they pile up.";
+
 function row(
   partial: Pick<IntentionRow, 'seedKey' | 'source' | 'what' | 'why' | 'until'> &
-    Partial<Pick<IntentionRow, 'target' | 'preconditions' | 'claim' | 'status'>>,
+    Partial<Pick<IntentionRow, 'target' | 'preconditions' | 'claim' | 'status' | 'say'>>,
 ): IntentionRow {
   return {
     id: newRowId(),
@@ -54,6 +58,7 @@ function row(
     what: partial.what,
     target: partial.target,
     why: partial.why,
+    ...(partial.say ? { say: partial.say } : {}),
     preconditions: partial.preconditions ?? [],
     until: partial.until,
     status: partial.status ?? 'waiting',
@@ -93,6 +98,7 @@ function billsRow(report: SimStateReport): IntentionRow | undefined {
     source: 'bills',
     what: { kind: 'action', actions: ['pay_bills'] },
     why: amount > 0 ? `the bills are due (§${amount})` : 'the bills are due',
+    say: BILLS_SAY,
     preconditions: [{ kind: 'funds_at_least', amount }],
     until: { kind: 'bills_clear' },
     claim: 'bills',
@@ -207,6 +213,9 @@ function goalRows(entry: SimStateEntry): IntentionRow[] {
             what,
             target,
             why: goal.text ?? goal.label,
+            // A want's text is already the Sim's own line ("The jams are on now!"); a goal's
+            // label is a game objective and is never said aloud
+            say: source === 'want' ? goal.text : undefined,
             preconditions,
             until: { kind: source === 'want' ? 'want_absent' : 'goal_absent' },
             status,
@@ -251,27 +260,73 @@ export function desireRow(
     what: { kind: 'deliberate', desire },
     target,
     why,
+    say: desire.thought,
     preconditions,
     until: { kind: 'game_time', at: nowMinutes + SCENE_ROW_MINUTES },
   });
 }
 
+// A story row the night call wrote (decision 5): a `deliberate` row, so the existing options
+// and choice calls pick the pie item at the moment; the model never names a tuning key. The
+// hours are hours of `day`; a named Sim must be present. Until the window's end, else the day's.
+export function storyRow(edit: IntentionStoryAdd, day: number, threshold: number): IntentionRow {
+  const preconditions: Precondition[] = [];
+  let windowEnd: number | undefined;
+  if (edit.from_hour !== undefined || edit.to_hour !== undefined) {
+    const from = day * 1440 + (edit.from_hour ?? 0) * 60;
+    windowEnd = day * 1440 + (edit.to_hour ?? 23) * 60 + 59;
+    preconditions.push({ kind: 'game_time', from, to: windowEnd });
+  }
+  let target: IntentionRow['target'];
+  if (edit.target_sim_id) {
+    target = { sim_id: edit.target_sim_id, name: edit.target_name };
+    preconditions.push({ kind: 'target_present', sim_id: edit.target_sim_id });
+  }
+  const id = newRowId();
+  return {
+    ...row({
+      seedKey: `story:${id}`,
+      source: 'story',
+      what: {
+        kind: 'deliberate',
+        desire: { score: threshold, reason: edit.why, thought: edit.say, targetSimId: edit.target_sim_id },
+      },
+      target,
+      why: edit.why,
+      say: edit.say,
+      preconditions,
+      until: windowEnd !== undefined ? { kind: 'game_time', at: windowEnd } : { kind: 'day_end' },
+    }),
+    id,
+  };
+}
+
+// Rows no seed ever writes: the merge leaves them alone (a scene's or a talk's impulse, a
+// night call's story beat)
+export function isImpulseRow(item: IntentionRow): boolean {
+  return item.source === 'scene' || item.source === 'conversation' || item.source === 'story';
+}
+
 // Merge the fresh seeds into the day's list: existing rows keep their status and history,
 // new seed keys are appended in seed order, and a seed that vanished marks its row expired
 // (a rerolled want) or done (the goal pool, the bills flag, the need). Done rows are sticky
-// for the day by seedKey (collision 7). Scene and conversation rows are never seeded, so
-// they are untouched here.
+// for the day by seedKey (collision 7). Scene, conversation and story rows are never seeded,
+// so they are untouched here, and a row the night call dropped stays dropped.
 export function mergeSeeds(existing: IntentionRow[], seeded: IntentionRow[]): IntentionRow[] {
   const seededKeys = new Set(seeded.map((seed) => seed.seedKey));
   const byKey = new Map(existing.map((item) => [item.seedKey, item]));
   const merged: IntentionRow[] = existing.map((item) => {
-    if (item.source === 'scene' || item.source === 'conversation') {
+    if (isImpulseRow(item) || item.status === 'dropped') {
       return item;
     }
     if (seededKeys.has(item.seedKey)) {
+      const fresh = seeded.find((seed) => seed.seedKey === item.seedKey);
+      if (!item.say && fresh?.say) {
+        // A row stored before seeds carried a line picks it up
+        item.say = fresh.say;
+      }
       if (item.status === 'unreachable') {
         // A want may gain a target or an affordance on a later report
-        const fresh = seeded.find((seed) => seed.seedKey === item.seedKey);
         if (fresh && fresh.status === 'waiting') {
           return {
             ...item,
@@ -301,27 +356,29 @@ export function mergeSeeds(existing: IntentionRow[], seeded: IntentionRow[]): In
 }
 
 export function orderRows(rows: IntentionRow[]): IntentionRow[] {
-  return rows.sort((a, b) => sourceRank(a.source) - sourceRank(b.source));
+  return rows.sort((a, b) => rowRank(a) - rowRank(b));
 }
 
 // The list order IS the priority: needs, bills, then what a scene or a talk just stirred up
-// (the Sim's present impulse outranks a long-term want), then the schedule notes and the
-// goal pool. A stable sort keeps seed order inside a source.
-const SOURCE_RANK: Record<RowSource, number> = {
+// (the Sim's present impulse outranks a long-term want), then the night call's story beats,
+// then the schedule notes and the goal pool. A stable sort keeps seed order inside a source.
+export const SOURCE_RANK: Record<RowSource, number> = {
   need: 0,
   bills: 1,
   scene: 2,
   conversation: 2,
-  work: 3,
-  drama: 4,
-  aspiration: 5,
-  promotion: 6,
-  daily_task: 7,
-  want: 8,
+  story: 3,
+  work: 4,
+  drama: 5,
+  aspiration: 6,
+  promotion: 7,
+  daily_task: 8,
+  want: 9,
 };
 
-function sourceRank(source: RowSource): number {
-  return SOURCE_RANK[source];
+// A night call's `rank` overrides the source's
+export function rowRank(item: IntentionRow): number {
+  return item.rank ?? SOURCE_RANK[item.source];
 }
 
 export { untilReached };

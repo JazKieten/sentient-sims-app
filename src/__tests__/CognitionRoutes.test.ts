@@ -72,6 +72,22 @@ describe('cognition routes', () => {
     expect(await fire.json()).toMatchObject({ ok: false });
   });
 
+  it('the debug night call needs a sim_id and answers 409 with no report', async () => {
+    const missing = await fetch(`${apiUrl}/cognition/debug/night-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(400);
+    const night = await fetch(`${apiUrl}/cognition/debug/night-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555' }),
+    });
+    expect(night.status).toBe(409);
+    expect(await night.json()).toEqual({ ok: false, error: 'no state report for sim 555' });
+  });
+
   it('debug enqueue dispatches an ENQUEUE_INTERACTION message and the outcome becomes a memory', async () => {
     const enqueue = await post('/cognition/debug/enqueue', {
       sim_id: '123',

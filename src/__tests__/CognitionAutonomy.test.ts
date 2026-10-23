@@ -8,6 +8,9 @@ import { ActionIntent, VocabularyRow } from 'main/sentient-sims/models/ActionInt
 import type { ModQueryResult } from 'main/sentient-sims/services/ModQueryService';
 import { IntentionService } from 'main/sentient-sims/services/intentions/IntentionService';
 import type { IntentionRow } from 'main/sentient-sims/models/IntentionRow';
+import { NightCallService } from 'main/sentient-sims/services/intentions/NightCallService';
+import { BILLS_SAY } from 'main/sentient-sims/services/intentions/IntentionSeeds';
+import type { PlumTurnOptions } from 'main/sentient-sims/services/PlumService';
 
 // Autonomy parts 1-4 (2026-10-21): every lane asks the mod's moment predicate before a model
 // call (the gate), the options stage offers the mod's pie-menu rows and the choice goes back
@@ -32,6 +35,14 @@ type CtxOptions = {
   maxConcurrent?: number;
   // Part 5: the row lane on, with a REAL IntentionService over a Map repository
   rows?: boolean;
+  // Part 7: the legacy per-tick deliberation (default on here so chat 1-2's cases hold)
+  legacyTick?: boolean;
+  voiceWhy?: boolean;
+};
+
+type VoicedCall = {
+  lines: { speaker: string; text: string; simId?: string }[];
+  options?: { paced?: boolean; pacedText?: string };
 };
 
 const HIGH_SCORES = '{"memory": 4, "action": 9, "action_reason": "I want a snack."}';
@@ -75,8 +86,16 @@ function buildCtx(options: CtxOptions = {}) {
   const prompts: string[] = [];
   const queries: { kind: string; args: Record<string, unknown> }[] = [];
   const holdListeners: ((event: { sim_id: string; interaction_id: string }) => void)[] = [];
+  const voiced: VoicedCall[] = [];
+  const memories: { memory: { content?: string; event_type?: string; action?: string } }[] = [];
+  const turns: { text: string; options: PlumTurnOptions }[] = [];
   const ctx = {
     settings: {
+      cognitionLegacyTick: options.legacyTick ?? true,
+      intentionVoiceWhy: options.voiceWhy ?? true,
+      intentionNightCallEnabled: true,
+      nonControllableSimsSpeak: true,
+      plumEnabled: true,
       cognitionEnabled: true,
       cognitionAutonomyLevel: 'full',
       cognitionTickIntervalSeconds: options.tickIntervalSeconds ?? 0,
@@ -108,9 +127,18 @@ function buildCtx(options: CtxOptions = {}) {
           })),
         describeScript: () => [],
       },
+      isRunning: false,
+      brainUnavailable: () => undefined,
+      runTurn: (text: string, turnOptions: PlumTurnOptions) => {
+        turns.push({ text, options: turnOptions });
+        return Promise.resolve({});
+      },
     },
     generationQueue: { runCognition: <T>(task: () => Promise<T>) => task() },
     ai: {
+      playTtsLines: (lines: VoicedCall['lines'], _sims: unknown, playOptions: VoicedCall['options']) => {
+        voiced.push({ lines, options: playOptions });
+      },
       runOneShot: (label: string, _system: string, userPrompt: string) => {
         oneShotCalls.push(label);
         prompts.push(userPrompt);
@@ -149,7 +177,13 @@ function buildCtx(options: CtxOptions = {}) {
       // The rows' listener for the game's goal events (part 5); no test fires one here
       onGoalCompleted: () => undefined,
     },
-    memoryRepository: { createMemory: () => ({ id: 1 }) },
+    memoryRepository: {
+      createMemory: (request: { memory: { content?: string; event_type?: string; action?: string } }) => {
+        memories.push(request);
+        return { id: memories.length };
+      },
+      getOwnDayMemories: () => [],
+    },
     memoryRetrieval: { retrieve: () => Promise.resolve([]) },
     semanticMemory: { recall: () => '' },
     dailyPlan: {
@@ -168,6 +202,9 @@ function buildCtx(options: CtxOptions = {}) {
     } as never,
     modQuery: (ctx as unknown as { modQuery: AutonomyServices['modQuery'] }).modQuery,
   });
+  (ctx as unknown as { nightCall: NightCallService }).nightCall = new NightCallService(ctx, {
+    intentions: (ctx as unknown as { intentions: IntentionService }).intentions,
+  });
   const cognition = new CognitionService(ctx, ctx as unknown as AutonomyServices);
   const release = (interactionId: string) => {
     holdListeners.forEach((listener) => {
@@ -175,7 +212,20 @@ function buildCtx(options: CtxOptions = {}) {
     });
   };
   const intentions = (ctx as unknown as { intentions: IntentionService }).intentions;
-  return { ctx, cache, cognition, dispatched, oneShotCalls, prompts, queries, release, intentions };
+  return {
+    ctx,
+    cache,
+    cognition,
+    dispatched,
+    oneShotCalls,
+    prompts,
+    queries,
+    release,
+    intentions,
+    voiced,
+    memories,
+    turns,
+  };
 }
 
 function report(
@@ -752,6 +802,29 @@ describe('the intention rows (part 5)', () => {
     expect(off.prompts.join('\n')).toContain('go_out');
   });
 
+  it('a story row the night call wrote survives the merge and fires through the deliberation', async () => {
+    const { cache, intentions } = buildCtx({ rows: true });
+    cache.ingest(report(1, { is_household: true }, { clock: DAY_CLOCK }));
+    await settle();
+    intentions.applyEdits('100', {
+      drop: [],
+      rewrite: [],
+      add: [
+        {
+          why: 'I want to cook for Adrian',
+          say: 'Dinner is on me tonight.',
+          target_sim_id: '200',
+          target_name: 'Adrian Calloway',
+          from_hour: 18,
+        },
+      ],
+    });
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    const [story] = intentions.rowsFor('100');
+    expect(story).toMatchObject({ source: 'story', status: 'waiting', say: 'Dinner is on me tonight.' });
+  });
+
   it('with the rows off, bills due means the legacy tick deliberates as in chat 1', async () => {
     const { cache, dispatched, oneShotCalls, intentions } = buildCtx({ rows: false });
     cache.ingest(
@@ -765,5 +838,128 @@ describe('the intention rows (part 5)', () => {
     expect(oneShotCalls.some((label) => label.startsWith('Cognition Monologue'))).toBe(true);
     expect(intentions.rowsFor('100')).toEqual([]);
     expect(dispatched.every((intent) => intent.row_id === undefined)).toBe(true);
+  });
+});
+
+describe('the legacy tick flag, the voiced why and the night call (parts 6 and 7)', () => {
+  const DAY_CLOCK = { hour: 10, minute: 0, absolute_day: 40, day: 2, paused: false };
+  const BILLS_LOT = { clock: DAY_CLOCK, bills: { due: true, amount: 300 }, action_keys: ['pay_bills'], funds: 900 };
+  const TWO_OPTIONS = JSON.stringify({
+    scene: 'Adrian is right there.',
+    options: [
+      { action: 'grab_snack', target_object_id: '900', label: 'Raid the fridge' },
+      { action: 'chat', target_sim_id: '200', label: 'Talk it out with Adrian' },
+    ],
+  });
+
+  it('with the legacy tick off, an idle Sim with no row is left alone (no monologue)', async () => {
+    const { cache, oneShotCalls, dispatched } = buildCtx({ rows: true, legacyTick: false });
+    cache.ingest(report(1, { is_household: true }, { clock: DAY_CLOCK }));
+    await settle();
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    expect(oneShotCalls).toEqual([]);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('a deliberate row with the legacy tick off runs options and choice, never the review', async () => {
+    const { cache, cognition, oneShotCalls, dispatched } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      optionsJson: TWO_OPTIONS,
+    });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true, activity: { queue: ['cook'], running: 'cook', in_social: false } },
+        { clock: DAY_CLOCK },
+      ),
+    );
+    await settle();
+    cognition.armDesireFromScene('100', { score: 9, reason: 'wants to clear the air with Adrian', targetSimId: '200' });
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    expect(oneShotCalls.some((label) => label.startsWith('Action Options'))).toBe(true);
+    expect(oneShotCalls.some((label) => label.startsWith('Action Choice'))).toBe(true);
+    expect(oneShotCalls.some((label) => label.startsWith('Action Review'))).toBe(false);
+    expect(oneShotCalls.some((label) => label.startsWith('Cognition Monologue'))).toBe(false);
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it('the legacy tick on keeps the review stage', async () => {
+    const { cache, cognition, oneShotCalls } = buildCtx({ rows: true, legacyTick: true, optionsJson: TWO_OPTIONS });
+    cache.ingest(
+      report(
+        1,
+        { is_household: true, activity: { queue: ['cook'], running: 'cook', in_social: false } },
+        { clock: DAY_CLOCK },
+      ),
+    );
+    await settle();
+    cognition.armDesireFromScene('100', { score: 9, reason: 'wants to clear the air with Adrian', targetSimId: '200' });
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    expect(oneShotCalls.some((label) => label.startsWith('Action Review'))).toBe(true);
+  });
+
+  it('a fired row with a say line voices it once, paced, as the Sim to self', async () => {
+    const { cache, dispatched, voiced, memories } = buildCtx({ rows: true, legacyTick: false });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(voiced).toHaveLength(1);
+    expect(voiced[0].lines).toEqual([{ speaker: 'Elliot Calloway (to self)', text: BILLS_SAY, simId: '100' }]);
+    expect(voiced[0].options).toMatchObject({ paced: true, pacedText: `Elliot Calloway (to self): ${BILLS_SAY}` });
+    expect(memories).toHaveLength(1);
+    expect(memories[0].memory).toMatchObject({
+      event_type: 'monologue',
+      content: `Elliot Calloway (to self): ${BILLS_SAY}`,
+    });
+  });
+
+  it('intentionVoiceWhy off: the row fires and nothing is said', async () => {
+    const { cache, dispatched, voiced } = buildCtx({ rows: true, legacyTick: false, voiceWhy: false });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(voiced).toEqual([]);
+  });
+
+  it("a desire armed before the Sim's first report becomes a scene row on that report", async () => {
+    const { cache, cognition, intentions } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      moment: { ok: true, result: { ok: false, key: 'head_busy', why: 'cooking' } },
+    });
+    cognition.armDesireFromScene('100', { score: 9, reason: 'wants to clear the air with Adrian', targetSimId: '200' });
+    expect(intentions.rowsFor('100')).toEqual([]);
+    cache.ingest(report(1, { is_household: true }, { clock: DAY_CLOCK }));
+    await settle();
+    const scene = intentions.rowsFor('100').find((row) => row.source === 'scene');
+    expect(scene).toBeDefined();
+    expect(scene?.why).toBe('wants to clear the air with Adrian');
+  });
+
+  it("an NPC's desire is dropped when the legacy tick is off", async () => {
+    const { cache, cognition, oneShotCalls, intentions } = buildCtx({ rows: true, legacyTick: false });
+    cache.ingest(report(1, { is_household: false }, { clock: DAY_CLOCK }));
+    await settle();
+    cognition.armDesireFromScene('100', { score: 9, reason: 'wants a word with Adrian', targetSimId: '200' });
+    cache.ingest(report(2, { is_household: false }, { clock: { ...DAY_CLOCK, minute: 5 } }));
+    await settle();
+    expect(intentions.rowsFor('100')).toEqual([]);
+    expect(oneShotCalls).toEqual([]);
+  });
+
+  it('the day rollover queues a night call that the next report runs as a night turn', async () => {
+    const { cache, turns } = buildCtx({ rows: true, legacyTick: false });
+    cache.ingest(report(1, { is_household: true }, { clock: { ...DAY_CLOCK, hour: 23, minute: 50 } }));
+    await settle();
+    expect(turns).toEqual([]);
+    cache.ingest(report(2, { is_household: true }, { clock: { ...DAY_CLOCK, absolute_day: 41, hour: 0, minute: 5 } }));
+    await settle();
+    expect(turns).toHaveLength(1);
+    expect(turns[0].options).toEqual({ night: true });
+    expect(turns[0].text).toContain('<night_call sim="Elliot Calloway" sim_id="100" ending_day="40" new_day="41">');
   });
 });

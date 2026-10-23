@@ -301,6 +301,22 @@ export class CognitionController {
     }
   };
 
+  // Dev seam: run the night call for one Sim now (autonomy part 6); the turn runs on
+  // after the answer, its end is the `[Night] ... call ended` log line
+  debugNightCall = (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId } = req.body as { sim_id?: string };
+      if (!simId) {
+        return res.status(400).json({ error: 'sim_id is required' });
+      }
+      const result = this.autonomy.nightCall.runNow(simId);
+      return res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      log.error('Error starting a night call', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
   // Dev seam: ask the mod for a sim's perception snapshot; the mod replies by POSTing
   // it back to /cognition/perception with the same request_id
   debugRequestPerception = (req: Request, res: Response) => {

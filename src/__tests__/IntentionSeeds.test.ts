@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { SimStateEntry, SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import {
+  BILLS_SAY,
   desireRow,
   mergeSeeds,
+  orderRows,
   seedRows,
   shiftStartMinutes,
+  storyRow,
 } from 'main/sentient-sims/services/intentions/IntentionSeeds';
 import { clockMinutes, describeRow, preconditionsHold, untilReached } from 'main/sentient-sims/models/IntentionRow';
 
@@ -249,5 +252,86 @@ describe('mergeSeeds', () => {
     expect(talk.why).toBe('follow through on the talk with Scott');
     const merged = mergeSeeds([scene, talk], []);
     expect(merged).toEqual([scene, talk]);
+  });
+});
+
+describe('the night call rows (part 6) and the say line (part 7)', () => {
+  it('a want row says its own text, the bills row its line, a goal row nothing', () => {
+    const rows = seedRows(
+      entry({
+        goal_pool: [
+          {
+            id: 'want_Jam',
+            source: 'want',
+            label: 'Want: Play Music',
+            text: 'The jams are on now!',
+            action_keys: ['listen_to_music'],
+          },
+          {
+            id: 'objective_Asp_1',
+            source: 'aspiration',
+            label: 'Aspiration: Joke x3',
+            text: 'Tell three jokes',
+            affordances: ['mixer_social_TellJoke'],
+          },
+        ],
+      }),
+      report({ bills: { due: true, amount: 300 } }),
+      SETTINGS,
+    );
+    const byKey = new Map(rows.map((row) => [row.seedKey, row]));
+    expect(byKey.get('bills')?.say).toBe(BILLS_SAY);
+    expect(byKey.get('want_Jam')?.say).toBe('The jams are on now!');
+    expect(byKey.get('objective_Asp_1')?.say).toBeUndefined();
+    expect(desireRow('scene', { score: 8, thought: 'I owe Alex an apology.' }, 1000).say).toBe(
+      'I owe Alex an apology.',
+    );
+  });
+
+  it('a story row is a deliberate row with its window, target and line', () => {
+    const story = storyRow(
+      {
+        why: 'I want to cook for Alex',
+        say: 'Dinner is on me tonight.',
+        target_sim_id: '200',
+        target_name: 'Alex',
+        from_hour: 18,
+        to_hour: 21,
+      },
+      41,
+      7,
+    );
+    expect(story.source).toBe('story');
+    expect(story.seedKey).toBe(`story:${story.id}`);
+    expect(story.what).toEqual({
+      kind: 'deliberate',
+      desire: { score: 7, reason: 'I want to cook for Alex', thought: 'Dinner is on me tonight.', targetSimId: '200' },
+    });
+    expect(story.preconditions).toEqual([
+      { kind: 'game_time', from: 41 * 1440 + 18 * 60, to: 41 * 1440 + 21 * 60 + 59 },
+      { kind: 'target_present', sim_id: '200' },
+    ]);
+    expect(story.until).toEqual({ kind: 'game_time', at: 41 * 1440 + 21 * 60 + 59 });
+    const open = storyRow({ why: 'Finish my book', say: 'One more chapter.' }, 41, 7);
+    expect(open.preconditions).toEqual([]);
+    expect(open.until).toEqual({ kind: 'day_end' });
+  });
+
+  it('the merge keeps story rows and dropped rows; rank overrides the source order', () => {
+    const seeded = seedRows(
+      entry({
+        goal_pool: [{ id: 'want_Jam', source: 'want', label: 'Want: Play Music', action_keys: ['listen_to_music'] }],
+      }),
+      report({ bills: { due: true, amount: 300 } }),
+      SETTINGS,
+    );
+    const story = storyRow({ why: 'Finish my book', say: 'One more chapter.' }, 40, 7);
+    const dropped = { ...seeded[1], status: 'dropped' as const };
+    const merged = mergeSeeds([seeded[0], dropped, story], []);
+    expect(merged.find((row) => row.id === story.id)?.status).toBe('waiting');
+    expect(merged.find((row) => row.id === dropped.id)?.status).toBe('dropped');
+    // Story (rank 3) sits after bills (1) and before a want (9); a rank of 0 puts it first
+    expect(orderRows([seeded[1], story, seeded[0]]).map((row) => row.source)).toEqual(['bills', 'story', 'want']);
+    expect(orderRows([seeded[0], { ...story, rank: 0 }]).map((row) => row.source)).toEqual(['story', 'bills']);
   });
 });

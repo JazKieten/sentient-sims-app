@@ -329,6 +329,22 @@ export function defaultStore(cwd?: string) {
         // A need under this gets a row; the -85 critical rule lane sits below it untouched
         default: -60,
       },
+      [SettingsEnum.COGNITION_LEGACY_TICK.toString()]: {
+        type: 'boolean',
+        // Autonomy part 7: the per-tick deliberation (monologue, scores) and the review stage
+        // run only when this is on; off = the rows decide
+        default: false,
+      },
+      [SettingsEnum.INTENTION_NIGHT_CALL_ENABLED.toString()]: {
+        type: 'boolean',
+        // Autonomy part 6: one Plum turn per household Sim at the day rollover edits the list
+        default: true,
+      },
+      [SettingsEnum.INTENTION_VOICE_WHY.toString()]: {
+        type: 'boolean',
+        // A fired row with a `say` line voices it as a "(to self)" line
+        default: true,
+      },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
         // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
@@ -1342,6 +1358,18 @@ export class SettingsService {
   get intentionNeedFloor(): number {
     const raw = Number(this.get(SettingsEnum.INTENTION_NEED_FLOOR));
     return Math.min(-20, Math.max(-84, Number.isFinite(raw) ? raw : -60));
+  }
+
+  get cognitionLegacyTick(): boolean {
+    return this.get(SettingsEnum.COGNITION_LEGACY_TICK) === true;
+  }
+
+  get intentionNightCallEnabled(): boolean {
+    return this.get(SettingsEnum.INTENTION_NIGHT_CALL_ENABLED) !== false;
+  }
+
+  get intentionVoiceWhy(): boolean {
+    return this.get(SettingsEnum.INTENTION_VOICE_WHY) !== false;
   }
 
   get dailyLoadoutSize(): number {

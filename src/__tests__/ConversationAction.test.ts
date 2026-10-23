@@ -57,6 +57,8 @@ function buildCtx(options: CtxOptions = {}) {
       conversationActionsFromViewers: options.fromViewers ?? false,
       cognitionGateEnabled: true,
       cognitionVocabulary: 'whitelist',
+      // The review stage these cases count runs with the legacy tick only (part 7)
+      cognitionLegacyTick: true,
     },
     simStateCache: cache,
     db: { isLoaded: () => true },

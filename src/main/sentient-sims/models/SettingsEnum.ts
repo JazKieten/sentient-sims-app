@@ -78,6 +78,9 @@ export enum SettingsEnum {
   INTENTION_ROWS_ENABLED = 'intentionRowsEnabled',
   INTENTION_BEAT_MINUTES = 'intentionBeatMinutes',
   INTENTION_NEED_FLOOR = 'intentionNeedFloor',
+  COGNITION_LEGACY_TICK = 'cognitionLegacyTick',
+  INTENTION_NIGHT_CALL_ENABLED = 'intentionNightCallEnabled',
+  INTENTION_VOICE_WHY = 'intentionVoiceWhy',
   // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
   DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
   DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',

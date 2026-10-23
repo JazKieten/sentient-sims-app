@@ -9,6 +9,10 @@
 // the report, and the service decides what to do with the answer.
 import type { SimStateEntry, SimStateReport } from './SimStateReport';
 
+// The night call's edits (edit_intentions) are defined in the core seam so core's tool never
+// names this autonomy module
+export type { IntentionEdits, IntentionEditSlot, IntentionRewrite, IntentionStoryAdd } from '../tiers/types';
+
 export type RowSource =
   | 'need'
   | 'bills'
@@ -19,7 +23,9 @@ export type RowSource =
   | 'daily_task'
   | 'want'
   | 'scene'
-  | 'conversation';
+  | 'conversation'
+  // A row the night call wrote (autonomy part 6): something the Sim means to do today
+  | 'story';
 
 // What a scene or a conversation left the Sim wanting (CognitionService's ConversationDesire
 // and armDesireFromScene's shape, kept verbatim so the EXISTING deliberation runs on it)
@@ -64,7 +70,9 @@ export type Until =
   | { kind: 'day_end' }
   | { kind: 'once' };
 
-export type RowStatus = 'waiting' | 'in_flight' | 'done' | 'asleep' | 'expired' | 'unreachable';
+// dropped: the night call (or a chat edit) struck the row for today; the every-report merge
+// keeps it struck, and pick, the prompt and the list log skip it
+export type RowStatus = 'waiting' | 'in_flight' | 'done' | 'asleep' | 'expired' | 'unreachable' | 'dropped';
 
 export type RowClears =
   | { kind: 'funds_at_least'; amount: number }
@@ -84,6 +92,11 @@ export type IntentionRow = {
   what: RowWhat;
   target?: RowTarget;
   why: string;
+  // The Sim's own line, said aloud when the row fires (first person, one sentence). Never the
+  // mechanical `why`; seeds set it where a natural line exists, the night call for its rows
+  say?: string;
+  // An order the night call set: overrides the source's rank in orderRows (lower first)
+  rank?: number;
   preconditions: Precondition[];
   until: Until;
   status: RowStatus;

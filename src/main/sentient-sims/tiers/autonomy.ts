@@ -23,6 +23,7 @@ import { DirectorService } from '../services/DirectorService';
 import { ModQueryService } from '../services/ModQueryService';
 import { IntentionRepository } from '../db/IntentionRepository';
 import { IntentionService } from '../services/intentions/IntentionService';
+import { NightCallService } from '../services/intentions/NightCallService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -36,6 +37,8 @@ export interface AutonomyServices {
   dailyPlan: DailyPlanService;
   // The ordered row list per household Sim (autonomy part 5)
   intentions: IntentionService;
+  // One Plum turn per household Sim at the day rollover that edits the list (part 6)
+  nightCall: NightCallService;
   cognitionService: CognitionService;
   askAction: AskActionService;
   voiceCommand: VoiceCommandService;
@@ -66,6 +69,8 @@ function construct(ctx: ApiContext) {
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
   // Needs modQuery for the game's goal_completed events
   autonomy.intentions = new IntentionService(ctx, autonomy);
+  // Hears the rows' day rollover; cognition ticks it from the state report
+  autonomy.nightCall = new NightCallService(ctx, autonomy);
   // Subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
   autonomy.cognitionService = new CognitionService(ctx, autonomy);
   autonomy.askAction = new AskActionService(ctx, autonomy);
@@ -76,6 +81,10 @@ function construct(ctx: ApiContext) {
   services.set(ctx, autonomy);
 
   ctx.ext.director = autonomy.director;
+  // The edit door of Plum's edit_intentions tool (the night call's one write)
+  ctx.ext.intentions = {
+    applyEdits: (simId, edits) => autonomy.intentions.applyEdits(simId, edits),
+  };
   ctx.ext.plumPush = (requestId, push) => {
     const sims = ctx.simStateCache.getReport()?.sims ?? [];
     const sim = sims.find((entry) => entry.sim_name?.toLowerCase() === push.sim_id.toLowerCase());
@@ -149,6 +158,8 @@ function routes(app: Express, ctx: ApiContext) {
   app.get('/cognition/rows', controller.getRows);
   app.get('/cognition/rows/:simId', controller.getRows);
   app.post('/cognition/debug/rows/fire', controller.debugFireRow);
+  // The night call (part 6), forced now for one Sim
+  app.post('/cognition/debug/night-call', controller.debugNightCall);
 }
 
 export const autonomyTier: TierRegistration = {

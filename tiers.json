@@ -30,6 +30,8 @@
     "src/main/sentient-sims/services/ModQueryService.ts",
     "src/main/sentient-sims/services/intentions/IntentionService.ts",
     "src/main/sentient-sims/services/intentions/IntentionSeeds.ts",
+    "src/main/sentient-sims/services/intentions/NightCall.ts",
+    "src/main/sentient-sims/services/intentions/NightCallService.ts",
     "src/main/sentient-sims/models/IntentionRow.ts",
     "src/main/sentient-sims/db/IntentionRepository.ts",
     "src/main/sentient-sims/util/formatVocabulary.ts",
@@ -67,6 +69,7 @@
     "src/__tests__/CognitionAutonomy.test.ts",
     "src/__tests__/IntentionSeeds.test.ts",
     "src/__tests__/IntentionService.test.ts",
+    "src/__tests__/NightCall.test.ts",
     "src/__tests__/FactsInPrompts.test.ts",
     "src/__tests__/DirectorService.test.ts",
     "src/__tests__/PlumWhisper.test.ts"

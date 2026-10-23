@@ -5,6 +5,7 @@ import { IntentionRow } from 'main/sentient-sims/models/IntentionRow';
 import { SimStateEntry, SimStateReport } from 'main/sentient-sims/models/SimStateReport';
 import { SimStateCache } from 'main/sentient-sims/services/SimStateCache';
 import type { CognitionGoalCompleted } from 'main/sentient-sims/models/ModLogWebsocketMessage';
+import type { DayRollover } from 'main/sentient-sims/services/intentions/IntentionService';
 
 // Autonomy part 5: the list per Sim per day (pick order, the pace, claims, the outcome
 // transitions, the game's goal events, persistence, the mod's disconnect).
@@ -26,6 +27,7 @@ function build(options: { beatMinutes?: number; needFloor?: number; stored?: Sto
     settings: {
       intentionBeatMinutes: options.beatMinutes ?? 120,
       intentionNeedFloor: options.needFloor ?? -60,
+      cognitionActionScoreThreshold: 7,
     },
     db: { isLoaded: () => options.dbLoaded ?? true },
     simStateCache: cache,
@@ -398,5 +400,100 @@ describe('IntentionService', () => {
       decided_at: 'finished',
     });
     expect(service.pick(jonah, rep)).toBeUndefined();
+  });
+});
+
+describe('IntentionService: the night call (part 6)', () => {
+  it('applyEdits drops, rewrites, re-ranks and adds story rows; the merge keeps them', () => {
+    const { service, cache } = build();
+    const jonah = entry('100', { goal_pool: WANT_POOL });
+    const rep = report([jonah], { bills: { due: true, amount: 300 } });
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    const [bills, aspiration, want] = service.rowsFor('100');
+    const result = service.applyEdits('100', {
+      drop: [aspiration.id],
+      rewrite: [{ row_id: want.id, say: 'I miss talking to Alex.', rank: 0 }],
+      add: [{ why: 'I want to finish my novel', say: 'One more chapter, then bed.' }],
+    });
+    expect(result.changed).toBe("Jonah's list: dropped 1, rewrote 1, added 1 story row");
+    expect(service.editsApplied('100')).toBe(1);
+    const rows = service.rowsFor('100');
+    expect(rows.map((row) => row.source)).toEqual(['want', 'bills', 'story', 'aspiration']);
+    expect(rows[0]).toMatchObject({ id: want.id, say: 'I miss talking to Alex.', rank: 0 });
+    expect(rows.find((row) => row.id === aspiration.id)).toMatchObject({ status: 'dropped' });
+    expect(rows.find((row) => row.id === aspiration.id)?.history.at(-1)).toMatchObject({
+      outcome: 'dropped',
+      cause: 'night call',
+    });
+    // The every-report merge keeps all of it
+    service.sync(jonah, report([jonah], { bills: { due: true, amount: 300 } }, 5));
+    const after = service.rowsFor('100');
+    expect(after.find((row) => row.id === aspiration.id)?.status).toBe('dropped');
+    expect(after.find((row) => row.source === 'story')?.status).toBe('waiting');
+    expect(after.find((row) => row.id === bills.id)?.status).toBe('waiting');
+  });
+
+  it('a dropped row never picks and leaves the prompt', () => {
+    const { service, cache } = build();
+    const jonah = entry('100', { goal_pool: WANT_POOL });
+    const rep = report([jonah]);
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    const [aspiration] = service.rowsFor('100');
+    service.applyEdits('100', { drop: [aspiration.id], rewrite: [], add: [] });
+    expect(must(service.pick(jonah, rep)).seedKey).toBe('want_ChatWith');
+    expect(service.promptLines('100').join(' ')).not.toContain('Joke x3');
+  });
+
+  it('applyEdits refuses an unknown id, a need row drop, and a Sim with no list, changing nothing', () => {
+    const { service, cache } = build();
+    const jonah = entry('100', { needs: { hunger: -80 } });
+    const rep = report([jonah]);
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    const [need] = service.rowsFor('100');
+    expect(() => service.applyEdits('100', { drop: ['ibogus'], rewrite: [], add: [] })).toThrow(/no row ibogus/);
+    expect(() => service.applyEdits('100', { drop: [need.id], rewrite: [], add: [] })).toThrow(/need row/);
+    expect(() => service.applyEdits('999', { drop: [], rewrite: [], add: [] })).toThrow(/no list/);
+    expect(service.rowsFor('100')[0].status).toBe('waiting');
+    expect(service.editsApplied('100')).toBe(0);
+  });
+
+  it('a story row is done on its first success', () => {
+    const { service, cache } = build();
+    const jonah = entry('100');
+    const rep = report([jonah]);
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    service.applyEdits('100', { drop: [], rewrite: [], add: [{ why: 'Finish my book', say: 'One more chapter.' }] });
+    const [story] = service.rowsFor('100');
+    service.markFired(story.id, '');
+    service.markInFlight(story.id, 'req-9');
+    service.onOutcome({ request_id: 'req-9', sim_id: '100', outcome: 'success' } as never);
+    expect(service.rowsFor('100')[0].status).toBe('done');
+  });
+
+  it('the day rollover fires once with the ending rows, then the new day starts fresh', () => {
+    const { service, cache } = build();
+    const rollovers: DayRollover[] = [];
+    service.onDayRollover((rollover) => rollovers.push(rollover));
+    const jonah = entry('100', { goal_pool: WANT_POOL });
+    const rep = report([jonah]);
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    const ending = service.rowsFor('100');
+    const next: SimStateReport = {
+      ...rep,
+      lot: { ...rep.lot, clock: { hour: 0, minute: 5, absolute_day: 41, day: 3 } },
+    };
+    cache.ingest(next);
+    service.sync(jonah, next);
+    service.sync(jonah, next);
+    expect(rollovers).toHaveLength(1);
+    expect(rollovers[0]).toMatchObject({ simId: '100', endingDay: 40, newDay: 41 });
+    expect(rollovers[0].endingRows.map((row) => row.id)).toEqual(ending.map((row) => row.id));
+    expect(service.rowsFor('100').map((row) => row.id)).not.toEqual(ending.map((row) => row.id));
+    expect(service.rowsForDay('100', 40).map((row) => row.id)).toEqual(ending.map((row) => row.id));
   });
 });

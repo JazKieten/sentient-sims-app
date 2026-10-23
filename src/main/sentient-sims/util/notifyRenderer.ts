@@ -236,6 +236,12 @@ export function notifySceneStop(payload: { sceneId: string; mode: 'soft' | 'hard
   notifyAllWindows('scene-stop', payload);
 }
 
+// The lot is going away: the renderer stops the line playing now and drops every queued
+// scene, whether or not it carries a scene id.
+export function notifySceneStopAll() {
+  notifyAllWindows('scene-stop-all');
+}
+
 // The renderer's word timing for a line as it starts playing: per-codepoint start times
 // from ElevenLabs (charMs, a prefix while the line streams) or ready-made word times
 // (wordMs, synthesized for Kokoro), plus when and how fast playback started.

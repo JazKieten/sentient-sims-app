@@ -5,6 +5,7 @@ import log from 'electron-log';
 import type { ScenePlaybackRegistry } from '../services/ScenePlaybackRegistry';
 import type { SceneFreshness } from '../services/SceneFreshness';
 import type { SceneControl } from '../models/ModLogWebsocketMessage';
+import { notifySceneStopAll } from './notifyRenderer';
 
 export function onSceneControl(
   scenePlayback: ScenePlaybackRegistry,
@@ -15,6 +16,10 @@ export function onSceneControl(
   log.info(`[Scene] the game ended ${control.scene_id ?? 'every scene'} (${control.mode}): ${control.reason}${where}`);
   if (control.action === 'stop_all') {
     scenePlayback.stopAll(control.reason);
+    // The registry only knows scenes with an id; a reply to the player airs without one
+    // and kept playing over the loading screen and onto the next lot (2026-10-23). The
+    // renderer drops its whole queue and the line playing now, id or not.
+    notifySceneStopAll();
     // The lot is going away: nobody is "gone" from the next one
     sceneFreshness?.clearDepartures();
     return;

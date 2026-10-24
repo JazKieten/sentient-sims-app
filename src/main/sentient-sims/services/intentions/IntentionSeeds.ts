@@ -16,6 +16,7 @@ import {
   untilReached,
 } from '../../models/IntentionRow';
 import { parseNextShift } from '../../util/formatSelfStatus';
+import { namesSim } from './RowMemory';
 
 export type SeedSettings = {
   needFloor: number;
@@ -214,8 +215,10 @@ function goalRows(entry: SimStateEntry): IntentionRow[] {
             target,
             why: goal.text ?? goal.label,
             // A want's text is already the Sim's own line ("The jams are on now!"); a goal's
-            // label is a game objective and is never said aloud
-            say: source === 'want' ? goal.text : undefined,
+            // label is a game objective and is never said aloud. A want line that names the
+            // Sim ("Duane is starting to see sheep.") is the game's third person, not their
+            // voice: no say until the night call writes one (renovation R1)
+            say: source === 'want' && !namesSim(goal.text, entry.sim_name) ? goal.text : undefined,
             preconditions,
             until: { kind: source === 'want' ? 'want_absent' : 'goal_absent' },
             status,

@@ -49,7 +49,37 @@ export type CognitionGoalCompleted = {
   source: 'whim' | 'aspiration';
 };
 
-export type CognitionModMessage = CognitionQueryResult | CognitionHoldReleased | CognitionGoalCompleted;
+// One household interaction the game ended (interactions/ss_household_log.py, renovation R1).
+// origin: ours = the mod pushed it, player = it came through the game client, game = the rest
+export type CognitionInteractionLogRecord = {
+  interaction_id?: string;
+  sim_id: string;
+  name?: string;
+  super_name?: string | null;
+  is_super?: boolean;
+  target_kind?: string | null;
+  target_id?: string | null;
+  ran?: boolean;
+  canceled?: boolean;
+  user_canceled?: boolean;
+  finishing?: string;
+  origin?: 'ours' | 'player' | 'game';
+  day?: number | null;
+  minute?: number | null;
+  zone_id?: string | null;
+};
+
+// A batch of them, every few seconds
+export type CognitionInteractionLog = {
+  kind: 'interaction_log';
+  records: CognitionInteractionLogRecord[];
+};
+
+export type CognitionModMessage =
+  | CognitionQueryResult
+  | CognitionHoldReleased
+  | CognitionGoalCompleted
+  | CognitionInteractionLog;
 
 // One tool as the mod's registry describes it (plum/ss_plum_tools.py catalogue())
 export type PlumModToolDef = {

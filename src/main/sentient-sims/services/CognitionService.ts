@@ -563,6 +563,13 @@ export class CognitionService {
     log.info(
       `[Cognition] sim ${simId} ${lane} lane closed at the gate: ${gate.key}${gate.why ? ` (${gate.why})` : ''}`,
     );
+    // A row firing through a lane that gates itself (a deliberate row) stands down as a gate
+    // refusal: the moment said no, so no attempt and nothing counted (renovation R1)
+    const runtime = this.runtime(simId);
+    if (runtime.activeRowId) {
+      this.autonomy.intentions?.onStoodDown(runtime.activeRowId, { gate: true });
+      runtime.activeRowId = undefined;
+    }
     this.toCooldown(simId);
   }
 
@@ -655,6 +662,8 @@ export class CognitionService {
       log.warn(`[Cognition] vocabulary for sim ${simId} had no rows field; whitelist prompt instead`);
       return undefined;
     }
+    // What the Sim's menus offered, kept for the night call (renovation R1, vocabulary_seen)
+    this.autonomy.intentions?.recordVocabulary(simId, answer.result, this.ctx.simStateCache.getReport());
     return answer.result;
   }
 
@@ -2108,7 +2117,12 @@ export class CognitionService {
       this.armPendingTimeout(simId, runtime, entry, intent);
       const rowId = runtime.activeRowId;
       if (rowId) {
-        this.autonomy.intentions?.markInFlight(rowId, requestId, intent.target_object_id);
+        this.autonomy.intentions?.markInFlight(
+          rowId,
+          requestId,
+          intent.target_object_id,
+          intent.pie?.label ?? intent.action,
+        );
         runtime.activeRowId = undefined;
       }
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId}, ${source})`);
@@ -2138,6 +2152,12 @@ export class CognitionService {
     if (!say || !name || !this.ctx.settings.intentionVoiceWhy) {
       return;
     }
+    // Say once (renovation R1): the line belongs to the row starting, not to each retry
+    const intentions = this.autonomy.intentions;
+    if (intentions && !intentions.canSay(entry.sim_id, row)) {
+      log.debug(`[Rows] ${name.split(/\s+/)[0]} already said ${row.seedKey} today`);
+      return;
+    }
     // Older test stubs carry no TTS
     const ai = this.ctx.ai as Partial<Pick<ApiContext['ai'], 'playTtsLines'>> | undefined;
     if (typeof ai?.playTtsLines !== 'function') {
@@ -2164,6 +2184,7 @@ export class CognitionService {
         paced: true,
         pacedText: finalText,
       });
+      intentions?.markSaid(entry.sim_id, row);
       log.info(`[Rows] ${name.split(/\s+/)[0]} says: "${say}"`);
     } catch (error) {
       log.warn(`[Rows] could not voice ${row.id} for sim ${entry.sim_id}`, error);

@@ -96,6 +96,16 @@ describe('ModQueryService', () => {
     expect(query.onModMessage(undefined)).toBe(false);
   });
 
+  it('interaction_log batches reach their listeners (renovation R1)', () => {
+    const { query } = service();
+    const heard: number[] = [];
+    query.onInteractionLog((event) => heard.push(event.records.length));
+    expect(
+      query.onModMessage({ kind: 'interaction_log', records: [{ sim_id: '100', name: 'sim_Chat', origin: 'game' }] }),
+    ).toBe(true);
+    expect(heard).toEqual([1]);
+  });
+
   it('a late answer is consumed without a pending entry', () => {
     const { query } = service();
     expect(query.onModMessage({ kind: 'query_result', request_id: 'cq-gone', ok: true, result: {} })).toBe(true);

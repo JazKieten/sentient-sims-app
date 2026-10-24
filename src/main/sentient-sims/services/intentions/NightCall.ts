@@ -10,6 +10,7 @@ import type { ActionOutcomeRecord } from '../../db/ActionOutcomeRepository';
 import { IntentionRow, Precondition, describeRow, minutesToClock } from '../../models/IntentionRow';
 import { describeSim } from '../plum/plumLiveSims';
 import { rowRank } from './IntentionSeeds';
+import { RETIRE_CLEAR_DAYS, RowStats, isDead, statsTag } from './RowMemory';
 
 export const NIGHT_MEMORIES = 25;
 export const NIGHT_OUTCOMES = 20;
@@ -30,7 +31,29 @@ export type NightCallInput = {
   memories: MemoryEntity[];
   // Graded outcomes of the Sim's pushes (any day; filtered to the ending one here)
   outcomes: ActionOutcomeRecord[];
+  // Every row key's counters across days (renovation R1); retired keys carry retiredDay
+  stats?: RowStats[];
 };
+
+// ACE-style counters before a row's line when its key has a record: `[key] fired=7 ran=0
+// last=not_on_menu DEAD :: `. Counts, not rates: what happened, not what works.
+function statsPrefix(item: IntentionRow, byKey: Map<string, RowStats>): string {
+  const stats = byKey.get(item.seedKey);
+  if (!stats || (stats.fires === 0 && stats.expired === 0 && stats.rewrites === 0)) {
+    return '';
+  }
+  return `${statsTag(stats)}${isDead(stats) ? ' DEAD' : ''} :: `;
+}
+
+function retiredLines(stats: RowStats[]): string[] {
+  return stats
+    .filter((entry) => entry.retiredDay !== undefined)
+    .map(
+      (entry) =>
+        `- ${statsTag(entry)} :: ${entry.why ?? entry.seedKey} (retired day ${entry.retiredDay}` +
+        `${entry.retiredZone ? `, zone ${entry.retiredZone}` : ''})`,
+    );
+}
 
 function pretty(text: string): string {
   return text.replace(/_/g, ' ');
@@ -174,10 +197,10 @@ function outcomeLines(outcomes: ActionOutcomeRecord[], day: number): string[] {
     });
 }
 
-function todayLine(item: IntentionRow): string {
+function todayLine(item: IntentionRow, byKey: Map<string, RowStats>): string {
   const say = item.say ? ` | says: "${item.say}"` : '';
   const need = item.source === 'need' ? ' | a need row: never touch it' : '';
-  return `- ${describeRow(item)} | rank ${rowRank(item)}${say}${need}`;
+  return `- ${statsPrefix(item, byKey)}${describeRow(item)} | rank ${rowRank(item)}${say}${need}`;
 }
 
 export const NIGHT_RULES = [
@@ -186,6 +209,7 @@ export const NIGHT_RULES = [
   'Add 0 to 4 story rows. Ground them in yesterday: what fired and what died and why, who they spent time with, what is coming. Name a Sim (`target`) only if they live here or were around yesterday; give hours only when the beat has a time.',
   'Drop what is stale or impossible today (the same thing died three times for a reason that has not changed). Rewrite a row whose words are mechanical when a line in their voice would serve; re-rank when the order is wrong (lower rank runs first).',
   'Never name tuning keys or interactions: at the moment a row fires, the day loop picks the click from the pie menu.',
+  'The counts in [brackets] are what happened to that row on earlier days, not a measure of what works. A row marked DEAD fired 3 or more times without running: drop it or leave it; a rewrite of it is refused.',
   'The Sim never learns a night call exists; write as their own intentions, not as instructions.',
 ];
 
@@ -200,11 +224,22 @@ export function buildNightText(input: NightCallInput): string {
   if (household.length > 0) {
     lines.push('', 'The household right now:', ...household);
   }
+  const byKey = new Map((input.stats ?? []).map((stats) => [stats.seedKey, stats]));
   lines.push('', `Yesterday's list (day ${input.endingDay}) and what became of it:`);
   if (input.endingRows.length === 0) {
     lines.push('- (no list was kept)');
   } else {
-    input.endingRows.forEach((item) => lines.push(`- ${describeRow(item)} => ${verdictOf(item)}`));
+    input.endingRows.forEach((item) =>
+      lines.push(`- ${statsPrefix(item, byKey)}${describeRow(item)} => ${verdictOf(item)}`),
+    );
+  }
+  const retired = retiredLines(input.stats ?? []);
+  if (retired.length > 0) {
+    lines.push(
+      '',
+      `Dead here (retired by code, left off today's list until the zone changes, a candidate shows on a menu, or ${RETIRE_CLEAR_DAYS} days pass):`,
+      ...retired,
+    );
   }
   lines.push('', 'What happened yesterday (their own memories, oldest first):');
   const memories = memoryLines(input.memories);
@@ -217,7 +252,7 @@ export function buildNightText(input: NightCallInput): string {
   const today = input.todayRows.filter(
     (item) => item.status !== 'done' && item.status !== 'expired' && item.status !== 'dropped',
   );
-  lines.push(...(today.length > 0 ? today.map(todayLine) : ['- (empty)']));
+  lines.push(...(today.length > 0 ? today.map((item) => todayLine(item, byKey)) : ['- (empty)']));
   lines.push('', 'Rules:', ...NIGHT_RULES.map((rule) => `- ${rule}`));
   lines.push(
     '',

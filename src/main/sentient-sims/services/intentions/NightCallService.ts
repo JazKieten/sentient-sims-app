@@ -160,6 +160,7 @@ export class NightCallService {
       todayRows,
       memories,
       outcomes: this.outcomesOf(item.simId),
+      stats: this.deps.intentions.statsFor(item.simId),
     });
     return { text, rows: todayRows.length, memories: memories.length };
   }

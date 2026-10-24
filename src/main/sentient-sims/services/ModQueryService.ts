@@ -12,7 +12,12 @@
 import log from 'electron-log';
 import { randomUUID } from 'crypto';
 import { ModCognitionQuery, ModWebsocketMessageType, WebsocketNotification } from '../models/ModWebsocketMessage';
-import { CognitionGoalCompleted, CognitionHoldReleased, CognitionModMessage } from '../models/ModLogWebsocketMessage';
+import {
+  CognitionGoalCompleted,
+  CognitionHoldReleased,
+  CognitionInteractionLog,
+  CognitionModMessage,
+} from '../models/ModLogWebsocketMessage';
 import { isWebSocketConnected, sendModNotification } from '../websocketServer';
 
 export type ModQueryResult<T> = { ok: true; result: T } | { ok: false; error: string };
@@ -34,6 +39,9 @@ export class ModQueryService {
 
   // The game marked a goal done (autonomy part 5; the mod's ss_goal_events)
   private readonly goalListeners: ((event: CognitionGoalCompleted) => void)[] = [];
+
+  // The household's interactions in batches (renovation R1; the mod's ss_household_log)
+  private readonly interactionLogListeners: ((event: CognitionInteractionLog) => void)[] = [];
 
   // Seam for tests; production sends over the mod websocket
   sendToMod(message: WebsocketNotification) {
@@ -124,6 +132,15 @@ export class ModQueryService {
           }
         });
         return true;
+      case 'interaction_log':
+        this.interactionLogListeners.forEach((listener) => {
+          try {
+            listener(message);
+          } catch (error) {
+            log.warn('[ModQuery] interaction log listener failed', error);
+          }
+        });
+        return true;
       default:
         // A kind a newer mod may add: not ours to drop on the floor loudly
         return false;
@@ -136,6 +153,10 @@ export class ModQueryService {
 
   onGoalCompleted(listener: (event: CognitionGoalCompleted) => void) {
     this.goalListeners.push(listener);
+  }
+
+  onInteractionLog(listener: (event: CognitionInteractionLog) => void) {
+    this.interactionLogListeners.push(listener);
   }
 
   // The websocket closed: nothing pending can be answered now

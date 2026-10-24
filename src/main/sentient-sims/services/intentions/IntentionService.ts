@@ -24,6 +24,8 @@ import {
   untilReached,
 } from '../../models/IntentionRow';
 import { desireRow, isImpulseRow, mergeSeeds, orderRows, seedRows, storyRow } from './IntentionSeeds';
+import { NEVER_CAUSES, RowStats, contextSnapshot, daySummaryLine, isDead, statsTag } from './RowMemory';
+import type { PickRecord, VocabularyAnswer } from './RowMemoryService';
 
 // A Sim's day ended as this service saw it: the first sync with a new absolute_day
 // (autonomy part 6: the night call edits the new day's list from the ending one)
@@ -33,6 +35,8 @@ export type DayRollover = {
   // The ending day's rows as they stood in memory (not a re-read)
   endingRows: IntentionRow[];
   newDay: number;
+  // Keys the code retired at this rollover (renovation R1), before the night call reads them
+  retired: string[];
 };
 
 type SimRows = {
@@ -43,6 +47,8 @@ type SimRows = {
   shape?: string;
   paceLoggedAt?: number;
   saveTimer?: ReturnType<typeof setTimeout>;
+  // The last pick that returned a row: the eligible set and the state before it (R1)
+  lastPick?: PickRecord & { rowId: string };
 };
 
 export type PickOptions = {
@@ -56,7 +62,7 @@ export type PickOptions = {
   usable?: (key: string) => boolean;
 };
 
-export type IntentionServiceDeps = Partial<Pick<AutonomyServices, 'intentionRepository' | 'modQuery'>>;
+export type IntentionServiceDeps = Partial<Pick<AutonomyServices, 'intentionRepository' | 'modQuery' | 'rowMemory'>>;
 
 const SAVE_DEBOUNCE_MS = 2_000;
 const CLAIM_DONE_MINUTES = 10;
@@ -86,20 +92,7 @@ const TRANSIENT_CAUSES = new Set([
   'starved_behind_running_interaction',
 ]);
 
-// Causes that never clear today (age, trait, relationship gates: dropped at day end)
-const NEVER_CAUSES = new Set([
-  'incest_rules_block',
-  'relationship_gate_blocks_romance',
-  'trait_gated_affordance_variant',
-  'actor_age_blocked',
-  'target_age_blocked',
-  'skill_level_too_low',
-  'strangers_have_not_met',
-  'relationship_too_low',
-  'not_valid_species',
-  'already_in_home_zone',
-  'player_kept_them_home',
-]);
+// NEVER_CAUSES (age, trait, relationship gates: dropped at day end) live in RowMemory since R1
 
 function firstName(entry: SimStateEntry | undefined, simId: string): string {
   return (entry?.sim_name ?? '').trim().split(/\s+/)[0] || `sim ${simId}`;
@@ -174,7 +167,8 @@ export class IntentionService {
       this.persist(simId, state);
     }
     if (state && day > state.day) {
-      const rollover: DayRollover = { simId, endingDay: state.day, endingRows: state.rows, newDay: day };
+      const retired = this.closeDay(simId, state, day);
+      const rollover: DayRollover = { simId, endingDay: state.day, endingRows: state.rows, newDay: day, retired };
       this.rolloverListeners.forEach((listener) => {
         try {
           listener(rollover);
@@ -198,6 +192,27 @@ export class IntentionService {
     state = { day, rows, shape: rows.map((item) => item.seedKey).join(',') };
     this.sims.set(simId, state);
     return state;
+  }
+
+  // The day's end in code, before the night call hears the rollover (renovation R1): the keys
+  // that meet D4 retire, the logs are pruned, and one readout line says what the day came to
+  private closeDay(simId: string, state: SimRows, newDay: number): string[] {
+    const memory = this.deps.rowMemory;
+    if (!memory) {
+      return [];
+    }
+    try {
+      const zone = this.ctx.simStateCache.getReport()?.lot?.zone_id;
+      const retired = memory.retirePass(simId, state.rows, state.day, zone === undefined ? undefined : String(zone));
+      memory.prune(newDay);
+      log.info(
+        daySummaryLine(this.simName(simId), state.day, memory.daySummary(simId, state.day, state.rows, retired)),
+      );
+      return retired;
+    } catch (error) {
+      log.warn(`[Rows] closing day ${state.day} failed for sim ${simId}`, error);
+      return [];
+    }
   }
 
   private markDirty(simId: string, state: SimRows) {
@@ -279,7 +294,17 @@ export class IntentionService {
       return;
     }
     const state = this.stateFor(simId, ctx.absoluteDay);
-    const seeded = seedRows(entry, report, { needFloor: this.needFloor });
+    const zone = report.lot?.zone_id;
+    let seeded = seedRows(entry, report, { needFloor: this.needFloor });
+    if (this.deps.rowMemory) {
+      seeded = this.deps.rowMemory.retiredFilter(
+        simId,
+        seeded,
+        ctx.absoluteDay,
+        zone === undefined ? undefined : String(zone),
+      );
+    }
+    const statusBefore = new Map(state.rows.map((item) => [item.id, item.status]));
     const merged = mergeSeeds(state.rows, seeded);
     const rowsById = new Map(merged.map((item) => [item.id, item]));
     merged.forEach((item) => {
@@ -295,6 +320,9 @@ export class IntentionService {
         log.info(`[Rows] ${firstName(entry, simId)} ${item.id} woke: ${item.sleep.cause} cleared`);
         item.status = 'waiting';
         item.sleep = undefined;
+      }
+      if (item.status === 'expired' && statusBefore.has(item.id) && statusBefore.get(item.id) !== 'expired') {
+        this.deps.rowMemory?.expired(simId, item);
       }
     });
     const shape = merged.map((item) => item.seedKey).join(',');
@@ -350,25 +378,18 @@ export class IntentionService {
     const state = this.stateFor(simId, ctx.absoluteDay);
     const rowsById = new Map(state.rows.map((item) => [item.id, item]));
     const claimsHeld = this.claimsHeld(simId, ctx.nowMinutes);
+    let chosen: IntentionRow | undefined;
+    // R1: every row that could have fired now, in list order (the decision log's candidate set)
+    const eligible: IntentionRow[] = [];
     for (const item of state.rows) {
       if (item.status !== 'waiting' || item.what.kind === 'note') {
         continue;
       }
-      if (!options.force) {
-        const held = preconditionsHold(item, ctx, rowsById);
-        if (!held.ok) {
-          continue;
-        }
-        if (item.claim && claimsHeld.has(item.claim)) {
-          continue;
-        }
-        if (options.suppressed && this.keysOf(item).some((key) => options.suppressed?.(key))) {
-          continue;
-        }
-        if (item.what.kind === 'action' && options.usable && !item.what.actions.some(options.usable)) {
-          continue;
-        }
-        if (item.source !== 'need' && state.lastBeat !== undefined) {
+      if (!options.force && !this.eligible(item, ctx, rowsById, claimsHeld, options)) {
+        continue;
+      }
+      if (!chosen) {
+        if (!options.force && item.source !== 'need' && state.lastBeat !== undefined) {
           const next = state.lastBeat + this.beatMinutes;
           if (ctx.nowMinutes < next) {
             const now = Date.now();
@@ -381,10 +402,41 @@ export class IntentionService {
             return undefined;
           }
         }
+        chosen = item;
       }
-      return item;
+      eligible.push(item);
     }
-    return undefined;
+    if (chosen) {
+      state.lastPick = {
+        rowId: chosen.id,
+        eligible: eligible.map((item) => ({ id: item.id, source: item.source, kind: item.what.kind })),
+        context: contextSnapshot(entry, report),
+      };
+    }
+    return chosen;
+  }
+
+  // Preconditions, claims, held-off keys and an action row's served verbs (pick's filters)
+  private eligible(
+    item: IntentionRow,
+    ctx: RowClockContext,
+    rowsById: Map<string, IntentionRow>,
+    claimsHeld: Set<string>,
+    options: PickOptions,
+  ): boolean {
+    if (!preconditionsHold(item, ctx, rowsById).ok) {
+      return false;
+    }
+    if (item.claim && claimsHeld.has(item.claim)) {
+      return false;
+    }
+    if (options.suppressed && this.keysOf(item).some((key) => options.suppressed?.(key))) {
+      return false;
+    }
+    if (item.what.kind === 'action' && options.usable && !item.what.actions.some(options.usable)) {
+      return false;
+    }
+    return true;
   }
 
   private keysOf(item: IntentionRow): string[] {
@@ -503,6 +555,20 @@ export class IntentionService {
       state.lastBeat = now;
     }
     item.firedAt = Date.now();
+    const pick = state.lastPick?.rowId === item.id ? state.lastPick : undefined;
+    const entry = this.ctx.simStateCache.getSim(simId);
+    this.deps.rowMemory?.startFire(
+      simId,
+      item,
+      pick ??
+        (entry
+          ? {
+              eligible: [{ id: item.id, source: item.source, kind: item.what.kind }],
+              context: contextSnapshot(entry, this.ctx.simStateCache.getReport()),
+            }
+          : undefined),
+    );
+    state.lastPick = undefined;
     const beat =
       item.source === 'need'
         ? 'need, no beat'
@@ -511,11 +577,13 @@ export class IntentionService {
     this.markDirty(simId, state);
   }
 
-  markInFlight(rowId: string, requestId: string, targetObjectId?: string) {
+  // `chosen` is what went out (the pie label or the verb), for the decision log
+  markInFlight(rowId: string, requestId: string, targetObjectId?: string, chosen?: string) {
     const found = this.find(rowId);
     if (!found) {
       return;
     }
+    this.deps.rowMemory?.commitFire(found.item, { requestId, chosen });
     found.item.status = 'in_flight';
     found.item.requestId = requestId;
     found.item.targetObjectId = targetObjectId;
@@ -533,6 +601,13 @@ export class IntentionService {
     const { simId, state, item } = found;
     if (item.status === 'in_flight') {
       return;
+    }
+    if (options.gate) {
+      this.deps.rowMemory?.dropFire(item.id);
+    } else if (options.echo) {
+      this.deps.rowMemory?.echo(simId, item);
+    } else {
+      this.deps.rowMemory?.commitFire(item, { outcome: 'stood_down', cause: options.reason ?? 'stood_down' });
     }
     if (options.echo) {
       item.history.push({ at: Date.now(), outcome: 'echo' });
@@ -564,6 +639,7 @@ export class IntentionService {
       return;
     }
     const { simId, state, item } = found;
+    this.deps.rowMemory?.timeout(simId, item, item.requestId);
     item.status = 'waiting';
     item.requestId = undefined;
     item.attempts += 1;
@@ -584,6 +660,13 @@ export class IntentionService {
       return;
     }
     const name = this.simName(simId);
+    this.deps.rowMemory?.outcome(simId, item, event.request_id, {
+      outcome: event.outcome,
+      cause: event.cause,
+      reason: event.reason,
+      ran: event.ran ?? undefined,
+      finishing: event.finishing,
+    });
     item.requestId = undefined;
     item.history.push({ at: Date.now(), outcome: event.outcome, cause: event.cause });
     if (event.outcome !== 'success' && event.decided_at === 'dispatch') {
@@ -735,10 +818,23 @@ export class IntentionService {
         item.history.push({ at: now, outcome: 'dropped', cause: 'night call' });
       }
     });
+    // R1: a dead or retired key is never reworded (ACE: deltas, not rewrites); the rest of the
+    // call still applies, since a throw would lose every other edit of a detached turn
+    const refused: string[] = [];
+    let rewrote = 0;
     edits.rewrite.forEach((edit) => {
       const item = byId.get(edit.row_id);
       if (!item) {
         return;
+      }
+      const stats = this.deps.rowMemory?.get(simId, item.seedKey);
+      if (stats && (isDead(stats) || stats.retiredDay !== undefined)) {
+        refused.push(`${item.id} ${statsTag(stats)}`);
+        return;
+      }
+      rewrote += 1;
+      if (edit.why || edit.say) {
+        this.deps.rowMemory?.rewrote(simId, item);
       }
       if (edit.why) {
         item.why = edit.why;
@@ -756,11 +852,13 @@ export class IntentionService {
     orderRows(state.rows);
     state.shape = state.rows.map((item) => item.seedKey).join(',');
     this.editCounts.set(simId, (this.editCounts.get(simId) ?? 0) + 1);
+    const refusedText =
+      refused.length > 0 ? `; refused to reword ${refused.join('; ')} (dead: drop it or leave it)` : '';
     const changed =
-      `${name}'s list: dropped ${edits.drop.length}, rewrote ${edits.rewrite.length}, ` +
-      `added ${added.length} story row${added.length === 1 ? '' : 's'}`;
+      `${name}'s list: dropped ${edits.drop.length}, rewrote ${rewrote}, ` +
+      `added ${added.length} story row${added.length === 1 ? '' : 's'}${refusedText}`;
     log.info(
-      `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${edits.rewrite.length}, added ${added.length} story rows`,
+      `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${rewrote}, added ${added.length} story rows${refusedText}`,
     );
     log.info(`[Rows] ${name} list: ${IntentionService.listLine(state.rows)}`);
     this.markDirty(simId, state);
@@ -790,6 +888,31 @@ export class IntentionService {
     } catch (error) {
       log.debug(`[Rows] load failed for sim ${simId} day ${day}: ${String(error)}`);
       return [];
+    }
+  }
+
+  // --- row memory (renovation R1) -----------------------------------------------------------
+
+  // Every key's counters for the Sim (the night text, the stats route)
+  statsFor(simId: string): RowStats[] {
+    return this.deps.rowMemory?.statsFor(simId) ?? [];
+  }
+
+  // Say once: a row's line is voiced only if its key has not been said today
+  canSay(simId: string, row: IntentionRow): boolean {
+    return this.deps.rowMemory?.canSay(simId, row) ?? true;
+  }
+
+  markSaid(simId: string, row: IntentionRow) {
+    this.deps.rowMemory?.markSaid(simId, row);
+  }
+
+  // Every vocabulary answer the app gets is what the Sim's menus offered (R3 reads it at night)
+  recordVocabulary(simId: string, answer: VocabularyAnswer, report: SimStateReport | undefined) {
+    try {
+      this.deps.rowMemory?.recordVocabulary(simId, answer, report);
+    } catch (error) {
+      log.debug(`[Rows] vocabulary not kept for sim ${simId}: ${String(error)}`);
     }
   }
 

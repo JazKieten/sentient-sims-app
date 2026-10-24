@@ -286,6 +286,30 @@ export class CognitionController {
     res.json(this.autonomy.intentions.all());
   };
 
+  // Row memory (renovation R1): every key's counters across days, the retired keys, and for one
+  // Sim today's fire log and the household's interactions by origin. Chat 4's stream review
+  // reads this (or greps the `[Rows] <Sim> day <D>:` lines) instead of counting by hand.
+  @CatchErrors()
+  getRowStats = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    const { rowMemory } = this.autonomy;
+    if (!simId) {
+      const stats = rowMemory.allStats();
+      res.json({ stats, retired: stats.filter((entry) => entry.retiredDay !== undefined) });
+      return;
+    }
+    const day = this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+    const stats = rowMemory.statsFor(simId);
+    res.json({
+      sim_id: simId,
+      day,
+      stats,
+      retired: stats.filter((entry) => entry.retiredDay !== undefined),
+      fires: rowMemory.firesFor(simId, day),
+      interactions: rowMemory.interactionCounts(simId, day),
+    });
+  };
+
   // Dev seam: fire one row now, past the pace and the preconditions (the gate still applies)
   debugFireRow = async (req: Request, res: Response) => {
     try {

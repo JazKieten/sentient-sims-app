@@ -24,6 +24,8 @@ import { ModQueryService } from '../services/ModQueryService';
 import { IntentionRepository } from '../db/IntentionRepository';
 import { IntentionService } from '../services/intentions/IntentionService';
 import { NightCallService } from '../services/intentions/NightCallService';
+import { RowMemoryRepository } from '../db/RowMemoryRepository';
+import { RowMemoryService } from '../services/intentions/RowMemoryService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -35,6 +37,10 @@ export interface AutonomyServices {
   modQuery: ModQueryService;
   outcomeVerdict: OutcomeVerdictService;
   dailyPlan: DailyPlanService;
+  // Row memory's tables (renovation R1, migration 027)
+  rowMemoryRepository: RowMemoryRepository;
+  // Counters per row key across days, the decision log, the household log, the menus seen (R1)
+  rowMemory: RowMemoryService;
   // The ordered row list per household Sim (autonomy part 5)
   intentions: IntentionService;
   // One Plum turn per household Sim at the day rollover that edits the list (part 6)
@@ -67,6 +73,12 @@ function construct(ctx: ApiContext) {
   autonomy.modQuery = new ModQueryService();
   autonomy.outcomeVerdict = new OutcomeVerdictService(autonomy.actionOutcomeRepository);
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
+  autonomy.rowMemoryRepository = new RowMemoryRepository(ctx.db);
+  autonomy.rowMemory = new RowMemoryService(ctx, autonomy);
+  // The household's interactions the mod forwards (interactions/ss_household_log.py)
+  autonomy.modQuery.onInteractionLog((event) => {
+    autonomy.rowMemory.onInteractionLog(event.records);
+  });
   // Needs modQuery for the game's goal_completed events
   autonomy.intentions = new IntentionService(ctx, autonomy);
   // Hears the rows' day rollover; cognition ticks it from the state report
@@ -156,6 +168,9 @@ function routes(app: Express, ctx: ApiContext) {
   app.get('/ai/outcomes', controller.getOutcomes);
   // Intention rows (part 5): the inspection surface and the debug fire
   app.get('/cognition/rows', controller.getRows);
+  // Row memory (R1): before /:simId, which would read 'stats' as a sim id
+  app.get('/cognition/rows/stats', controller.getRowStats);
+  app.get('/cognition/rows/stats/:simId', controller.getRowStats);
   app.get('/cognition/rows/:simId', controller.getRows);
   app.post('/cognition/debug/rows/fire', controller.debugFireRow);
   // The night call (part 6), forced now for one Sim
@@ -178,8 +193,9 @@ export const autonomyTier: TierRegistration = {
   onDatabaseLoaded: (ctx) => {
     // The bounding pass for the graded outcomes this save holds (F5)
     autonomyOf(ctx).outcomeVerdict.pruneOnLoad();
-    // Rows are per save
+    // Rows are per save, and so is their memory
     autonomyOf(ctx).intentions.onDatabaseLoaded();
+    autonomyOf(ctx).rowMemory.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {
     // A reply to the player that wanted to act may act now that it has been heard

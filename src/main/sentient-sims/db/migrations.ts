@@ -442,6 +442,95 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
         PRIMARY KEY ( sim_id, absolute_day )
       );
     `,
+    // Row memory (autonomy renovation R1, 2026-10-24): what each row key did across days
+    // (row_stats, counted by code, never by a model), every fire with the state before it and
+    // its propensity (row_fire_log), what the game did for the household beside our own fires
+    // (interaction_log, a separate arm with an unknown policy) and the pie items each target
+    // offered a Sim (vocabulary_seen, read by the night call in R3).
+    '027-create-row-memory': (db: Database) => {
+      db.exec(`
+      CREATE TABLE row_stats (
+        sim_id               TEXT NOT NULL  ,
+        seed_key             TEXT NOT NULL  ,
+        fires                INTEGER NOT NULL DEFAULT 0  ,
+        clicked              INTEGER NOT NULL DEFAULT 0  ,
+        ran                  INTEGER NOT NULL DEFAULT 0  ,
+        canceled             INTEGER NOT NULL DEFAULT 0  ,
+        refused              INTEGER NOT NULL DEFAULT 0  ,
+        not_on_menu          INTEGER NOT NULL DEFAULT 0  ,
+        no_target            INTEGER NOT NULL DEFAULT 0  ,
+        expired              INTEGER NOT NULL DEFAULT 0  ,
+        nights_kept          INTEGER NOT NULL DEFAULT 0  ,
+        rewrites             INTEGER NOT NULL DEFAULT 0  ,
+        fires_since_ran      INTEGER NOT NULL DEFAULT 0  ,
+        last_cause           TEXT     ,
+        last_structural      INTEGER NOT NULL DEFAULT 0  ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        said_day             INTEGER     ,
+        retired_day          INTEGER     ,
+        retired_cause        TEXT     ,
+        retired_zone         TEXT     ,
+        why                  TEXT     ,
+        PRIMARY KEY ( sim_id, seed_key )
+      );
+      CREATE TABLE row_fire_log (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        at                   TEXT NOT NULL  ,
+        day                  INTEGER     ,
+        minute               INTEGER     ,
+        sim_id               TEXT NOT NULL  ,
+        row_id               TEXT NOT NULL  ,
+        seed_key             TEXT NOT NULL  ,
+        source               TEXT     ,
+        what_kind            TEXT     ,
+        eligible             TEXT     ,
+        chosen               TEXT     ,
+        propensity           REAL     ,
+        context              TEXT     ,
+        request_id           TEXT     ,
+        outcome              TEXT     ,
+        ran                  INTEGER     ,
+        finishing            TEXT     ,
+        cause                TEXT     ,
+        reason               TEXT
+      );
+      CREATE INDEX row_fire_log_sim_day ON row_fire_log ( sim_id, day );
+      CREATE INDEX row_fire_log_request ON row_fire_log ( request_id );
+      CREATE TABLE interaction_log (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        at                   TEXT NOT NULL  ,
+        sim_id               TEXT NOT NULL  ,
+        interaction_id       TEXT     ,
+        name                 TEXT     ,
+        super_name           TEXT     ,
+        is_super             INTEGER     ,
+        target_kind          TEXT     ,
+        target_id            TEXT     ,
+        ran                  INTEGER     ,
+        canceled             INTEGER     ,
+        user_canceled        INTEGER     ,
+        finishing            TEXT     ,
+        origin               TEXT     ,
+        day                  INTEGER     ,
+        minute               INTEGER     ,
+        zone                 TEXT
+      );
+      CREATE INDEX interaction_log_sim_day ON interaction_log ( sim_id, day );
+      CREATE TABLE vocabulary_seen (
+        sim_id               TEXT NOT NULL  ,
+        target               TEXT NOT NULL  ,
+        kind                 TEXT NOT NULL  ,
+        label                TEXT NOT NULL  ,
+        key                  TEXT NOT NULL  ,
+        greyed               TEXT     ,
+        zone                 TEXT NOT NULL  ,
+        day                  INTEGER NOT NULL  ,
+        minute               INTEGER     ,
+        PRIMARY KEY ( sim_id, day, zone, target, key, label )
+      );
+      `);
+    },
   }),
 );
 

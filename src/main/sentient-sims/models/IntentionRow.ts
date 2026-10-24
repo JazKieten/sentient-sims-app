@@ -11,7 +11,15 @@ import type { SimStateEntry, SimStateReport } from './SimStateReport';
 
 // The night call's edits (edit_intentions) are defined in the core seam so core's tool never
 // names this autonomy module
-export type { IntentionEdits, IntentionEditSlot, IntentionRewrite, IntentionStoryAdd } from '../tiers/types';
+export type {
+  IntentionClick,
+  IntentionClickTarget,
+  IntentionDiagnosis,
+  IntentionEdits,
+  IntentionEditSlot,
+  IntentionRewrite,
+  IntentionStoryAdd,
+} from '../tiers/types';
 
 export type RowSource =
   | 'need'
@@ -42,8 +50,21 @@ export type DeliberateDesire = {
 // The four kinds of `what` (decision 3): a pie-menu click over candidate tuning names, a
 // whitelist recipe (tried in order across attempts), the existing deliberation with the row
 // as the armed desire, or a note that never fires and only holds verbs and informs the prompt.
+// Where a pie row clicks (renovation R3): self, a Sim, or an object KIND the mod resolves to
+// the nearest such object. Absent = the mod finds it ('find').
+export type PieTarget = { kind: 'self' | 'sim' | 'kind' | 'phone'; id?: string; name?: string };
+
 export type RowWhat =
-  | { kind: 'pie'; candidates: string[]; label: string; fallback?: string }
+  | {
+      kind: 'pie';
+      // Tuning keys (seeds) or menu labels (the night call's story rows, R3)
+      candidates: string[];
+      label: string;
+      fallback?: string;
+      target?: PieTarget;
+      // Tried once when the first target's menu refuses (R3)
+      fallbackTarget?: PieTarget;
+    }
   | { kind: 'action'; actions: string[] }
   | { kind: 'deliberate'; desire: DeliberateDesire }
   | { kind: 'note'; holds?: string[] };
@@ -117,6 +138,8 @@ export type IntentionRow = {
   // Consecutive initiation-set failures (R2): counted at most once per game hour; at
   // MAX_ABSENT the row expires
   absent?: { count: number; lastAt: number; cause: string };
+  // The night call's one-line reading of why this key died (R3; R4 reads it)
+  diagnosis?: string;
 };
 
 export type RowClockContext = {

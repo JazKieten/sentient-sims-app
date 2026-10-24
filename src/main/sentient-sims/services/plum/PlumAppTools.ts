@@ -18,7 +18,15 @@ import { PlumWhisperService, WhisperItem } from './PlumWhisper';
 import { DIRECTOR_NOTE_MAX_CHARS } from './plumPrompt';
 import { sendModNotification } from '../../websocketServer';
 import { ModWebsocketMessageType, ModWebsocketNotificationType } from '../../models/ModWebsocketMessage';
-import type { ChatPollView, IntentionEdits, IntentionRewrite, IntentionStoryAdd } from '../../tiers/types';
+import type {
+  ChatPollView,
+  IntentionClick,
+  IntentionClickTarget,
+  IntentionDiagnosis,
+  IntentionEdits,
+  IntentionRewrite,
+  IntentionStoryAdd,
+} from '../../tiers/types';
 
 // The one thing the director_note tool needs of the PlumService running the turn
 export type DirectorNoteStore = { setDirectorNote(note: string): void };
@@ -35,6 +43,11 @@ export const MAX_STORY_ROWS_A_CALL = 4;
 export const MAX_ROW_EDITS_A_CALL = 12;
 export const MAX_SAY_CHARS = 160;
 export const MAX_WHY_CHARS = 200;
+// A story row's click (renovation R3): 1-3 items, each a label copied from yesterday's menus
+export const MAX_CLICK_ITEMS = 3;
+export const MAX_CLICK_ITEM_CHARS = 80;
+export const MAX_DIAGNOSES_A_CALL = 12;
+export const MAX_DIAGNOSIS_CHARS = 160;
 
 const MEMORY_TEXT_CHARS = 400;
 const DEFAULT_MEMORIES = 10;
@@ -208,6 +221,61 @@ function rewriteEdit(raw: unknown, index: number): IntentionRewrite {
   return edit;
 }
 
+// 'self', a Sim the app knows (name or id), or anything else = an object kind the mod finds
+function clickTarget(ctx: ApiContext, spec: string): IntentionClickTarget {
+  if (spec.toLowerCase() === 'self') {
+    return { target_kind: 'self' };
+  }
+  if (spec.toLowerCase() === 'phone' || spec.toLowerCase() === 'the phone') {
+    return { target_kind: 'phone' };
+  }
+  const simId = resolveSimId(ctx, spec);
+  if (simId) {
+    return { target_kind: 'sim', target_id: simId, target_name: ctx.simStateCache.getSim(simId)?.sim_name ?? spec };
+  }
+  return { target_kind: 'kind', target_id: spec, target_name: spec };
+}
+
+function storyClick(ctx: ApiContext, raw: unknown, index: number): IntentionClick | undefined {
+  if (raw === null || raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`add[${index}].click must be an object or null`);
+  }
+  const entry = raw as Record<string, unknown>;
+  const target = optionalText(entry.target, 80, `add[${index}].click.target`);
+  if (!target) {
+    throw new Error(`add[${index}].click needs \`target\`: 'self', a Sim, or an object kind from the list`);
+  }
+  const items = editList(entry.items, `add[${index}].click.items`).map((item, itemIndex) => {
+    const text = optionalText(item, MAX_CLICK_ITEM_CHARS, `add[${index}].click.items[${itemIndex}]`);
+    if (!text) {
+      throw new Error(`add[${index}].click.items[${itemIndex}] is empty`);
+    }
+    return text;
+  });
+  if (items.length === 0 || items.length > MAX_CLICK_ITEMS) {
+    throw new Error(`add[${index}].click.items needs 1 to ${MAX_CLICK_ITEMS} items, not ${items.length}`);
+  }
+  const click: IntentionClick = { ...clickTarget(ctx, target), items };
+  const fallback = optionalText(entry.fallback_target, 80, `add[${index}].click.fallback_target`);
+  if (fallback) {
+    click.fallback = clickTarget(ctx, fallback);
+  }
+  return click;
+}
+
+function diagnosisEdit(raw: unknown, index: number): IntentionDiagnosis {
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const key = optionalText(entry.key, 120, `diagnoses[${index}].key`);
+  const text = optionalText(entry.text, MAX_DIAGNOSIS_CHARS, `diagnoses[${index}].text`);
+  if (!key || !text) {
+    throw new Error(`diagnoses[${index}] needs \`key\` (the [key] before the row) and \`text\``);
+  }
+  return { key: key.replace(/^\[|\]$/g, ''), text };
+}
+
 function storyAdd(ctx: ApiContext, raw: unknown, index: number): IntentionStoryAdd {
   const entry = (raw ?? {}) as Record<string, unknown>;
   const why = optionalText(entry.why, MAX_WHY_CHARS, `add[${index}].why`);
@@ -236,6 +304,10 @@ function storyAdd(ctx: ApiContext, raw: unknown, index: number): IntentionStoryA
     story.target_sim_id = targetId;
     story.target_name = ctx.simStateCache.getSim(targetId)?.sim_name ?? targetSpec;
   }
+  const click = storyClick(ctx, entry.click, index);
+  if (click) {
+    story.click = click;
+  }
   return story;
 }
 
@@ -255,7 +327,11 @@ export function intentionEdits(ctx: ApiContext, args: Record<string, unknown>): 
   if (drop.length > MAX_ROW_EDITS_A_CALL || rewrite.length > MAX_ROW_EDITS_A_CALL) {
     throw new Error(`at most ${MAX_ROW_EDITS_A_CALL} drops and ${MAX_ROW_EDITS_A_CALL} rewrites a call`);
   }
-  return { drop, rewrite, add };
+  const diagnoses = editList(args.diagnoses, 'diagnoses').map((raw, index) => diagnosisEdit(raw, index));
+  if (diagnoses.length > MAX_DIAGNOSES_A_CALL) {
+    throw new Error(`at most ${MAX_DIAGNOSES_A_CALL} diagnoses a call`);
+  }
+  return { drop, rewrite, add, ...(diagnoses.length > 0 ? { diagnoses } : {}) };
 }
 
 // `wakeOf` names the PlumService whose wake-ups wake_me sets (the one running the turn);
@@ -1003,8 +1079,11 @@ export function buildAppTools(
         "change a row's `why` (what it is for), `say` (one first-person sentence the Sim says aloud when it " +
         'fires) or `rank` (lower runs first; null = keep). `add`: 0 to 4 story rows, each something a person ' +
         "would mean to do, phrased as the Sim's own wish (`why`) with a `say` line in their voice; `target` " +
-        'names a Sim who must be present, `from_hour`/`to_hour` the hours of the day it may fire (null = any). ' +
-        'Never name tuning keys: the day loop picks the click at the moment. [] = no change of that kind.',
+        'names a Sim who must be present, `from_hour`/`to_hour` the hours of the day it may fire (null = any), ' +
+        "`click` what it clicks: a target ('self', a Sim, or an object kind as listed) and 1 to 3 items COPIED " +
+        "EXACTLY from that target's list in the night text, best first (never invent one; null = no click, " +
+        'which waits for a slow pick at its moment). `diagnoses`: one line per dead or failed row, by the [key] ' +
+        'printed before it: why it died. [] = no change of that kind.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1036,13 +1115,47 @@ export function buildAppTools(
                 target: { type: ['string', 'null'], description: 'A Sim it involves (name or id); null = none' },
                 from_hour: { type: ['integer', 'null'], description: 'Earliest hour (0..23); null = any' },
                 to_hour: { type: ['integer', 'null'], description: 'Latest hour (0..23); null = the day end' },
+                click: {
+                  type: ['object', 'null'],
+                  description: 'What the row clicks, from the lists in the night text; null = no click',
+                  properties: {
+                    target: {
+                      type: 'string',
+                      description: "'self', a Sim's name, or an object kind exactly as the list heads it",
+                    },
+                    items: {
+                      type: 'array',
+                      items: { type: 'string' },
+                      description: `1 to ${MAX_CLICK_ITEMS} items copied from that target's list, best first`,
+                    },
+                    fallback_target: {
+                      type: ['string', 'null'],
+                      description: 'Another target to try the same items on if the first refuses; null = none',
+                    },
+                  },
+                  required: ['target', 'items', 'fallback_target'],
+                  additionalProperties: false,
+                },
               },
-              required: ['why', 'say', 'target', 'from_hour', 'to_hour'],
+              required: ['why', 'say', 'target', 'from_hour', 'to_hour', 'click'],
+              additionalProperties: false,
+            },
+          },
+          diagnoses: {
+            type: 'array',
+            description: `Why each dead or failed row died, one line each, at most ${MAX_DIAGNOSES_A_CALL} ([] = none)`,
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string', description: 'The [key] printed before the row' },
+                text: { type: 'string', description: `One sentence, at most ${MAX_DIAGNOSIS_CHARS} chars` },
+              },
+              required: ['key', 'text'],
               additionalProperties: false,
             },
           },
         },
-        required: ['sim_id', 'drop', 'rewrite', 'add'],
+        required: ['sim_id', 'drop', 'rewrite', 'add', 'diagnoses'],
         additionalProperties: false,
       },
       risk: 'write',

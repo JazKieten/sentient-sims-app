@@ -450,7 +450,7 @@ export class CognitionService {
 
   // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
   private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall' | 'vocabularySampler'>>;
+    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall' | 'vocabularySampler' | 'budgetGate'>>;
 
   // The gate's holds: sim id -> the player click the mod said holds that Sim, until the mod's
   // hold_released names it (or HOLD_SAFETY_MS passes)
@@ -747,6 +747,8 @@ export class CognitionService {
   // The Block 8 state push IS the tick driver — no independent timer. No reports
   // (zone loading, dead pipeline) means no deliberation, which is exactly right.
   onStateReport(report: SimStateReport) {
+    // R3: the budget gate learns the clock's pace from every report, paused ones included
+    this.autonomy.budgetGate?.observe(report);
     if (!this.ctx.settings.cognitionEnabled || this.ctx.settings.cognitionAutonomyLevel === 'off') {
       return;
     }
@@ -2272,15 +2274,18 @@ export class CognitionService {
       if (!first) {
         return undefined;
       }
+      // R3: a story row names where it clicks (self, a Sim, an object kind); else the mod finds it
+      const where = row.what.target;
+      const targetSimId = where?.kind === 'sim' ? where.id : row.target?.sim_id;
       return {
         kind: 'action',
         action: first,
-        target_sim_id: row.target?.sim_id,
+        target_sim_id: targetSimId,
         motivation: row.why,
         retries: 0,
         pie: {
-          target_kind: 'find',
-          target_id: row.target?.sim_id,
+          target_kind: where?.kind ?? 'find',
+          target_id: where?.kind === 'self' || where?.kind === 'phone' ? undefined : (where?.id ?? row.target?.sim_id),
           item: first,
           candidates: [...row.what.candidates],
           label: row.what.label,
@@ -2331,6 +2336,8 @@ export class CognitionService {
     if (row.what.kind === 'deliberate') {
       intentions.markFired(row.id, '');
       const { desire } = row.what;
+      // R3: the budget gate's latency (only calls that reached a model, >= 2 s, are kept)
+      const startedAt = Date.now();
       if (row.source === 'conversation' && desire.transcript !== undefined && desire.speaker !== undefined) {
         await this.actOnConversation(simId, {
           score: desire.score,
@@ -2357,6 +2364,7 @@ export class CognitionService {
           runtime.rowArmed = false;
         }
       }
+      this.autonomy.budgetGate?.recordLatency(Date.now() - startedAt);
       if (runtime.activeRowId === row.id) {
         intentions.onStoodDown(row.id, { reason: 'no dispatch' });
         runtime.activeRowId = undefined;

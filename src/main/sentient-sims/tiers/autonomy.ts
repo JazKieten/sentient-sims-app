@@ -27,6 +27,7 @@ import { NightCallService } from '../services/intentions/NightCallService';
 import { RowMemoryRepository } from '../db/RowMemoryRepository';
 import { RowMemoryService } from '../services/intentions/RowMemoryService';
 import { VocabularySampler } from '../services/intentions/VocabularySampler';
+import { BudgetGate } from '../services/intentions/BudgetGate';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -46,6 +47,8 @@ export interface AutonomyServices {
   intentions: IntentionService;
   // Once a day per Sim, the menus that matter (renovation R2)
   vocabularySampler: VocabularySampler;
+  // SOFAI's rule for the day's remaining model calls: only when they fit the window (R3)
+  budgetGate: BudgetGate;
   // One Plum turn per household Sim at the day rollover that edits the list (part 6)
   nightCall: NightCallService;
   cognitionService: CognitionService;
@@ -78,6 +81,7 @@ function construct(ctx: ApiContext) {
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
   autonomy.rowMemoryRepository = new RowMemoryRepository(ctx.db);
   autonomy.rowMemory = new RowMemoryService(ctx, autonomy);
+  autonomy.budgetGate = new BudgetGate();
   // The household's interactions the mod forwards (interactions/ss_household_log.py)
   autonomy.modQuery.onInteractionLog((event) => {
     autonomy.rowMemory.onInteractionLog(event.records);

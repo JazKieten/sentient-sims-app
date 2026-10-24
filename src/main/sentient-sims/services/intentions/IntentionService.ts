@@ -30,6 +30,7 @@ import {
   NEVER_CAUSES,
   Initiation,
   RowStats,
+  classifyOutcome,
   contextSnapshot,
   daySummaryLine,
   initiation,
@@ -37,6 +38,7 @@ import {
   statsTag,
 } from './RowMemory';
 import type { PickRecord, VocabularyAnswer } from './RowMemoryService';
+import type { VocabularySeenEntry } from '../../db/RowMemoryRepository';
 
 // A Sim's day ended as this service saw it: the first sync with a new absolute_day
 // (autonomy part 6: the night call edits the new day's list from the ending one)
@@ -73,7 +75,9 @@ export type PickOptions = {
   usable?: (key: string) => boolean;
 };
 
-export type IntentionServiceDeps = Partial<Pick<AutonomyServices, 'intentionRepository' | 'modQuery' | 'rowMemory'>>;
+export type IntentionServiceDeps = Partial<
+  Pick<AutonomyServices, 'intentionRepository' | 'modQuery' | 'rowMemory' | 'budgetGate'>
+>;
 
 const SAVE_DEBOUNCE_MS = 2_000;
 const CLAIM_DONE_MINUTES = 10;
@@ -139,6 +143,9 @@ export class IntentionService {
 
   // How many edit_intentions calls landed per Sim (the night call reads it around its turn)
   private readonly editCounts = new Map<string, number>();
+
+  // R3: row id -> when the budget gate last said so in the log (ms)
+  private readonly budgetLoggedAt = new Map<string, number>();
 
   // R2: armed by a database load or a mod reconnect; the first pick after it holds every row
   // for ROWS_SETTLE_MS (settleUntil, ms)
@@ -502,6 +509,10 @@ export class IntentionService {
           continue;
         }
         item.absent = undefined;
+        // R3: a deliberate row starts a model call only if it can finish in its window
+        if (!this.affordable(simId, item, ctx.nowMinutes)) {
+          continue;
+        }
       }
       if (!chosen) {
         if (!options.force && item.source !== 'need' && state.lastBeat !== undefined) {
@@ -532,6 +543,28 @@ export class IntentionService {
       };
     }
     return chosen;
+  }
+
+  // R3, SOFAI's rule: never start a call that cannot finish in the time left. A refused row is
+  // skipped at no cost (the next row may fire) and expires at its window's end as before.
+  private affordable(simId: string, item: IntentionRow, nowMinutes: number): boolean {
+    const verdict = this.deps.budgetGate?.allows(item, nowMinutes);
+    if (!verdict || verdict.ok) {
+      return true;
+    }
+    const now = Date.now();
+    const loggedAt = this.budgetLoggedAt.get(item.id) ?? 0;
+    if (now - loggedAt > 60 * 60 * 1000) {
+      this.budgetLoggedAt.set(item.id, now);
+      if (!item.history.some((entry) => entry.cause === 'budget')) {
+        item.history.push({ at: now, outcome: 'held', cause: 'budget' });
+      }
+      log.info(
+        `[Rows] ${this.simName(simId)} budget gate: ${item.id} needs ~${Math.round(verdict.needSeconds)} s, ` +
+          `its window has ${Math.round(verdict.haveSeconds)} s at this speed`,
+      );
+    }
+    return false;
   }
 
   // R2: the settle hold after a load or a reconnect (the first pick starts it)
@@ -828,6 +861,22 @@ export class IntentionService {
       this.markDirty(simId, state);
       return;
     }
+    // R3: a story row's click refused on its first target tries the fallback target once
+    if (item.what.kind === 'pie' && item.what.fallbackTarget) {
+      const counter = classifyOutcome(event.outcome, event.cause, event.reason).counter;
+      const noProvider = /no object on the lot provides|no_provider/.test(reason);
+      if (counter === 'refusedLive' || counter === 'noTarget' || noProvider) {
+        const next = item.what.fallbackTarget;
+        item.what = { ...item.what, target: next, fallbackTarget: undefined };
+        if (next.kind === 'sim' && next.id) {
+          item.target = { sim_id: next.id, name: next.name };
+        }
+        item.status = 'waiting';
+        log.info(`[Rows] ${name} ${item.id} trying the fallback target ${next.name ?? next.id ?? next.kind}`);
+        this.markDirty(simId, state);
+        return;
+      }
+    }
     const structural =
       event.outcome === 'ineligible' ||
       (!!event.cause && !TRANSIENT_CAUSES.has(event.cause) && event.outcome !== 'canceled');
@@ -980,19 +1029,33 @@ export class IntentionService {
         item.rank = edit.rank;
       }
     });
+    // R3: why each dead or failed key died, in the night call's words, kept for R4
+    (edits.diagnoses ?? []).forEach((diagnosis) => {
+      state.rows
+        .filter((item) => item.seedKey === diagnosis.key)
+        .forEach((item) => {
+          item.diagnosis = diagnosis.text;
+        });
+      this.deps.rowMemory?.diagnose(simId, diagnosis.key, diagnosis.text);
+      log.info(`[Night] ${name} diagnosis [${diagnosis.key}]: ${diagnosis.text}`);
+    });
     const threshold = this.ctx.settings.cognitionActionScoreThreshold;
     const added = edits.add.map((edit) => storyRow(edit, state.day, threshold));
+    const clicks = added.filter((item) => item.what.kind === 'pie').length;
     state.rows.push(...added);
     orderRows(state.rows);
     state.shape = state.rows.map((item) => item.seedKey).join(',');
     this.editCounts.set(simId, (this.editCounts.get(simId) ?? 0) + 1);
     const refusedText =
       refused.length > 0 ? `; refused to reword ${refused.join('; ')} (dead: drop it or leave it)` : '';
+    const diagnosed = edits.diagnoses?.length ?? 0;
     const changed =
       `${name}'s list: dropped ${edits.drop.length}, rewrote ${rewrote}, ` +
-      `added ${added.length} story row${added.length === 1 ? '' : 's'}${refusedText}`;
+      `added ${added.length} story row${added.length === 1 ? '' : 's'} (${clicks} with a click), ` +
+      `${diagnosed} diagnos${diagnosed === 1 ? 'is' : 'es'}${refusedText}`;
     log.info(
-      `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${rewrote}, added ${added.length} story rows${refusedText}`,
+      `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${rewrote}, added ${added.length} story rows ` +
+        `(${clicks} with a click), ${diagnosed} diagnoses${refusedText}`,
     );
     log.info(`[Rows] ${name} list: ${IntentionService.listLine(state.rows)}`);
     this.markDirty(simId, state);
@@ -1039,6 +1102,11 @@ export class IntentionService {
 
   markSaid(simId: string, row: IntentionRow) {
     this.deps.rowMemory?.markSaid(simId, row);
+  }
+
+  // What the Sim's menus offered on a day, every zone (the night call's clickable lists, R3)
+  vocabularySeen(simId: string, day: number): VocabularySeenEntry[] {
+    return this.deps.rowMemory?.vocabularySeen(simId, day) ?? [];
   }
 
   // Every vocabulary answer the app gets is what the Sim's menus offered (R3 reads it at night)

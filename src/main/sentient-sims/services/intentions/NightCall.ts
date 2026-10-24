@@ -11,8 +11,12 @@ import { IntentionRow, Precondition, describeRow, minutesToClock } from '../../m
 import { describeSim } from '../plum/plumLiveSims';
 import { rowRank } from './IntentionSeeds';
 import { RETIRE_CLEAR_DAYS, RowStats, isDead, statsTag } from './RowMemory';
+import type { VocabularySeenEntry } from '../../db/RowMemoryRepository';
 
 export const NIGHT_MEMORIES = 25;
+// The clickable lists (renovation R3): what each target's menu offered yesterday
+export const NIGHT_LABELS_PER_TARGET = 30;
+export const NIGHT_LABELS_TOTAL = 150;
 export const NIGHT_OUTCOMES = 20;
 const MEMORY_CHARS = 200;
 
@@ -33,7 +37,55 @@ export type NightCallInput = {
   outcomes: ActionOutcomeRecord[];
   // Every row key's counters across days (renovation R1); retired keys carry retiredDay
   stats?: RowStats[];
+  // Every item a menu offered the Sim on the ending day (R3: story rows click from these)
+  vocabulary?: VocabularySeenEntry[];
 };
+
+// The heading a list is clicked by: 'self', 'phone', a Sim's name, or the object kind
+function targetHeading(target: string, input: NightCallInput): string {
+  if (target === 'self' || target === 'phone') {
+    return target;
+  }
+  if (target.startsWith('sim:')) {
+    const simId = target.slice(4);
+    const known = (input.report?.sims ?? []).find((sim) => sim.sim_id === simId)?.sim_name;
+    return known ?? simId;
+  }
+  return target;
+}
+
+// "What <First> could click yesterday": per target, the ungreyed labels its menu offered, as
+// the mod printed them (a label two items share carries its [key]); collapsed <choice> rows
+// and inventory objects are left out (a click needs one item on a reachable target)
+export function clickableLines(input: NightCallInput): string[] {
+  const byTarget = new Map<string, string[]>();
+  (input.vocabulary ?? []).forEach((entry) => {
+    if (entry.greyed || entry.kind === 'inventory' || /<choice>\s*$/.test(entry.label)) {
+      return;
+    }
+    const labels = byTarget.get(entry.target) ?? [];
+    if (!labels.includes(entry.label) && labels.length < NIGHT_LABELS_PER_TARGET) {
+      labels.push(entry.label);
+    }
+    byTarget.set(entry.target, labels);
+  });
+  const lines: string[] = [];
+  let total = 0;
+  const ordered = [...byTarget.entries()].sort(([a], [b]) => {
+    const rank = (target: string) =>
+      target === 'self' ? 0 : target.startsWith('sim:') ? 1 : target === 'phone' ? 3 : 2;
+    return rank(a) - rank(b);
+  });
+  for (const [target, labels] of ordered) {
+    if (total >= NIGHT_LABELS_TOTAL) {
+      break;
+    }
+    const kept = labels.slice(0, NIGHT_LABELS_TOTAL - total);
+    total += kept.length;
+    lines.push(`- ${targetHeading(target, input)}: ${kept.join(' | ')}`);
+  }
+  return lines;
+}
 
 // ACE-style counters before a row's line when its key has a record: `[key] fired=7 ran=0
 // last=not_on_menu DEAD :: `. Counts, not rates: what happened, not what works.
@@ -208,9 +260,10 @@ export const NIGHT_RULES = [
   "A row is something a person would mean to do today, phrased as the Sim's own wish (`why`), with a `say` line: one sentence in their voice that they say aloud when it fires.",
   'Add 0 to 4 story rows. Ground them in yesterday: what fired and what died and why, who they spent time with, what is coming. Name a Sim (`target`) only if they live here or were around yesterday; give hours only when the beat has a time.',
   'Drop what is stale or impossible today (the same thing died three times for a reason that has not changed). Rewrite a row whose words are mechanical when a line in their voice would serve; re-rank when the order is wrong (lower rank runs first).',
-  'Never name tuning keys or interactions: at the moment a row fires, the day loop picks the click from the pie menu.',
+  "Give each story row a `click`: its target (a heading from the clickable lists: 'self', a Sim, an object kind, 'phone') and 1 to 3 items COPIED EXACTLY from that heading's list, best first, plus an optional fallback target. Never invent an item or name a tuning key that is not listed. A row with no click waits for a slow pick at its moment and usually expires.",
   'The counts in [brackets] are what happened to that row on earlier days, not a measure of what works. A row marked DEAD fired 3 or more times without running: drop it or leave it; a rewrite of it is refused.',
   'The Sim never learns a night call exists; write as their own intentions, not as instructions.',
+  'For each DEAD row and each row that failed yesterday, one `diagnoses` line by its [key]: why it died, in one sentence (what was missing, not a rewording).',
 ];
 
 export function buildNightText(input: NightCallInput): string {
@@ -248,6 +301,10 @@ export function buildNightText(input: NightCallInput): string {
   if (outcomes.length > 0) {
     lines.push('', "What the day loop's clicks came to:", ...outcomes);
   }
+  const first = input.simName.trim().split(/\s+/)[0] || input.simName;
+  const clickable = clickableLines(input);
+  lines.push('', `What ${first} could click yesterday (heading = click target; items copied exactly):`);
+  lines.push(...(clickable.length > 0 ? clickable : ['- (no menus were seen yesterday: leave click null)']));
   lines.push('', `Today's list as seeded (day ${input.newDay}; edit these ids):`);
   const today = input.todayRows.filter(
     (item) => item.status !== 'done' && item.status !== 'expired' && item.status !== 'dropped',
@@ -257,7 +314,7 @@ export function buildNightText(input: NightCallInput): string {
   lines.push(
     '',
     `In ONE response: one line of what you changed, and edit_intentions once with sim_id "${input.simId}" ` +
-      '(empty lists for what you leave alone). Then stop. No reply.',
+      '(empty lists for what you leave alone; `diagnoses` for the dead and failed rows). Then stop. No reply.',
     '</night_call>',
   );
   return lines.join('\n');

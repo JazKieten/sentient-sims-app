@@ -188,6 +188,16 @@ export interface PlumBrainSlot {
 // names the tier's row model; models/IntentionRow.ts re-exports them.
 export type IntentionRewrite = { row_id: string; why?: string; say?: string; rank?: number };
 
+// Where a story row clicks (renovation R3): self, a Sim, or an object kind
+export type IntentionClickTarget = {
+  target_kind: 'self' | 'sim' | 'kind' | 'phone';
+  target_id?: string;
+  target_name?: string;
+};
+
+// The click a story row makes: 1-3 items copied from the menus the Sim saw yesterday
+export type IntentionClick = IntentionClickTarget & { items: string[]; fallback?: IntentionClickTarget };
+
 // A story row: something the Sim means to do today, in their own words. `from_hour` /
 // `to_hour` are hours of the day (0..23) the row may fire in; a named Sim must be present.
 export type IntentionStoryAdd = {
@@ -197,12 +207,17 @@ export type IntentionStoryAdd = {
   target_name?: string;
   from_hour?: number;
   to_hour?: number;
+  click?: IntentionClick;
 };
+
+// The night call's one-line reading of why a dead or failed key died (R3), by its [key]
+export type IntentionDiagnosis = { key: string; text: string };
 
 export type IntentionEdits = {
   drop: string[];
   rewrite: IntentionRewrite[];
   add: IntentionStoryAdd[];
+  diagnoses?: IntentionDiagnosis[];
 };
 
 export interface IntentionEditSlot {

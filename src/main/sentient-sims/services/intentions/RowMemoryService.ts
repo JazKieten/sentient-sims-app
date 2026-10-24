@@ -19,6 +19,7 @@ import {
   TargetMenu,
   VocabularyView,
   classifyOutcome,
+  labelParts,
   emptyStats,
   isJudgedRow,
   shouldRetire,
@@ -81,17 +82,20 @@ function vocabularyTarget(kind: string | undefined, targetId: string | undefined
 function addToView(view: VocabularyView, entry: VocabularySeenEntry) {
   let menu: TargetMenu | undefined = view.targets.get(entry.target);
   if (!menu) {
-    menu = { keys: new Set(), supers: new Set(), greyed: new Map() };
+    menu = { keys: new Set(), supers: new Set(), greyed: new Map(), labels: new Set() };
     view.targets.set(entry.target, menu);
   }
+  const { label } = labelParts(entry.label);
   if (entry.greyed) {
     menu.greyed.set(entry.key, entry.greyed);
+    menu.greyed.set(label, entry.greyed);
     if (entry.superKey) {
       menu.greyed.set(entry.superKey, entry.greyed);
     }
     return;
   }
   menu.keys.add(entry.key);
+  (menu.labels ??= new Set()).add(label);
   if (entry.superKey) {
     menu.supers.add(entry.superKey);
   }
@@ -118,6 +122,9 @@ export class RowMemoryService {
   private readonly skipped = new Set<string>();
 
   private readonly daySkips = new Map<string, { notOnMenu: number; noTarget: number }>();
+
+  // `${simId}|${seedKey}` -> the night call's last diagnosis of why that key died (R3, for R4)
+  private readonly diagnoses = new Map<string, string>();
 
   private prunedDay: number | undefined;
 
@@ -617,6 +624,20 @@ export class RowMemoryService {
       this.views.set(key, view);
     }
     return view;
+  }
+
+  // The night call's reading of why a key died (R3; kept in memory, R4 gives it a table)
+  diagnose(simId: string, seedKey: string, text: string) {
+    this.diagnoses.set(`${simId}|${seedKey}`, text);
+  }
+
+  diagnosisFor(simId: string, seedKey: string): string | undefined {
+    return this.diagnoses.get(`${simId}|${seedKey}`);
+  }
+
+  // Every item a menu offered the Sim on a day, every zone (the night text's clickable lists)
+  vocabularySeen(simId: string, day: number): VocabularySeenEntry[] {
+    return this.guard('vocabulary seen', (repository) => repository.vocabularyFor(simId, day)) ?? [];
   }
 
   // --- views --------------------------------------------------------------------------------

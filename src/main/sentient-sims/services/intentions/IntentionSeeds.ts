@@ -5,8 +5,10 @@
 import type { GoalPoolEntry, SimStateEntry, SimStateReport } from '../../models/SimStateReport';
 import {
   DeliberateDesire,
+  IntentionClickTarget,
   IntentionRow,
   IntentionStoryAdd,
+  PieTarget,
   Precondition,
   RowSource,
   RowWhat,
@@ -280,9 +282,15 @@ export function desireRow(
   });
 }
 
-// A story row the night call wrote (decision 5): a `deliberate` row, so the existing options
-// and choice calls pick the pie item at the moment; the model never names a tuning key. The
-// hours are hours of `day`; a named Sim must be present. Until the window's end, else the day's.
+function pieTarget(target: IntentionClickTarget): PieTarget {
+  return { kind: target.target_kind, id: target.target_id, name: target.target_name };
+}
+
+// A story row the night call wrote. Since renovation R3 it carries a CLICK picked at night from
+// the menus the Sim saw yesterday (labels, a target, a fallback target), so it fires as a pie
+// row with no model call; without one it stays a `deliberate` row (decision 5: the options and
+// choice calls pick at the moment, behind the budget gate). The hours are hours of `day`; a
+// named Sim must be present. Until the window's end, else the day's.
 export function storyRow(edit: IntentionStoryAdd, day: number, threshold: number): IntentionRow {
   const preconditions: Precondition[] = [];
   let windowEnd: number | undefined;
@@ -292,19 +300,31 @@ export function storyRow(edit: IntentionStoryAdd, day: number, threshold: number
     preconditions.push({ kind: 'game_time', from, to: windowEnd });
   }
   let target: IntentionRow['target'];
-  if (edit.target_sim_id) {
-    target = { sim_id: edit.target_sim_id, name: edit.target_name };
-    preconditions.push({ kind: 'target_present', sim_id: edit.target_sim_id });
+  const { click } = edit;
+  const targetSimId =
+    edit.target_sim_id ?? (click?.target_kind === 'sim' && click.target_id ? click.target_id : undefined);
+  if (targetSimId) {
+    target = { sim_id: targetSimId, name: edit.target_sim_id ? edit.target_name : click?.target_name };
+    preconditions.push({ kind: 'target_present', sim_id: targetSimId });
   }
   const id = newRowId();
+  const what: RowWhat = click
+    ? {
+        kind: 'pie',
+        candidates: [...click.items],
+        label: edit.why,
+        target: pieTarget(click),
+        ...(click.fallback ? { fallbackTarget: pieTarget(click.fallback) } : {}),
+      }
+    : {
+        kind: 'deliberate',
+        desire: { score: threshold, reason: edit.why, thought: edit.say, targetSimId: edit.target_sim_id },
+      };
   return {
     ...row({
       seedKey: `story:${id}`,
       source: 'story',
-      what: {
-        kind: 'deliberate',
-        desire: { score: threshold, reason: edit.why, thought: edit.say, targetSimId: edit.target_sim_id },
-      },
+      what,
       target,
       why: edit.why,
       say: edit.say,

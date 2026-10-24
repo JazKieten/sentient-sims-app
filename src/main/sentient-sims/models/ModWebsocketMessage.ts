@@ -168,8 +168,9 @@ export type ModAddBuff = ModWebsocketMessage & {
 export type PieIntent = {
   target_id?: string;
   // 'find' (autonomy part 5): an intention row with no target of its own; the mod resolves a Sim
-  // id in target_id or the nearest object providing one of the candidates
-  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone' | 'find';
+  // id in target_id or the nearest object providing one of the candidates; 'kind' (renovation
+  // R3): target_id is an object kind, the nearest such object (a story row's click)
+  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone' | 'find' | 'kind';
   item: string;
   label?: string;
   option?: string;

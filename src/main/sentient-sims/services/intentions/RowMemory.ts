@@ -262,6 +262,8 @@ export type TargetMenu = {
   // Item keys offered and runnable, and the supers those items stage
   keys: Set<string>;
   supers: Set<string>;
+  // Their labels, case-folded, without " [key]" or " (picker)" (R3: story rows click by label)
+  labels?: Set<string>;
   // Offered but greyed: key (and super) -> the game's reason
   greyed: Map<string, string>;
 };
@@ -279,11 +281,34 @@ export function emptyView(): VocabularyView {
   return { targets: new Map(), checked: new Set() };
 }
 
+// "Cook [fridge_Cook] (picker)" -> {label: 'cook', key: 'fridge_Cook'}: how a menu label and a
+// story row's item are compared (ss_pie_menu.item_view's forms)
+export function labelParts(text: string): { label: string; key?: string } {
+  let rest = text.trim().replace(/\s*\(picker\)\s*$/i, '');
+  let key: string | undefined;
+  const bracket = /^(.*?)\s*\[([^[\]]+)\]\s*$/.exec(rest);
+  if (bracket) {
+    rest = bracket[1];
+    key = bracket[2].trim();
+  }
+  return { label: rest.trim().toLowerCase(), key };
+}
+
 function onMenu(menu: TargetMenu, candidate: string): 'ok' | 'greyed' | undefined {
   if (menu.keys.has(candidate) || menu.supers.has(candidate)) {
     return 'ok';
   }
-  return menu.greyed.has(candidate) ? 'greyed' : undefined;
+  const parts = labelParts(candidate);
+  if (parts.key && menu.keys.has(parts.key)) {
+    return 'ok';
+  }
+  if (menu.labels?.has(parts.label)) {
+    return 'ok';
+  }
+  if (menu.greyed.has(candidate) || (parts.key && menu.greyed.has(parts.key)) || menu.greyed.has(parts.label)) {
+    return 'greyed';
+  }
+  return undefined;
 }
 
 export function initiation(row: IntentionRow, view: VocabularyView): Initiation {
@@ -301,8 +326,10 @@ export function initiation(row: IntentionRow, view: VocabularyView): Initiation 
     return { ok: true };
   }
   const candidates = [...row.what.candidates, ...(row.what.fallback ? [row.what.fallback] : [])];
-  if (row.target) {
-    const menu = view.targets.get(`sim:${row.target.sim_id}`);
+  const clickSim = row.what.target?.kind === 'sim' ? row.what.target.id : undefined;
+  if (row.target || clickSim) {
+    const simId = clickSim ?? row.target?.sim_id;
+    const menu = view.targets.get(`sim:${simId}`);
     if (!menu) {
       return { ok: true };
     }
@@ -310,10 +337,11 @@ export function initiation(row: IntentionRow, view: VocabularyView): Initiation 
     if (states.includes('ok')) {
       return { ok: true };
     }
+    const whose = row.target?.name ?? row.what.target?.name ?? 'their';
     if (states.includes('greyed')) {
-      return { ok: false, cause: 'greyed', why: `greyed on ${row.target.name ?? 'their'} menu` };
+      return { ok: false, cause: 'greyed', why: `greyed on ${whose} menu` };
     }
-    return { ok: false, cause: 'not_on_menu', why: `not on ${row.target.name ?? 'their'} menu today` };
+    return { ok: false, cause: 'not_on_menu', why: `not on ${whose} menu today` };
   }
   let greyed = false;
   for (const candidate of candidates) {

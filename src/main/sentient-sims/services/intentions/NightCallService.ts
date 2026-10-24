@@ -161,6 +161,7 @@ export class NightCallService {
       memories,
       outcomes: this.outcomesOf(item.simId),
       stats: this.deps.intentions.statsFor(item.simId),
+      vocabulary: this.deps.intentions.vocabularySeen(item.simId, item.endingDay),
     });
     return { text, rows: todayRows.length, memories: memories.length };
   }

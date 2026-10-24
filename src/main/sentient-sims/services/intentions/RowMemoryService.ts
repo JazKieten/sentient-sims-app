@@ -258,10 +258,9 @@ export class RowMemoryService {
     if (facts.requestId) {
       stats.clicked += 1;
     }
-    if (facts.cause) {
-      stats.lastCause = facts.cause;
-      stats.lastStructural = false;
-    }
+    // A stand-down (the app's own guards, nothing reached the game) never overwrites the last
+    // real outcome's cause: live 10-24 the redispatch guard's stood_down hid Seth's not_on_menu
+    // from the retire rule. The fire log keeps the reason.
     this.save(stats);
     const entry: FireLogEntry = {
       ...pending.entry,

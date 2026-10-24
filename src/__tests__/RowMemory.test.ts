@@ -283,7 +283,7 @@ describe('RowMemoryService with the intention list', () => {
     expect(built.service.rowsFor('100')[0].attempts).toBe(0);
   });
 
-  it('a run resets the streak; a stand-down is a fire with its reason', () => {
+  it('a run resets the streak; a stand-down is a fire that keeps the last cause', () => {
     const built = build();
     const seth = entry('100');
     const rep = report([seth]);
@@ -297,7 +297,8 @@ describe('RowMemoryService with the intention list', () => {
     expect(built.rowMemory.get('100', 'objective_Garden')).toMatchObject({ fires: 2, ran: 1, firesSinceRan: 0 });
     built.service.markFired(row.id, '');
     built.service.onStoodDown(row.id, { reason: 'nothing to click' });
-    expect(built.rowMemory.get('100', 'objective_Garden')).toMatchObject({ fires: 3, lastCause: 'nothing to click' });
+    // A stand-down is a fire, but never overwrites the last real outcome's cause (live 10-24)
+    expect(built.rowMemory.get('100', 'objective_Garden')).toMatchObject({ fires: 3, lastCause: undefined });
     expect(built.repository.fires.at(-1)?.outcome).toBe('stood_down');
   });
 

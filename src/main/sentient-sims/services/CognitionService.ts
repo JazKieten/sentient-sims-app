@@ -2131,12 +2131,7 @@ export class CognitionService {
       this.armPendingTimeout(simId, runtime, entry, intent);
       const rowId = runtime.activeRowId;
       if (rowId) {
-        this.autonomy.intentions?.markInFlight(
-          rowId,
-          requestId,
-          intent.target_object_id,
-          intent.pie?.label ?? intent.action,
-        );
+        this.autonomy.intentions?.markInFlight(rowId, requestId, intent.target_object_id, intent.action);
         runtime.activeRowId = undefined;
       }
       log.info(`[Cognition] sim ${simId} -> ${intent.action} (${requestId}, ${source})`);

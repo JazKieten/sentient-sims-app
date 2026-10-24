@@ -15,6 +15,7 @@ type RowStatsEntity = {
   refused: number;
   not_on_menu: number;
   no_target: number;
+  refused_live: number;
   expired: number;
   nights_kept: number;
   rewrites: number;
@@ -41,6 +42,7 @@ function toStats(row: RowStatsEntity): RowStats {
     refused: row.refused,
     notOnMenu: row.not_on_menu,
     noTarget: row.no_target,
+    refusedLive: row.refused_live,
     expired: row.expired,
     nightsKept: row.nights_kept,
     rewrites: row.rewrites,
@@ -165,6 +167,8 @@ export type VocabularySeenEntry = {
   kind: string;
   label: string;
   key: string;
+  // The super the item stages when it differs from the key (a chat mixer's sim_Chat)
+  superKey?: string;
   greyed?: string;
   zone: string;
   day: number;
@@ -201,8 +205,8 @@ export class RowMemoryRepository extends Repository {
       .prepare(
         `INSERT OR REPLACE INTO row_stats(sim_id, seed_key, fires, clicked, ran, canceled, refused, not_on_menu,
            no_target, expired, nights_kept, rewrites, fires_since_ran, last_cause, last_structural, first_day,
-           last_day, said_day, retired_day, retired_cause, retired_zone, why)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           last_day, said_day, retired_day, retired_cause, retired_zone, why, refused_live)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run([
         stats.simId,
@@ -227,6 +231,7 @@ export class RowMemoryRepository extends Repository {
         stats.retiredCause ?? null,
         stats.retiredZone ?? null,
         stats.why ?? null,
+        stats.refusedLive,
       ]);
   }
 
@@ -361,8 +366,8 @@ export class RowMemoryRepository extends Repository {
   upsertVocabulary(entries: VocabularySeenEntry[]) {
     const db = this.dbService.getDb();
     const statement = db.prepare(
-      `INSERT OR REPLACE INTO vocabulary_seen(sim_id, target, kind, label, key, greyed, zone, day, minute)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO vocabulary_seen(sim_id, target, kind, label, key, greyed, zone, day, minute, super_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     db.transaction((rows: VocabularySeenEntry[]) => {
       rows.forEach((entry) => {
@@ -376,6 +381,7 @@ export class RowMemoryRepository extends Repository {
           entry.zone,
           entry.day,
           entry.minute ?? null,
+          entry.superKey ?? null,
         ]);
       });
     })(entries);
@@ -399,6 +405,7 @@ export class RowMemoryRepository extends Repository {
       zone: string;
       day: number;
       minute: number | null;
+      super_key: string | null;
     }[];
     return rows.map((row) => ({
       simId: row.sim_id,
@@ -406,6 +413,7 @@ export class RowMemoryRepository extends Repository {
       kind: row.kind,
       label: row.label,
       key: row.key,
+      superKey: row.super_key ?? undefined,
       greyed: row.greyed ?? undefined,
       zone: row.zone,
       day: row.day,

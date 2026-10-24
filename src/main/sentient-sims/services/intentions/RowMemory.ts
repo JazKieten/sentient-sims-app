@@ -6,6 +6,7 @@
 // structural last cause), never a model, and never on a raw success rate.
 import type { SimStateEntry, SimStateReport } from '../../models/SimStateReport';
 import type { IntentionRow } from '../../models/IntentionRow';
+import { SOCIAL_ACTIONS } from '../../models/CognitionIntent';
 
 export type RowStats = {
   simId: string;
@@ -15,8 +16,11 @@ export type RowStats = {
   ran: number;
   canceled: number;
   refused: number;
+  // Skipped because I failed (renovation R2: the day's vocabulary said the item is not there)
   notOnMenu: number;
   noTarget: number;
+  // The click itself found none of the candidates on the live menu (R2: counted apart)
+  refusedLive: number;
   expired: number;
   nightsKept: number;
   rewrites: number;
@@ -43,6 +47,7 @@ export type StatsCounter =
   | 'refused'
   | 'notOnMenu'
   | 'noTarget'
+  | 'refusedLive'
   | 'expired'
   | 'nightsKept'
   | 'rewrites';
@@ -81,6 +86,7 @@ export function emptyStats(simId: string, seedKey: string): RowStats {
     refused: 0,
     notOnMenu: 0,
     noTarget: 0,
+    refusedLive: 0,
     expired: 0,
     nightsKept: 0,
     rewrites: 0,
@@ -90,7 +96,7 @@ export function emptyStats(simId: string, seedKey: string): RowStats {
 }
 
 export type ClassifiedOutcome = {
-  counter: 'ran' | 'canceled' | 'refused' | 'notOnMenu' | 'noTarget';
+  counter: 'ran' | 'canceled' | 'refused' | 'refusedLive' | 'noTarget';
   cause?: string;
   structural: boolean;
 };
@@ -103,7 +109,7 @@ export function classifyOutcome(outcome: string, cause?: string, reason?: string
   }
   const text = `${cause ?? ''} ${reason ?? ''}`;
   if (/none of \d+ candidates is on the menu|no pie-menu item called/i.test(text)) {
-    return { counter: 'notOnMenu', cause: CAUSE_NOT_ON_MENU, structural: true };
+    return { counter: 'refusedLive', cause: CAUSE_NOT_ON_MENU, structural: true };
   }
   if (/requires target_sim_id/i.test(text)) {
     return { counter: 'noTarget', cause: CAUSE_NO_TARGET, structural: true };
@@ -145,6 +151,9 @@ export function statsTag(stats: RowStats): string {
   const parts = [`fired=${stats.fires}`, `ran=${stats.ran}`];
   if (stats.notOnMenu > 0) {
     parts.push(`not_on_menu=${stats.notOnMenu}`);
+  }
+  if (stats.refusedLive > 0) {
+    parts.push(`refused_live=${stats.refusedLive}`);
   }
   if (stats.noTarget > 0) {
     parts.push(`no_target=${stats.noTarget}`);
@@ -214,6 +223,7 @@ export type DaySummary = {
   clicked: number;
   ran: number;
   notOnMenu: number;
+  refusedLive: number;
   noTarget: number;
   expired: number;
   retired: string[];
@@ -222,7 +232,8 @@ export type DaySummary = {
 export function daySummaryLine(name: string, day: number, summary: DaySummary): string {
   return (
     `[Rows] ${name} day ${day}: fired=${summary.fired} clicked=${summary.clicked} ran=${summary.ran} ` +
-    `not_on_menu=${summary.notOnMenu} no_target=${summary.noTarget} expired=${summary.expired} ` +
+    `not_on_menu=${summary.notOnMenu} refused_live=${summary.refusedLive} no_target=${summary.noTarget} ` +
+    `expired=${summary.expired} ` +
     `retired=[${summary.retired.join(', ')}]`
   );
 }
@@ -239,4 +250,85 @@ export function namesSim(text: string | undefined, simName: string | undefined):
     .filter((word) => word.length > 1)
     .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return words.some((word) => new RegExp(`\\b${word}\\b`, 'i').test(text));
+}
+
+// --- the initiation set (renovation R2) --------------------------------------------------------
+// A row is an option <I, pi, beta> and may start only when I holds (Sutton, Precup & Singh); the
+// pie menu is the free half of the affordance oracle. The day's vocabulary (vocabulary_seen plus
+// the candidates a provider sample checked) is a PRIOR: a target nobody sampled today in this
+// zone is unknown, never empty, and the click's own refusal stays the last word.
+
+export type TargetMenu = {
+  // Item keys offered and runnable, and the supers those items stage
+  keys: Set<string>;
+  supers: Set<string>;
+  // Offered but greyed: key (and super) -> the game's reason
+  greyed: Map<string, string>;
+};
+
+export type VocabularyView = {
+  // 'self' | 'sim:<id>' | an object's class name | 'phone' -> what its menu offered today
+  targets: Map<string, TargetMenu>;
+  // Candidate keys a provider sample judged today (found on that object or not)
+  checked: Set<string>;
+};
+
+export type Initiation = { ok: true } | { ok: false; cause: 'not_on_menu' | 'greyed' | 'no_target'; why: string };
+
+export function emptyView(): VocabularyView {
+  return { targets: new Map(), checked: new Set() };
+}
+
+function onMenu(menu: TargetMenu, candidate: string): 'ok' | 'greyed' | undefined {
+  if (menu.keys.has(candidate) || menu.supers.has(candidate)) {
+    return 'ok';
+  }
+  return menu.greyed.has(candidate) ? 'greyed' : undefined;
+}
+
+export function initiation(row: IntentionRow, view: VocabularyView): Initiation {
+  if (row.what.kind === 'action') {
+    const allSocial = row.what.actions.length > 0 && row.what.actions.every((action) => SOCIAL_ACTIONS.has(action));
+    if (allSocial && !row.target) {
+      return { ok: false, cause: 'no_target', why: `${row.what.actions.join('|')} needs someone to do it with` };
+    }
+    return { ok: true };
+  }
+  if (row.what.kind !== 'pie') {
+    return { ok: true };
+  }
+  if (view.targets.size === 0 && view.checked.size === 0) {
+    return { ok: true };
+  }
+  const candidates = [...row.what.candidates, ...(row.what.fallback ? [row.what.fallback] : [])];
+  if (row.target) {
+    const menu = view.targets.get(`sim:${row.target.sim_id}`);
+    if (!menu) {
+      return { ok: true };
+    }
+    const states = candidates.map((candidate) => onMenu(menu, candidate));
+    if (states.includes('ok')) {
+      return { ok: true };
+    }
+    if (states.includes('greyed')) {
+      return { ok: false, cause: 'greyed', why: `greyed on ${row.target.name ?? 'their'} menu` };
+    }
+    return { ok: false, cause: 'not_on_menu', why: `not on ${row.target.name ?? 'their'} menu today` };
+  }
+  let greyed = false;
+  for (const candidate of candidates) {
+    const states = [...view.targets.values()].map((menu) => onMenu(menu, candidate));
+    if (states.includes('ok')) {
+      return { ok: true };
+    }
+    if (states.includes('greyed')) {
+      greyed = true;
+    } else if (!view.checked.has(candidate)) {
+      // Never judged today (a social super, an object nobody sampled): unknown, so it may fire
+      return { ok: true };
+    }
+  }
+  return greyed
+    ? { ok: false, cause: 'greyed', why: 'only greyed on the menus seen today' }
+    : { ok: false, cause: 'not_on_menu', why: 'on none of the menus seen today' };
 }

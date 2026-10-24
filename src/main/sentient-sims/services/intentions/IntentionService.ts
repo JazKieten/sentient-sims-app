@@ -16,15 +16,26 @@ import {
   IntentionRow,
   RowClears,
   RowClockContext,
+  WakeOn,
   clockMinutes,
   describeRow,
   isOneShotUntil,
   preconditionsHold,
   promptLine,
+  targetPresent,
   untilReached,
 } from '../../models/IntentionRow';
 import { desireRow, isImpulseRow, mergeSeeds, orderRows, seedRows, storyRow } from './IntentionSeeds';
-import { NEVER_CAUSES, RowStats, contextSnapshot, daySummaryLine, isDead, statsTag } from './RowMemory';
+import {
+  NEVER_CAUSES,
+  Initiation,
+  RowStats,
+  contextSnapshot,
+  daySummaryLine,
+  initiation,
+  isDead,
+  statsTag,
+} from './RowMemory';
 import type { PickRecord, VocabularyAnswer } from './RowMemoryService';
 
 // A Sim's day ended as this service saw it: the first sync with a new absolute_day
@@ -67,7 +78,13 @@ export type IntentionServiceDeps = Partial<Pick<AutonomyServices, 'intentionRepo
 const SAVE_DEBOUNCE_MS = 2_000;
 const CLAIM_DONE_MINUTES = 10;
 const MAX_ATTEMPTS_A_DAY = 3;
-const STRUCTURAL_SLEEP_MINUTES = 120;
+// Renovation R2: a row whose initiation set fails is checked at most once per game hour and
+// expires after MAX_ABSENT such checks in a row
+const ABSENT_CHECK_MINUTES = 60;
+export const MAX_ABSENT = 3;
+// After a database load or a mod reconnect no row fires for this long: the save loads paused
+// and the first reports arrive before the pause does (10-22)
+export const ROWS_SETTLE_MS = 15_000;
 const PACE_LOG_INTERVAL_MS = 60_000;
 
 // Outcome causes that mean "the moment was wrong, the verb is fine" (CognitionService's
@@ -122,6 +139,12 @@ export class IntentionService {
 
   // How many edit_intentions calls landed per Sim (the night call reads it around its turn)
   private readonly editCounts = new Map<string, number>();
+
+  // R2: armed by a database load or a mod reconnect; the first pick after it holds every row
+  // for ROWS_SETTLE_MS (settleUntil, ms)
+  private settleArmed = false;
+
+  private settleUntil: number | undefined;
 
   constructor(ctx: ApiContext, deps: IntentionServiceDeps) {
     this.ctx = ctx;
@@ -256,10 +279,14 @@ export class IntentionService {
     });
     this.sims.clear();
     this.claimsDone.clear();
+    this.settleArmed = true;
+    this.settleUntil = undefined;
   }
 
   // The mod's websocket closed: every in-flight row's outcome is lost
   onModDisconnected() {
+    this.settleArmed = true;
+    this.settleUntil = undefined;
     this.sims.forEach((state, simId) => {
       let changed = false;
       for (const item of state.rows) {
@@ -316,8 +343,9 @@ export class IntentionService {
           log.info(`[Rows] ${firstName(entry, simId)} ${item.id} expired: ${item.why}`);
         }
       }
-      if (item.status === 'asleep' && item.sleep && this.sleepClears(item.sleep.clears, ctx)) {
-        log.info(`[Rows] ${firstName(entry, simId)} ${item.id} woke: ${item.sleep.cause} cleared`);
+      const woke = item.status === 'asleep' && item.sleep ? this.sleepClears(simId, item, ctx) : undefined;
+      if (woke && item.sleep) {
+        log.info(`[Rows] ${firstName(entry, simId)} ${item.id} woke: ${item.sleep.cause} cleared (${woke})`);
         item.status = 'waiting';
         item.sleep = undefined;
       }
@@ -343,26 +371,100 @@ export class IntentionService {
     return listed.join(' ') || '(empty)';
   }
 
-  private sleepClears(clears: RowClears, ctx: RowClockContext): boolean {
+  // What woke a sleeping row, or undefined. A structural sleep waits for an EVENT since R2 (the
+  // zone changed, the target arrived, a candidate showed on today's menus, the item ran for
+  // someone in the household), never a 2-hour timer; a row slept before R2 keeps its `until`.
+  private sleepClears(simId: string, item: IntentionRow, ctx: RowClockContext): string | undefined {
+    const clears = item.sleep?.clears;
+    if (!clears) {
+      return undefined;
+    }
     switch (clears.kind) {
       case 'funds_at_least': {
         const funds = ctx.report.lot?.funds;
-        return typeof funds === 'number' && funds >= clears.amount;
+        return typeof funds === 'number' && funds >= clears.amount ? `funds §${funds}` : undefined;
       }
       case 'zone_change': {
         const zone = ctx.report.lot?.zone_id;
-        return (clears.zone_id !== undefined && String(zone) !== clears.zone_id) || ctx.nowMinutes >= clears.until;
+        if (clears.zone_id !== undefined && String(zone) !== clears.zone_id) {
+          return `zone changed to ${String(zone)}`;
+        }
+        if (clears.until !== undefined && ctx.nowMinutes >= clears.until) {
+          return 'the old 2-hour re-check';
+        }
+        return this.wakeEvent(simId, item, clears.wake_on ?? [], ctx);
       }
       case 'object_fixed':
-        return !(ctx.report.lot?.conditions ?? []).some(
+        return (ctx.report.lot?.conditions ?? []).some(
           (condition) =>
             condition.object_id === clears.object_id && condition.conditions.some((tag) => tag !== 'dirty'),
-        );
+        )
+          ? undefined
+          : 'the object was fixed';
       case 'day_end':
       case 'never':
       default:
-        return false;
+        return undefined;
     }
+  }
+
+  private wakeEvent(simId: string, item: IntentionRow, wakeOn: WakeOn[], ctx: RowClockContext): string | undefined {
+    if (wakeOn.includes('target_present') && item.target && targetPresent(ctx.entry, item.target.sim_id)) {
+      return `${item.target.name ?? 'the target'} arrived`;
+    }
+    if (item.what.kind !== 'pie' || ctx.absoluteDay === undefined) {
+      return undefined;
+    }
+    const zone = ctx.report.lot?.zone_id === undefined ? undefined : String(ctx.report.lot.zone_id);
+    const candidates = [...item.what.candidates, ...(item.what.fallback ? [item.what.fallback] : [])];
+    const memory = this.deps.rowMemory;
+    if (wakeOn.includes('candidate_seen') && memory && zone !== undefined) {
+      const view = memory.vocabularyView(simId, ctx.absoluteDay, zone);
+      const seen = candidates.find((candidate) =>
+        [...view.targets.values()].some((menu) => menu.keys.has(candidate) || menu.supers.has(candidate)),
+      );
+      if (seen) {
+        return `${seen} is on a menu now`;
+      }
+    }
+    if (wakeOn.includes('ran_by_anyone') && memory) {
+      const ran = memory.ranToday(zone, ctx.absoluteDay, candidates);
+      if (ran) {
+        return `${ran} ran for the household`;
+      }
+    }
+    return undefined;
+  }
+
+  // R2: whether the row may START now (its initiation set, judged against the day's menus)
+  private initiationFor(simId: string, item: IntentionRow, ctx: RowClockContext): Initiation {
+    const memory = this.deps.rowMemory;
+    const zone = ctx.report.lot?.zone_id;
+    if (!memory || zone === undefined || ctx.absoluteDay === undefined) {
+      return initiation(item, { targets: new Map(), checked: new Set() });
+    }
+    return initiation(item, memory.vocabularyView(simId, ctx.absoluteDay, String(zone)));
+  }
+
+  // A row I keeps refusing: counted once per row per day in row_stats, checked at most once a
+  // game hour, expired after MAX_ABSENT checks in a row. Returns true when it expired now.
+  private absent(simId: string, item: IntentionRow, verdict: Exclude<Initiation, { ok: true }>, now: number) {
+    this.deps.rowMemory?.skip(simId, item, verdict.cause);
+    const last = item.absent;
+    if (last && last.cause === verdict.cause && now - last.lastAt < ABSENT_CHECK_MINUTES) {
+      return false;
+    }
+    item.absent = { count: (last?.count ?? 0) + 1, lastAt: now, cause: verdict.cause };
+    if (item.absent.count < MAX_ABSENT) {
+      return false;
+    }
+    item.status = 'expired';
+    item.history.push({ at: Date.now(), outcome: 'expired', cause: verdict.cause });
+    this.deps.rowMemory?.expired(simId, item);
+    log.info(
+      `[Rows] ${this.simName(simId)} ${item.id} expired: ${verdict.why} (${item.absent.count} checks an hour apart)`,
+    );
+    return true;
   }
 
   // --- pick ---------------------------------------------------------------------------------
@@ -376,9 +478,13 @@ export class IntentionService {
       return undefined;
     }
     const state = this.stateFor(simId, ctx.absoluteDay);
+    if (!options.force && this.settling()) {
+      return undefined;
+    }
     const rowsById = new Map(state.rows.map((item) => [item.id, item]));
     const claimsHeld = this.claimsHeld(simId, ctx.nowMinutes);
     let chosen: IntentionRow | undefined;
+    let expired = false;
     // R1: every row that could have fired now, in list order (the decision log's candidate set)
     const eligible: IntentionRow[] = [];
     for (const item of state.rows) {
@@ -387,6 +493,15 @@ export class IntentionService {
       }
       if (!options.force && !this.eligible(item, ctx, rowsById, claimsHeld, options)) {
         continue;
+      }
+      if (!options.force) {
+        // R2: a row that cannot start costs nothing (no beat, no attempt) and says why
+        const verdict = this.initiationFor(simId, item, ctx);
+        if (!verdict.ok) {
+          expired = this.absent(simId, item, verdict, ctx.nowMinutes) || expired;
+          continue;
+        }
+        item.absent = undefined;
       }
       if (!chosen) {
         if (!options.force && item.source !== 'need' && state.lastBeat !== undefined) {
@@ -406,6 +521,9 @@ export class IntentionService {
       }
       eligible.push(item);
     }
+    if (expired) {
+      this.markDirty(simId, state);
+    }
     if (chosen) {
       state.lastPick = {
         rowId: chosen.id,
@@ -414,6 +532,17 @@ export class IntentionService {
       };
     }
     return chosen;
+  }
+
+  // R2: the settle hold after a load or a reconnect (the first pick starts it)
+  private settling(): boolean {
+    const now = Date.now();
+    if (this.settleArmed) {
+      this.settleArmed = false;
+      this.settleUntil = now + ROWS_SETTLE_MS;
+      log.info(`[Rows] settling: no row fires for ${ROWS_SETTLE_MS / 1000} s after a load or a reconnect`);
+    }
+    return this.settleUntil !== undefined && now < this.settleUntil;
   }
 
   // Preconditions, claims, held-off keys and an action row's served verbs (pick's filters)
@@ -704,7 +833,7 @@ export class IntentionService {
       (!!event.cause && !TRANSIENT_CAUSES.has(event.cause) && event.outcome !== 'canceled');
     if (structural) {
       item.status = 'asleep';
-      item.sleep = { cause: event.cause ?? event.reason ?? event.outcome, clears: this.clearsFor(event, item, now) };
+      item.sleep = { cause: event.cause ?? event.reason ?? event.outcome, clears: this.clearsFor(simId, event, item) };
       log.info(`[Rows] ${name} ${item.id} asleep(${item.sleep.cause}) until ${item.sleep.clears.kind}`);
       this.markDirty(simId, state);
       return;
@@ -718,7 +847,7 @@ export class IntentionService {
     this.markDirty(simId, state);
   }
 
-  private clearsFor(event: InteractionOutcomeEvent, item: IntentionRow, now: number | undefined): RowClears {
+  private clearsFor(simId: string, event: InteractionOutcomeEvent, item: IntentionRow): RowClears {
     const text = `${event.cause ?? ''} ${event.reason ?? ''}`.toLowerCase();
     if (/funds|afford|money|simoleon/.test(text)) {
       const amount = item.preconditions.find((condition) => condition.kind === 'funds_at_least');
@@ -731,11 +860,16 @@ export class IntentionService {
       return { kind: 'never' };
     }
     const zone = this.ctx.simStateCache.getReport()?.lot?.zone_id;
-    return {
-      kind: 'zone_change',
-      zone_id: zone === undefined ? undefined : String(zone),
-      until: (now ?? 0) + STRUCTURAL_SLEEP_MINUTES,
-    };
+    // R2: events wake it, not a timer. The target's arrival only counts if they were away.
+    const wakeOn: WakeOn[] = [];
+    const entry = this.ctx.simStateCache.getSim(simId);
+    if (item.target && !(entry && targetPresent(entry, item.target.sim_id))) {
+      wakeOn.push('target_present');
+    }
+    if (item.what.kind === 'pie') {
+      wakeOn.push('candidate_seen', 'ran_by_anyone');
+    }
+    return { kind: 'zone_change', zone_id: zone === undefined ? undefined : String(zone), wake_on: wakeOn };
   }
 
   // The game marked a goal done (mod: interactions/ss_goal_events.py). A whim names its row;

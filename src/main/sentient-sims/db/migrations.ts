@@ -531,6 +531,14 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       );
       `);
     },
+    // Renovation R2: the click's own menu refusal counted apart from the prior's skip, and the
+    // super a menu item stages (a row naming a super is on the menu when one of its items is)
+    '028-row-memory-r2': (db: Database) => {
+      db.exec(`
+      ALTER TABLE row_stats ADD COLUMN refused_live INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE vocabulary_seen ADD COLUMN super_key TEXT;
+      `);
+    },
   }),
 );
 

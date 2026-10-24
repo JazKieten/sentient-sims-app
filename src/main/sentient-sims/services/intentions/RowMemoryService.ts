@@ -16,6 +16,8 @@ import {
   RETIRE_CLEAR_DAYS,
   RowStats,
   StatsCounter,
+  TargetMenu,
+  VocabularyView,
   classifyOutcome,
   emptyStats,
   isJudgedRow,
@@ -48,7 +50,11 @@ export type VocabularyAnswer = {
     key?: string;
     greyed?: boolean;
     reason?: string | null;
+    // The super the item stages when it differs from the key (R2)
+    super?: string;
   }[];
+  // Per target; a sample's provider targets name the candidates they judged (R2)
+  targets?: { target?: string | null; kind?: string; candidates_checked?: string[]; social?: string[] }[];
 };
 
 export type OutcomeFacts = {
@@ -72,6 +78,25 @@ function vocabularyTarget(kind: string | undefined, targetId: string | undefined
   }
 }
 
+function addToView(view: VocabularyView, entry: VocabularySeenEntry) {
+  let menu: TargetMenu | undefined = view.targets.get(entry.target);
+  if (!menu) {
+    menu = { keys: new Set(), supers: new Set(), greyed: new Map() };
+    view.targets.set(entry.target, menu);
+  }
+  if (entry.greyed) {
+    menu.greyed.set(entry.key, entry.greyed);
+    if (entry.superKey) {
+      menu.greyed.set(entry.superKey, entry.greyed);
+    }
+    return;
+  }
+  menu.keys.add(entry.key);
+  if (entry.superKey) {
+    menu.supers.add(entry.superKey);
+  }
+}
+
 export class RowMemoryService {
   private readonly ctx: ApiContext;
 
@@ -83,8 +108,16 @@ export class RowMemoryService {
   // row id -> a fire the lane took that has not passed the gate yet (decision A)
   private readonly pending = new Map<string, PendingFire>();
 
-  // `${simId}|${day}|${zone}` -> the item keys a menu offered (not greyed) that day
-  private readonly vocabularyKeys = new Map<string, Set<string>>();
+  // `${simId}|${day}|${zone}` -> what each target's menu offered that day (R2's prior)
+  private readonly views = new Map<string, VocabularyView>();
+
+  // `${zone}|${day}` -> interaction names (and supers) that RAN for the household today
+  private readonly ranNames = new Map<string, Set<string>>();
+
+  // Rows whose initiation-set skip was counted today (`${rowId}|${day}`), and the day's skips
+  private readonly skipped = new Set<string>();
+
+  private readonly daySkips = new Map<string, { notOnMenu: number; noTarget: number }>();
 
   private prunedDay: number | undefined;
 
@@ -387,13 +420,47 @@ export class RowMemoryService {
       return `${day - stats.retiredDay} days since it retired`;
     }
     if (stats.retiredCause === 'not_on_menu' && seed.what.kind === 'pie' && zone !== undefined) {
-      const keys = this.vocabularyKeysFor(simId, day, zone);
-      const seen = seed.what.candidates.find((candidate) => keys.has(candidate));
+      const view = this.vocabularyView(simId, day, zone);
+      const seen = seed.what.candidates.find((candidate) =>
+        [...view.targets.values()].some((menu) => menu.keys.has(candidate) || menu.supers.has(candidate)),
+      );
       if (seen) {
         return `${seen} was on a menu today`;
       }
     }
     return undefined;
+  }
+
+  // --- the initiation set's bookkeeping (R2) --------------------------------------------------
+
+  // A row skipped because I failed: counted once per row per day (never per report)
+  skip(simId: string, row: IntentionRow, cause: 'not_on_menu' | 'greyed' | 'no_target') {
+    const day = this.today();
+    const key = `${row.id}|${day ?? '?'}`;
+    if (this.skipped.has(key)) {
+      return;
+    }
+    this.skipped.add(key);
+    const stats = this.touch(simId, row);
+    if (cause === 'no_target') {
+      stats.noTarget += 1;
+    } else {
+      stats.notOnMenu += 1;
+    }
+    this.save(stats);
+    const counts = this.daySkips.get(`${simId}|${day ?? '?'}`) ?? { notOnMenu: 0, noTarget: 0 };
+    if (cause === 'no_target') {
+      counts.noTarget += 1;
+    } else {
+      counts.notOnMenu += 1;
+    }
+    this.daySkips.set(`${simId}|${day ?? '?'}`, counts);
+  }
+
+  // Whether one of these names ran for the household today in this zone (a wake event)
+  ranToday(zone: string | undefined, day: number, names: string[]): string | undefined {
+    const ran = this.ranNames.get(`${zone ?? '?'}|${day}`);
+    return ran ? names.find((name) => ran.has(name)) : undefined;
   }
 
   // The readout line's counts for one Sim's day, from that day's fire log and ending rows
@@ -403,8 +470,11 @@ export class RowMemoryService {
       fired: fires.length,
       clicked: fires.filter((fire) => fire.requestId).length,
       ran: fires.filter((fire) => fire.outcome === 'success' || fire.outcome === 'echo').length,
-      notOnMenu: fires.filter((fire) => fire.cause === 'not_on_menu').length,
-      noTarget: fires.filter((fire) => fire.cause === 'no_target' || fire.cause === 'nobody_nearby').length,
+      notOnMenu: this.daySkips.get(`${simId}|${day}`)?.notOnMenu ?? 0,
+      refusedLive: fires.filter((fire) => fire.cause === 'not_on_menu').length,
+      noTarget:
+        (this.daySkips.get(`${simId}|${day}`)?.noTarget ?? 0) +
+        fires.filter((fire) => fire.cause === 'no_target' || fire.cause === 'nobody_nearby').length,
       expired: endingRows.filter((row) => row.status === 'expired').length,
       retired,
     };
@@ -420,10 +490,24 @@ export class RowMemoryService {
       repository.pruneInteractions(day - INTERACTION_LOG_DAYS + 1);
       repository.pruneVocabulary(day - VOCABULARY_DAYS + 1);
     });
-    [...this.vocabularyKeys.keys()].forEach((key) => {
-      const keyDay = Number(key.split('|')[1]);
-      if (keyDay < day - VOCABULARY_DAYS + 1) {
-        this.vocabularyKeys.delete(key);
+    [...this.views.keys()].forEach((key) => {
+      if (Number(key.split('|')[1]) < day - VOCABULARY_DAYS + 1) {
+        this.views.delete(key);
+      }
+    });
+    [...this.ranNames.keys()].forEach((key) => {
+      if (Number(key.split('|')[1]) < day) {
+        this.ranNames.delete(key);
+      }
+    });
+    [...this.daySkips.keys()].forEach((key) => {
+      if (Number(key.split('|')[1]) < day - 1) {
+        this.daySkips.delete(key);
+      }
+    });
+    [...this.skipped].forEach((key) => {
+      if (Number(key.split('|')[1]) < day) {
+        this.skipped.delete(key);
       }
     });
   }
@@ -435,6 +519,20 @@ export class RowMemoryService {
       return;
     }
     const at = new Date().toISOString();
+    records.forEach((record) => {
+      if (!record.ran || record.day === undefined || record.day === null) {
+        return;
+      }
+      const key = `${record.zone_id ?? '?'}|${record.day}`;
+      const ran = this.ranNames.get(key) ?? new Set<string>();
+      if (record.name) {
+        ran.add(record.name);
+      }
+      if (record.super_name) {
+        ran.add(record.super_name);
+      }
+      this.ranNames.set(key, ran);
+    });
     this.guard('interaction log', (repository) => {
       repository.insertInteractions(
         records
@@ -473,25 +571,28 @@ export class RowMemoryService {
     const zone = String(zoneRaw);
     const minute = typeof clock?.hour === 'number' ? clock.hour * 60 + (clock.minute ?? 0) : undefined;
     const entries: VocabularySeenEntry[] = [];
-    const keys = this.vocabularyKeysFor(simId, day, zone);
+    const view = this.vocabularyView(simId, day, zone);
     answer.rows.forEach((row) => {
       if (!row.key || !row.label) {
         return;
       }
-      entries.push({
+      const entry: VocabularySeenEntry = {
         simId,
         target: vocabularyTarget(row.target_kind, row.target_id, row.target),
         kind: row.target_kind ?? 'object',
         label: row.label,
         key: row.key,
+        superKey: row.super,
         greyed: row.greyed ? (row.reason ?? 'greyed') : undefined,
         zone,
         day,
         minute,
-      });
-      if (!row.greyed) {
-        keys.add(row.key);
-      }
+      };
+      entries.push(entry);
+      addToView(view, entry);
+    });
+    (answer.targets ?? []).forEach((target) => {
+      (target.candidates_checked ?? []).forEach((candidate) => view.checked.add(candidate));
     });
     if (entries.length > 0) {
       this.guard('vocabulary', (repository) => {
@@ -500,18 +601,22 @@ export class RowMemoryService {
     }
   }
 
-  private vocabularyKeysFor(simId: string, day: number, zone: string): Set<string> {
+  // What each target's menu offered the Sim today in this zone (the stored rows, plus the
+  // candidates a provider sample judged this app run)
+  vocabularyView(simId: string, day: number, zone: string): VocabularyView {
     const key = `${simId}|${day}|${zone}`;
-    let keys = this.vocabularyKeys.get(key);
-    if (!keys) {
-      keys = new Set(
-        (this.guard('vocabulary keys', (repository) => repository.vocabularyFor(simId, day, zone)) ?? [])
-          .filter((entry) => !entry.greyed)
-          .map((entry) => entry.key),
+    let view = this.views.get(key);
+    if (!view) {
+      const built: VocabularyView = { targets: new Map(), checked: new Set() };
+      (this.guard('vocabulary view', (repository) => repository.vocabularyFor(simId, day, zone)) ?? []).forEach(
+        (entry) => {
+          addToView(built, entry);
+        },
       );
-      this.vocabularyKeys.set(key, keys);
+      view = built;
+      this.views.set(key, view);
     }
-    return keys;
+    return view;
   }
 
   // --- views --------------------------------------------------------------------------------
@@ -536,7 +641,10 @@ export class RowMemoryService {
   onDatabaseLoaded() {
     this.stats.clear();
     this.pending.clear();
-    this.vocabularyKeys.clear();
+    this.views.clear();
+    this.ranNames.clear();
+    this.skipped.clear();
+    this.daySkips.clear();
     this.prunedDay = undefined;
   }
 }

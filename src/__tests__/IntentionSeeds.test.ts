@@ -209,7 +209,7 @@ describe('mergeSeeds', () => {
       entry({
         goal_pool: [
           { id: 'objective_Asp_1', source: 'aspiration', label: 'A', affordances: ['x'] },
-          { id: 'want_One', source: 'want', label: 'W1', action_keys: ['chat'] },
+          { id: 'want_One', source: 'want', label: 'W1', action_keys: ['browse_web'] },
         ],
       }),
       report({ bills: { due: true, amount: 100 } }),
@@ -219,7 +219,7 @@ describe('mergeSeeds', () => {
     first[0].history.push({ at: 1, outcome: 'success' });
     first[1].attempts = 2;
     const second = seedRows(
-      entry({ goal_pool: [{ id: 'want_Two', source: 'want', label: 'W2', action_keys: ['chat'] }] }),
+      entry({ goal_pool: [{ id: 'want_Two', source: 'want', label: 'W2', action_keys: ['browse_web'] }] }),
       report({ bills: { due: false } }),
       SETTINGS,
     );

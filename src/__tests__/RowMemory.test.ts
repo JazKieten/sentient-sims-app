@@ -179,7 +179,7 @@ function failOnce(built: ReturnType<typeof build>, sim: SimStateEntry, rep: SimS
 describe('RowMemory helpers', () => {
   it('classifies the click refusals the 10-22 playtest saw', () => {
     expect(classifyOutcome('canceled', undefined, 'x: none of 27 candidates is on the menu')).toEqual({
-      counter: 'notOnMenu',
+      counter: 'refusedLive',
       cause: 'not_on_menu',
       structural: true,
     });
@@ -266,7 +266,7 @@ describe('RowMemoryService with the intention list', () => {
     expect(fire.eligible).toEqual([{ id: fire.rowId, source: 'aspiration', kind: 'pie' }]);
     expect(fire.context?.needs).toEqual({ hunger: 50, fun: 10 });
     const stats = must(built.rowMemory.get('100', 'objective_Garden'));
-    expect(stats).toMatchObject({ fires: 1, clicked: 1, notOnMenu: 1, firesSinceRan: 1, lastStructural: true });
+    expect(stats).toMatchObject({ fires: 1, clicked: 1, refusedLive: 1, firesSinceRan: 1, lastStructural: true });
   });
 
   it('a gate refusal counts nothing and logs nothing', () => {
@@ -542,8 +542,11 @@ describe('RowMemoryRepository on a real save database (migration 027)', () => {
     repository.pruneInteractions(34);
     expect(repository.countInteractions('100')).toEqual({ ours: 1 });
     const seen = { simId: '100', target: 'self', kind: 'self', label: 'Stargaze', key: 'k', zone: '1', day: 40 };
-    repository.upsertVocabulary([seen, { ...seen, minute: 5 }]);
+    repository.upsertVocabulary([seen, { ...seen, minute: 5, superKey: 'super_Stargaze' }]);
     expect(repository.vocabularyFor('100', 40, '1')).toHaveLength(1);
+    expect(repository.vocabularyFor('100', 40, '1')[0].superKey).toBe('super_Stargaze');
+    repository.saveStats({ ...emptyStats('100', 'k2'), refusedLive: 2 });
+    expect(repository.statsFor('100').find((stats) => stats.seedKey === 'k2')?.refusedLive).toBe(2);
     repository.pruneVocabulary(41);
     expect(repository.vocabularyFor('100', 40)).toHaveLength(0);
   });

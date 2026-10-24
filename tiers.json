@@ -37,6 +37,7 @@
     "src/main/sentient-sims/db/RowMemoryRepository.ts",
     "src/main/sentient-sims/services/intentions/RowMemory.ts",
     "src/main/sentient-sims/services/intentions/RowMemoryService.ts",
+    "src/main/sentient-sims/services/intentions/VocabularySampler.ts",
     "src/main/sentient-sims/util/formatVocabulary.ts",
     "src/main/sentient-sims/services/AskActionService.ts",
     "src/main/sentient-sims/services/DailyPlanService.ts",
@@ -74,6 +75,7 @@
     "src/__tests__/IntentionService.test.ts",
     "src/__tests__/NightCall.test.ts",
     "src/__tests__/RowMemory.test.ts",
+    "src/__tests__/Initiation.test.ts",
     "src/__tests__/FactsInPrompts.test.ts",
     "src/__tests__/DirectorService.test.ts",
     "src/__tests__/PlumWhisper.test.ts"

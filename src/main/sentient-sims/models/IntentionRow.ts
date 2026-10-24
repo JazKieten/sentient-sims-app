@@ -74,9 +74,14 @@ export type Until =
 // keeps it struck, and pick, the prompt and the list log skip it
 export type RowStatus = 'waiting' | 'in_flight' | 'done' | 'asleep' | 'expired' | 'unreachable' | 'dropped';
 
+// What wakes a structural sleep besides a zone change (renovation R2: events, not a 2-hour
+// timer): the target arriving, a candidate on today's menus, the item running for anyone
+export type WakeOn = 'target_present' | 'candidate_seen' | 'ran_by_anyone';
+
 export type RowClears =
   | { kind: 'funds_at_least'; amount: number }
-  | { kind: 'zone_change'; zone_id?: string; until: number }
+  // `until` only on rows slept before R2 (the old 2-hour re-check)
+  | { kind: 'zone_change'; zone_id?: string; until?: number; wake_on?: WakeOn[] }
   | { kind: 'object_fixed'; object_id: string }
   | { kind: 'day_end' }
   | { kind: 'never' };
@@ -109,6 +114,9 @@ export type IntentionRow = {
   firedAt?: number;
   // The provider object the last fire resolved to (for an object_fixed sleep)
   targetObjectId?: string;
+  // Consecutive initiation-set failures (R2): counted at most once per game hour; at
+  // MAX_ABSENT the row expires
+  absent?: { count: number; lastAt: number; cause: string };
 };
 
 export type RowClockContext = {

@@ -17,6 +17,7 @@ import {
 } from '../../models/IntentionRow';
 import { parseNextShift } from '../../util/formatSelfStatus';
 import { namesSim } from './RowMemory';
+import { SOCIAL_ACTIONS } from '../../models/CognitionIntent';
 
 export type SeedSettings = {
   needFloor: number;
@@ -201,6 +202,16 @@ function goalRows(entry: SimStateEntry): IntentionRow[] {
       .filter((goal) => goal.source === source)
       .forEach((goal) => {
         const { what, status } = whatForGoal(goal);
+        // R2: a social action row with no one to do it with has no initiation set: it never
+        // seeds (10-22: "requires target_sim_id"). Social pie rows keep the mod's find.
+        if (
+          what.kind === 'action' &&
+          !goal.target_sim_id &&
+          what.actions.length > 0 &&
+          what.actions.every((action) => SOCIAL_ACTIONS.has(action))
+        ) {
+          return;
+        }
         const preconditions: Precondition[] = [];
         let target: IntentionRow['target'];
         if (goal.target_sim_id) {

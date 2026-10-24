@@ -299,6 +299,9 @@ describe('IntentionService', () => {
     service.onModDisconnected();
     expect(service.hasInFlight('100')).toBe(false);
     expect(service.rowsFor('100')[0].status).toBe('waiting');
+    // Renovation R2: a reconnect holds every row for the settle time, then they fire again
+    expect(service.pick(jonah, rep)).toBeUndefined();
+    (service as unknown as { settleUntil: number }).settleUntil = 0;
     // Stood down at the gate: no attempt, the beat refunded, the row picked again at once
     const again = must(service.pick(jonah, rep));
     service.markFired(again.id, '');

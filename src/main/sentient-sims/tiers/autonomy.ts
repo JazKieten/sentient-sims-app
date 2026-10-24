@@ -26,6 +26,7 @@ import { IntentionService } from '../services/intentions/IntentionService';
 import { NightCallService } from '../services/intentions/NightCallService';
 import { RowMemoryRepository } from '../db/RowMemoryRepository';
 import { RowMemoryService } from '../services/intentions/RowMemoryService';
+import { VocabularySampler } from '../services/intentions/VocabularySampler';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -43,6 +44,8 @@ export interface AutonomyServices {
   rowMemory: RowMemoryService;
   // The ordered row list per household Sim (autonomy part 5)
   intentions: IntentionService;
+  // Once a day per Sim, the menus that matter (renovation R2)
+  vocabularySampler: VocabularySampler;
   // One Plum turn per household Sim at the day rollover that edits the list (part 6)
   nightCall: NightCallService;
   cognitionService: CognitionService;
@@ -81,6 +84,7 @@ function construct(ctx: ApiContext) {
   });
   // Needs modQuery for the game's goal_completed events
   autonomy.intentions = new IntentionService(ctx, autonomy);
+  autonomy.vocabularySampler = new VocabularySampler(autonomy);
   // Hears the rows' day rollover; cognition ticks it from the state report
   autonomy.nightCall = new NightCallService(ctx, autonomy);
   // Subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
@@ -189,6 +193,7 @@ export const autonomyTier: TierRegistration = {
     autonomy.modQuery.onModDisconnected();
     autonomy.cognitionService.onModDisconnected();
     autonomy.intentions.onModDisconnected();
+    autonomy.vocabularySampler.onModDisconnected();
   },
   onDatabaseLoaded: (ctx) => {
     // The bounding pass for the graded outcomes this save holds (F5)
@@ -196,6 +201,7 @@ export const autonomyTier: TierRegistration = {
     // Rows are per save, and so is their memory
     autonomyOf(ctx).intentions.onDatabaseLoaded();
     autonomyOf(ctx).rowMemory.onDatabaseLoaded();
+    autonomyOf(ctx).vocabularySampler.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {
     // A reply to the player that wanted to act may act now that it has been heard

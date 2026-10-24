@@ -450,7 +450,7 @@ export class CognitionService {
 
   // Siblings in the autonomy tier (tiers/autonomy.ts), read when they are needed
   private readonly autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall'>>;
+    Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall' | 'vocabularySampler'>>;
 
   // The gate's holds: sim id -> the player click the mod said holds that Sim, until the mod's
   // hold_released names it (or HOLD_SAFETY_MS passes)
@@ -470,7 +470,7 @@ export class CognitionService {
   constructor(
     ctx: ApiContext,
     autonomy: Pick<AutonomyServices, 'actionDispatcher' | 'dailyPlan'> &
-      Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall'>>,
+      Partial<Pick<AutonomyServices, 'modQuery' | 'intentions' | 'nightCall' | 'vocabularySampler'>>,
   ) {
     this.ctx = ctx;
     this.autonomy = autonomy;
@@ -889,6 +889,18 @@ export class CognitionService {
       this.autonomy.nightCall?.tick(report);
     } catch (error) {
       log.warn('[Night] tick failed', error);
+    }
+
+    // The day's vocabulary (renovation R2): at most one menu sample in flight
+    if (intentions) {
+      try {
+        this.autonomy.vocabularySampler?.tick(
+          entries.filter((entry) => entry.is_household !== false && entry.sim_id),
+          report,
+        );
+      } catch (error) {
+        log.warn('[Rows] the vocabulary sampler failed', error);
+      }
     }
 
     // Part 7: the legacy per-tick deliberation runs only behind cognitionLegacyTick
@@ -2278,10 +2290,11 @@ export class CognitionService {
     return undefined;
   }
 
-  // Fire one row: the `row` gate for a click (a deliberate row gates itself on its own
-  // lane), then the dispatch (action / pie), the existing deliberation with the row as the
-  // armed desire (scene), or the existing conversation follow-through (conversation).
-  // Every path that does not dispatch ends in toCooldown, which reports the row stood down.
+  // Fire one row: the `row` gate first for EVERY kind (renovation R2: a deliberate row whose
+  // moment is wrong never reaches markFired or a model call), then the dispatch (action /
+  // pie), the existing deliberation with the row as the armed desire (scene), or the existing
+  // conversation follow-through (conversation). Every path that does not dispatch ends in
+  // toCooldown, which reports the row stood down.
   private async fireRow(entry: SimStateEntry, report: SimStateReport, row: IntentionRow): Promise<void> {
     const simId = entry.sim_id;
     const runtime = this.runtime(simId);
@@ -2290,6 +2303,31 @@ export class CognitionService {
       return;
     }
     runtime.activeRowId = row.id;
+    const intent =
+      row.what.kind === 'deliberate' ? undefined : this.rowIntent(row, intentions, this.usableVerbs(entry, report));
+    if (row.what.kind !== 'deliberate' && !intent) {
+      intentions.onStoodDown(row.id, { reason: 'nothing to click' });
+      runtime.activeRowId = undefined;
+      return;
+    }
+    runtime.gating = true;
+    try {
+      const gate = await this.gateFor(simId, 'row', row.target?.sim_id);
+      if (this.inFlight(simId)) {
+        intentions.onStoodDown(row.id, { gate: true });
+        runtime.activeRowId = undefined;
+        return;
+      }
+      if (!gate.open) {
+        // The moment, not the row, said no: the row stays waiting at no cost
+        intentions.onStoodDown(row.id, { gate: true });
+        runtime.activeRowId = undefined;
+        this.refuseAtGate(simId, 'row', gate);
+        return;
+      }
+    } finally {
+      runtime.gating = false;
+    }
     if (row.what.kind === 'deliberate') {
       intentions.markFired(row.id, '');
       const { desire } = row.what;
@@ -2325,29 +2363,8 @@ export class CognitionService {
       }
       return;
     }
-    const intent = this.rowIntent(row, intentions, this.usableVerbs(entry, report));
     if (!intent) {
-      intentions.onStoodDown(row.id, { reason: 'nothing to click' });
-      runtime.activeRowId = undefined;
       return;
-    }
-    runtime.gating = true;
-    try {
-      const gate = await this.gateFor(simId, 'row', row.target?.sim_id);
-      if (this.inFlight(simId)) {
-        intentions.onStoodDown(row.id, { gate: true });
-        runtime.activeRowId = undefined;
-        return;
-      }
-      if (!gate.open) {
-        // The moment, not the row, said no: the row stays waiting at no cost
-        intentions.onStoodDown(row.id, { gate: true });
-        runtime.activeRowId = undefined;
-        this.refuseAtGate(simId, 'row', gate);
-        return;
-      }
-    } finally {
-      runtime.gating = false;
     }
     intentions.markFired(row.id, `-> ${intent.action}${intent.pie ? ' (pie)' : ''}`);
     this.dispatchChosenIntent({ simId, entry, runtime, intent, source: 'cognition' });
@@ -2375,6 +2392,10 @@ export class CognitionService {
     const runtime = this.runtime(simId);
     if (runtime.gating || runtime.phase === 'DELIBERATING' || runtime.phase === 'PENDING_OUTCOME') {
       return { ok: false, error: `sim ${simId} is ${runtime.phase}` };
+    }
+    // R2: the debug fire keeps the lot's say on an action row (10-22: play_piano with no piano)
+    if (row.what.kind === 'action' && !row.what.actions.some(this.usableVerbs(entry, report))) {
+      return { ok: false, error: `no verb of ${row.what.actions.join('|')} is served on this lot` };
     }
     row.status = 'waiting';
     row.sleep = undefined;

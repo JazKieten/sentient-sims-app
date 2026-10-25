@@ -12,6 +12,7 @@ import { describeSim } from '../plum/plumLiveSims';
 import { rowRank } from './IntentionSeeds';
 import { RETIRE_CLEAR_DAYS, RowStats, isDead, statsTag } from './RowMemory';
 import type { VocabularySeenEntry } from '../../db/RowMemoryRepository';
+import type { NightLessons } from './Procedures';
 
 export const NIGHT_MEMORIES = 25;
 // The clickable lists (renovation R3): what each target's menu offered yesterday
@@ -39,6 +40,8 @@ export type NightCallInput = {
   stats?: RowStats[];
   // Every item a menu offered the Sim on the ending day (R3: story rows click from these)
   vocabulary?: VocabularySeenEntry[];
+  // What worked, what failed and what it taught (R4), rendered by ProcedureService
+  lessons?: NightLessons;
 };
 
 // The heading a list is clicked by: 'self', 'phone', a Sim's name, or the object kind
@@ -264,10 +267,45 @@ export const NIGHT_RULES = [
   'The counts in [brackets] are what happened to that row on earlier days, not a measure of what works. A row marked DEAD fired 3 or more times without running: drop it or leave it; a rewrite of it is refused.',
   'The Sim never learns a night call exists; write as their own intentions, not as instructions.',
   'For each DEAD row and each row that failed yesterday, one `diagnoses` line by its [key]: why it died, in one sentence (what was missing, not a rewording).',
+  'A story row may carry a `key`: a short exact name for its aim (make_up, calm_down, cook_dinner). Reuse a key listed under "What has worked" when the aim is the same; with a null `click`, that procedure supplies the click.',
+  'A procedure listed as failed may be revised in place with `revise_procedure`: its [key], a target and 1 to 3 items copied from the clickable lists ({target} = the Sim the row names). `add_pitfall` keeps a lesson a failure taught, about a [key], a Sim or an object kind; `shared` only when it is a fact about this lot, not about this Sim. Leave both empty when nothing was learned.',
 ];
+
+// Everyone here's lessons (R4): FIRST in the text and frozen per game day and zone, so every
+// night call of the day opens with the same bytes (the shared slot; the system prompt is Plum's)
+function sharedLines(lessons: NightLessons | undefined): string[] {
+  if (!lessons || lessons.shared.length === 0) {
+    return [];
+  }
+  return [
+    '<shared_lessons>',
+    'What everyone on this lot has learned (kept by code from what ran and what failed):',
+    ...lessons.shared,
+    '</shared_lessons>',
+  ];
+}
+
+// The Sim's own lessons (R4): what ran before, what failed and may be revised, what it taught
+function lessonLines(lessons: NightLessons | undefined, first: string): string[] {
+  if (!lessons) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (lessons.worked.length > 0) {
+    lines.push('', `What has worked for ${first} (procedures: reuse one by its [key]):`, ...lessons.worked);
+  }
+  if (lessons.failed.length > 0) {
+    lines.push('', 'Procedures that failed (revise in place with revise_procedure, or leave them):', ...lessons.failed);
+  }
+  if (lessons.pitfalls.length > 0) {
+    lines.push('', `Lessons ${first} has learned (pitfalls):`, ...lessons.pitfalls);
+  }
+  return lines;
+}
 
 export function buildNightText(input: NightCallInput): string {
   const lines: string[] = [
+    ...sharedLines(input.lessons),
     `<night_call sim="${input.simName}" sim_id="${input.simId}" ending_day="${input.endingDay}" new_day="${input.newDay}">`,
     `It is the start of day ${input.newDay} for ${input.simName}. Write their intentions for the new day.`,
     '',
@@ -294,6 +332,8 @@ export function buildNightText(input: NightCallInput): string {
       ...retired,
     );
   }
+  const first = input.simName.trim().split(/\s+/)[0] || input.simName;
+  lines.push(...lessonLines(input.lessons, first));
   lines.push('', 'What happened yesterday (their own memories, oldest first):');
   const memories = memoryLines(input.memories);
   lines.push(...(memories.length > 0 ? memories : ['- (nothing remembered)']));
@@ -301,7 +341,6 @@ export function buildNightText(input: NightCallInput): string {
   if (outcomes.length > 0) {
     lines.push('', "What the day loop's clicks came to:", ...outcomes);
   }
-  const first = input.simName.trim().split(/\s+/)[0] || input.simName;
   const clickable = clickableLines(input);
   lines.push('', `What ${first} could click yesterday (heading = click target; items copied exactly):`);
   lines.push(...(clickable.length > 0 ? clickable : ['- (no menus were seen yesterday: leave click null)']));
@@ -314,7 +353,8 @@ export function buildNightText(input: NightCallInput): string {
   lines.push(
     '',
     `In ONE response: one line of what you changed, and edit_intentions once with sim_id "${input.simId}" ` +
-      '(empty lists for what you leave alone; `diagnoses` for the dead and failed rows). Then stop. No reply.',
+      '(empty lists for what you leave alone; `diagnoses` for the dead and failed rows; `revise_procedure` and ' +
+      '`add_pitfall` only when something was learned). Then stop. No reply.',
     '</night_call>',
   );
   return lines.join('\n');

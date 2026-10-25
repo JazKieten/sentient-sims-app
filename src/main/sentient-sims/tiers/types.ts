@@ -208,16 +208,29 @@ export type IntentionStoryAdd = {
   from_hour?: number;
   to_hour?: number;
   click?: IntentionClick;
+  // The row's aim as an exact key (renovation R4: make_up, calm_down): what worked for it is
+  // kept under this key, and a listed procedure with the key fills a null click
+  key?: string;
 };
 
 // The night call's one-line reading of why a dead or failed key died (R3), by its [key]
 export type IntentionDiagnosis = { key: string; text: string };
+
+// A failed procedure revised in place (R4, Memp's adjust): a new target and 1-3 items for the key.
+// A Sim target is the procedure's variable: it binds to whoever the row names.
+export type IntentionProcedureRevision = IntentionClickTarget & { key: string; items: string[]; why?: string };
+
+// A lesson a failure taught (R4, ReasoningBank): about a key, a Sim or an object kind; `shared`
+// = about the lot, kept for everyone here
+export type IntentionPitfallAdd = { about: string; text: string; shared: boolean };
 
 export type IntentionEdits = {
   drop: string[];
   rewrite: IntentionRewrite[];
   add: IntentionStoryAdd[];
   diagnoses?: IntentionDiagnosis[];
+  revise_procedure?: IntentionProcedureRevision[];
+  add_pitfall?: IntentionPitfallAdd[];
 };
 
 export interface IntentionEditSlot {

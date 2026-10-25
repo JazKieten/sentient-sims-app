@@ -19,6 +19,7 @@ import {
 } from '../../models/IntentionRow';
 import { parseNextShift } from '../../util/formatSelfStatus';
 import { namesSim } from './RowMemory';
+import { normalizeKey } from './Procedures';
 import { SOCIAL_ACTIONS } from '../../models/CognitionIntent';
 
 export type SeedSettings = {
@@ -320,6 +321,7 @@ export function storyRow(edit: IntentionStoryAdd, day: number, threshold: number
         kind: 'deliberate',
         desire: { score: threshold, reason: edit.why, thought: edit.say, targetSimId: edit.target_sim_id },
       };
+  const procedureKey = normalizeKey(edit.key);
   return {
     ...row({
       seedKey: `story:${id}`,
@@ -332,6 +334,8 @@ export function storyRow(edit: IntentionStoryAdd, day: number, threshold: number
       until: windowEnd !== undefined ? { kind: 'game_time', at: windowEnd } : { kind: 'day_end' },
     }),
     id,
+    // R4: the aim the night keyed it by; what runs is kept as that key's procedure
+    ...(procedureKey ? { procedureKey } : {}),
   };
 }
 

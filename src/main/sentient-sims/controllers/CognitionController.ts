@@ -325,6 +325,30 @@ export class CognitionController {
     }
   };
 
+  // Procedures and pitfalls (R4): the Sim's own and everyone's here, or every one in the save
+  getProcedures = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    res.json({ sim_id: simId, ...this.autonomy.procedures.view(simId) });
+  };
+
+  // Dev seam (the R4 live check): one structural failure on a Sim's procedure, through the same
+  // code an outcome takes, so the next night call is asked to revise it
+  debugProcedureFail = (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId, key, cause } = req.body as { sim_id?: string; key?: string; cause?: string };
+      if (!simId || !key) {
+        return res.status(400).json({ error: 'sim_id and key are required' });
+      }
+      const procedure = this.autonomy.procedures.recordFailureNow(simId, key, cause);
+      return procedure
+        ? res.json({ ok: true, procedure })
+        : res.status(404).json({ ok: false, error: `no procedure [${key}] for sim ${simId}` });
+    } catch (err) {
+      log.error('Error forcing a procedure failure', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
   // Dev seam: run the night call for one Sim now (autonomy part 6); the turn runs on
   // after the answer, its end is the `[Night] ... call ended` log line
   debugNightCall = (req: Request, res: Response) => {

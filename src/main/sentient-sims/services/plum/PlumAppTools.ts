@@ -24,6 +24,8 @@ import type {
   IntentionClickTarget,
   IntentionDiagnosis,
   IntentionEdits,
+  IntentionPitfallAdd,
+  IntentionProcedureRevision,
   IntentionRewrite,
   IntentionStoryAdd,
 } from '../../tiers/types';
@@ -48,6 +50,11 @@ export const MAX_CLICK_ITEMS = 3;
 export const MAX_CLICK_ITEM_CHARS = 80;
 export const MAX_DIAGNOSES_A_CALL = 12;
 export const MAX_DIAGNOSIS_CHARS = 160;
+// Renovation R4: procedures revised in place and lessons written, per call
+export const MAX_REVISIONS_A_CALL = 4;
+export const MAX_PITFALLS_A_CALL = 4;
+export const MAX_PITFALL_CHARS = 200;
+export const MAX_KEY_CHARS = 80;
 
 const MEMORY_TEXT_CHARS = 400;
 const DEFAULT_MEMORIES = 10;
@@ -248,16 +255,7 @@ function storyClick(ctx: ApiContext, raw: unknown, index: number): IntentionClic
   if (!target) {
     throw new Error(`add[${index}].click needs \`target\`: 'self', a Sim, or an object kind from the list`);
   }
-  const items = editList(entry.items, `add[${index}].click.items`).map((item, itemIndex) => {
-    const text = optionalText(item, MAX_CLICK_ITEM_CHARS, `add[${index}].click.items[${itemIndex}]`);
-    if (!text) {
-      throw new Error(`add[${index}].click.items[${itemIndex}] is empty`);
-    }
-    return text;
-  });
-  if (items.length === 0 || items.length > MAX_CLICK_ITEMS) {
-    throw new Error(`add[${index}].click.items needs 1 to ${MAX_CLICK_ITEMS} items, not ${items.length}`);
-  }
+  const items = clickItems(entry.items, `add[${index}].click.items`);
   const click: IntentionClick = { ...clickTarget(ctx, target), items };
   const fallback = optionalText(entry.fallback_target, 80, `add[${index}].click.fallback_target`);
   if (fallback) {
@@ -273,7 +271,51 @@ function diagnosisEdit(raw: unknown, index: number): IntentionDiagnosis {
   if (!key || !text) {
     throw new Error(`diagnoses[${index}] needs \`key\` (the [key] before the row) and \`text\``);
   }
-  return { key: key.replace(/^\[|\]$/g, ''), text };
+  return { key: stripBrackets(key), text };
+}
+
+// A click's items: 1 to MAX_CLICK_ITEMS labels
+function clickItems(raw: unknown, what: string): string[] {
+  const items = editList(raw, what).map((item, itemIndex) => {
+    const text = optionalText(item, MAX_CLICK_ITEM_CHARS, `${what}[${itemIndex}]`);
+    if (!text) {
+      throw new Error(`${what}[${itemIndex}] is empty`);
+    }
+    return text;
+  });
+  if (items.length === 0 || items.length > MAX_CLICK_ITEMS) {
+    throw new Error(`${what} needs 1 to ${MAX_CLICK_ITEMS} items, not ${items.length}`);
+  }
+  return items;
+}
+
+function stripBrackets(key: string): string {
+  return key.replace(/^\[|\]$/g, '');
+}
+
+// R4: a failed procedure revised in place. '{target}' or a Sim = the procedure's Sim variable.
+function procedureRevision(ctx: ApiContext, raw: unknown, index: number): IntentionProcedureRevision {
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const key = optionalText(entry.key, MAX_KEY_CHARS, `revise_procedure[${index}].key`);
+  const target = optionalText(entry.target, 80, `revise_procedure[${index}].target`);
+  if (!key || !target) {
+    throw new Error(`revise_procedure[${index}] needs \`key\` (the [key] listed) and \`target\``);
+  }
+  const items = clickItems(entry.items, `revise_procedure[${index}].items`);
+  const why = optionalText(entry.why, MAX_WHY_CHARS, `revise_procedure[${index}].why`);
+  const resolved: IntentionClickTarget = target === '{target}' ? { target_kind: 'sim' } : clickTarget(ctx, target);
+  return { ...resolved, key: stripBrackets(key), items, ...(why ? { why } : {}) };
+}
+
+// R4: a lesson a failure taught
+function pitfallAdd(raw: unknown, index: number): IntentionPitfallAdd {
+  const entry = (raw ?? {}) as Record<string, unknown>;
+  const about = optionalText(entry.about, MAX_KEY_CHARS, `add_pitfall[${index}].about`);
+  const text = optionalText(entry.text, MAX_PITFALL_CHARS, `add_pitfall[${index}].text`);
+  if (!about || !text) {
+    throw new Error(`add_pitfall[${index}] needs \`about\` and \`text\``);
+  }
+  return { about: stripBrackets(about), text, shared: entry.shared === true };
 }
 
 function storyAdd(ctx: ApiContext, raw: unknown, index: number): IntentionStoryAdd {
@@ -308,6 +350,10 @@ function storyAdd(ctx: ApiContext, raw: unknown, index: number): IntentionStoryA
   if (click) {
     story.click = click;
   }
+  const key = optionalText(entry.key, MAX_KEY_CHARS, `add[${index}].key`);
+  if (key) {
+    story.key = stripBrackets(key);
+  }
   return story;
 }
 
@@ -331,7 +377,24 @@ export function intentionEdits(ctx: ApiContext, args: Record<string, unknown>): 
   if (diagnoses.length > MAX_DIAGNOSES_A_CALL) {
     throw new Error(`at most ${MAX_DIAGNOSES_A_CALL} diagnoses a call`);
   }
-  return { drop, rewrite, add, ...(diagnoses.length > 0 ? { diagnoses } : {}) };
+  const revisions = editList(args.revise_procedure, 'revise_procedure').map((raw, index) =>
+    procedureRevision(ctx, raw, index),
+  );
+  if (revisions.length > MAX_REVISIONS_A_CALL) {
+    throw new Error(`at most ${MAX_REVISIONS_A_CALL} procedure revisions a call`);
+  }
+  const pitfalls = editList(args.add_pitfall, 'add_pitfall').map((raw, index) => pitfallAdd(raw, index));
+  if (pitfalls.length > MAX_PITFALLS_A_CALL) {
+    throw new Error(`at most ${MAX_PITFALLS_A_CALL} pitfalls a call`);
+  }
+  return {
+    drop,
+    rewrite,
+    add,
+    ...(diagnoses.length > 0 ? { diagnoses } : {}),
+    ...(revisions.length > 0 ? { revise_procedure: revisions } : {}),
+    ...(pitfalls.length > 0 ? { add_pitfall: pitfalls } : {}),
+  };
 }
 
 // `wakeOf` names the PlumService whose wake-ups wake_me sets (the one running the turn);
@@ -1082,8 +1145,12 @@ export function buildAppTools(
         'names a Sim who must be present, `from_hour`/`to_hour` the hours of the day it may fire (null = any), ' +
         "`click` what it clicks: a target ('self', a Sim, or an object kind as listed) and 1 to 3 items COPIED " +
         "EXACTLY from that target's list in the night text, best first (never invent one; null = no click, " +
-        'which waits for a slow pick at its moment). `diagnoses`: one line per dead or failed row, by the [key] ' +
-        'printed before it: why it died. [] = no change of that kind.',
+        'which waits for a slow pick at its moment); `key` a short exact name for its aim (make_up, calm_down; ' +
+        'a listed procedure with that key fills a null click). `diagnoses`: one line per dead or failed row, by ' +
+        'the [key] printed before it: why it died. `revise_procedure`: a failed procedure listed in the night ' +
+        "text, revised in place (its [key], a target, 1 to 3 items copied from the lists; '{target}' = the Sim " +
+        'the row names). `add_pitfall`: a lesson a failure taught, about a [key], a Sim or an object kind ' +
+        '(`shared` = a fact about this lot). [] = no change of that kind.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1136,8 +1203,12 @@ export function buildAppTools(
                   required: ['target', 'items', 'fallback_target'],
                   additionalProperties: false,
                 },
+                key: {
+                  type: ['string', 'null'],
+                  description: 'A short exact name for the aim (make_up, calm_down); reuse a listed key; null = none',
+                },
               },
-              required: ['why', 'say', 'target', 'from_hour', 'to_hour', 'click'],
+              required: ['why', 'say', 'target', 'from_hour', 'to_hour', 'click', 'key'],
               additionalProperties: false,
             },
           },
@@ -1154,8 +1225,44 @@ export function buildAppTools(
               additionalProperties: false,
             },
           },
+          revise_procedure: {
+            type: 'array',
+            description: `Failed procedures revised in place, at most ${MAX_REVISIONS_A_CALL} ([] = none)`,
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string', description: 'The [key] of a procedure listed as failed' },
+                target: {
+                  type: 'string',
+                  description: "'self', '{target}' (the Sim the row names), 'phone' or an object kind as listed",
+                },
+                items: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: `1 to ${MAX_CLICK_ITEMS} items copied from that target's list, best first`,
+                },
+                why: { type: ['string', 'null'], description: 'What it is for; null = keep' },
+              },
+              required: ['key', 'target', 'items', 'why'],
+              additionalProperties: false,
+            },
+          },
+          add_pitfall: {
+            type: 'array',
+            description: `Lessons a failure taught, at most ${MAX_PITFALLS_A_CALL} ([] = none)`,
+            items: {
+              type: 'object',
+              properties: {
+                about: { type: 'string', description: 'A [key], a Sim or an object kind' },
+                text: { type: 'string', description: `One sentence, at most ${MAX_PITFALL_CHARS} chars` },
+                shared: { type: 'boolean', description: 'True only for a fact about this lot, not about this Sim' },
+              },
+              required: ['about', 'text', 'shared'],
+              additionalProperties: false,
+            },
+          },
         },
-        required: ['sim_id', 'drop', 'rewrite', 'add', 'diagnoses'],
+        required: ['sim_id', 'drop', 'rewrite', 'add', 'diagnoses', 'revise_procedure', 'add_pitfall'],
         additionalProperties: false,
       },
       risk: 'write',

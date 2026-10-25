@@ -76,7 +76,7 @@ export type PickOptions = {
 };
 
 export type IntentionServiceDeps = Partial<
-  Pick<AutonomyServices, 'intentionRepository' | 'modQuery' | 'rowMemory' | 'budgetGate'>
+  Pick<AutonomyServices, 'intentionRepository' | 'modQuery' | 'rowMemory' | 'budgetGate' | 'procedures'>
 >;
 
 const SAVE_DEBOUNCE_MS = 2_000;
@@ -340,6 +340,7 @@ export class IntentionService {
     }
     const statusBefore = new Map(state.rows.map((item) => [item.id, item.status]));
     const merged = mergeSeeds(state.rows, seeded);
+    let procedureApplied = false;
     const rowsById = new Map(merged.map((item) => [item.id, item]));
     merged.forEach((item) => {
       if (item.status === 'waiting' && item.until.kind !== 'once' && untilReached(item, ctx)) {
@@ -359,9 +360,13 @@ export class IntentionService {
       if (item.status === 'expired' && statusBefore.has(item.id) && statusBefore.get(item.id) !== 'expired') {
         this.deps.rowMemory?.expired(simId, item);
       }
+      // R4: a seeded pie row clicks what ran for its key before (k = 1)
+      if (this.applyProcedure(simId, item)) {
+        procedureApplied = true;
+      }
     });
     const shape = merged.map((item) => item.seedKey).join(',');
-    const changed = shape !== state.shape || merged !== state.rows;
+    const changed = shape !== state.shape || merged !== state.rows || procedureApplied;
     state.rows = merged;
     if (shape !== state.shape) {
       state.shape = shape;
@@ -371,6 +376,15 @@ export class IntentionService {
       this.markDirty(simId, state);
     }
     void rowsById;
+  }
+
+  private applyProcedure(simId: string, item: IntentionRow): boolean {
+    try {
+      return this.deps.procedures?.applyToRow(simId, item) ?? false;
+    } catch (error) {
+      log.debug(`[Rows] procedure not applied to ${item.id}: ${String(error)}`);
+      return false;
+    }
   }
 
   private static listLine(rows: IntentionRow[]): string {
@@ -829,6 +843,18 @@ export class IntentionService {
       ran: event.ran ?? undefined,
       finishing: event.finishing,
     });
+    // R4: what ran becomes the key's procedure; what failed counts against it
+    try {
+      this.deps.procedures?.onOutcome(simId, item, {
+        outcome: event.outcome,
+        cause: event.cause,
+        reason: event.reason,
+        ran: event.ran ?? undefined,
+        label: event.label,
+      });
+    } catch (error) {
+      log.debug(`[Rows] procedure outcome not kept for ${item.id}: ${String(error)}`);
+    }
     item.requestId = undefined;
     item.history.push({ at: Date.now(), outcome: event.outcome, cause: event.cause });
     if (event.outcome !== 'success' && event.decided_at === 'dispatch') {
@@ -1029,18 +1055,42 @@ export class IntentionService {
         item.rank = edit.rank;
       }
     });
-    // R3: why each dead or failed key died, in the night call's words, kept for R4
+    // R3: why each dead or failed key died, in the night call's words; R4 keeps it as the key's
+    // pitfall (the night text shows it back)
     (edits.diagnoses ?? []).forEach((diagnosis) => {
       state.rows
         .filter((item) => item.seedKey === diagnosis.key)
         .forEach((item) => {
           item.diagnosis = diagnosis.text;
         });
-      this.deps.rowMemory?.diagnose(simId, diagnosis.key, diagnosis.text);
+      this.deps.procedures?.diagnose(simId, diagnosis.key, diagnosis.text);
       log.info(`[Night] ${name} diagnosis [${diagnosis.key}]: ${diagnosis.text}`);
     });
+    // R4: failed procedures revised in place, and lessons
+    const procedureRefused: string[] = [];
+    let revised = 0;
+    (edits.revise_procedure ?? []).forEach((revision) => {
+      const refusal = this.deps.procedures ? this.deps.procedures.revise(simId, revision) : 'no procedures here';
+      if (refusal) {
+        procedureRefused.push(refusal);
+      } else {
+        revised += 1;
+      }
+    });
+    (edits.add_pitfall ?? []).forEach((lesson) => {
+      this.deps.procedures?.addPitfall(simId, lesson, 'night');
+      log.info(`[Night] ${name} pitfall${lesson.shared ? ' (shared)' : ''} [${lesson.about}]: ${lesson.text}`);
+    });
     const threshold = this.ctx.settings.cognitionActionScoreThreshold;
-    const added = edits.add.map((edit) => storyRow(edit, state.day, threshold));
+    let fromProcedure = 0;
+    const added = edits.add.map((edit) => {
+      // A keyed row with no click takes its procedure's click (k = 1)
+      const bound = this.deps.procedures?.bindStoryClick(simId, edit);
+      if (bound) {
+        fromProcedure += 1;
+      }
+      return storyRow(bound ? { ...edit, click: bound } : edit, state.day, threshold);
+    });
     const clicks = added.filter((item) => item.what.kind === 'pie').length;
     state.rows.push(...added);
     orderRows(state.rows);
@@ -1049,13 +1099,18 @@ export class IntentionService {
     const refusedText =
       refused.length > 0 ? `; refused to reword ${refused.join('; ')} (dead: drop it or leave it)` : '';
     const diagnosed = edits.diagnoses?.length ?? 0;
+    const lessons = edits.add_pitfall?.length ?? 0;
+    const procedureText =
+      `, ${revised} procedure${revised === 1 ? '' : 's'} revised, ${lessons} pitfall${lessons === 1 ? '' : 's'}` +
+      (fromProcedure > 0 ? `, ${fromProcedure} click${fromProcedure === 1 ? '' : 's'} from a procedure` : '') +
+      (procedureRefused.length > 0 ? `; not revised: ${procedureRefused.join('; ')}` : '');
     const changed =
       `${name}'s list: dropped ${edits.drop.length}, rewrote ${rewrote}, ` +
       `added ${added.length} story row${added.length === 1 ? '' : 's'} (${clicks} with a click), ` +
-      `${diagnosed} diagnos${diagnosed === 1 ? 'is' : 'es'}${refusedText}`;
+      `${diagnosed} diagnos${diagnosed === 1 ? 'is' : 'es'}${procedureText}${refusedText}`;
     log.info(
       `[Rows] ${name} night: dropped ${edits.drop.length}, rewrote ${rewrote}, added ${added.length} story rows ` +
-        `(${clicks} with a click), ${diagnosed} diagnoses${refusedText}`,
+        `(${clicks} with a click), ${diagnosed} diagnoses${procedureText}${refusedText}`,
     );
     log.info(`[Rows] ${name} list: ${IntentionService.listLine(state.rows)}`);
     this.markDirty(simId, state);

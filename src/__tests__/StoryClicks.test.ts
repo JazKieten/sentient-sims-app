@@ -204,8 +204,13 @@ describe('applyEdits and the fallback target', () => {
       simStateCache: cache,
     } as unknown as ApiContext;
     const diagnosed: string[] = [];
-    const rowMemory = {
+    const procedures = {
       diagnose: (simId: string, key: string, text: string) => diagnosed.push(`${key}: ${text}`),
+      onOutcome: () => undefined,
+      applyToRow: () => false,
+      bindStoryClick: () => undefined,
+    };
+    const rowMemory = {
       get: () => undefined,
       retiredFilter: (_simId: string, seeds: IntentionRow[]) => seeds,
       vocabularyView: () => emptyView(),
@@ -219,6 +224,7 @@ describe('applyEdits and the fallback target', () => {
     const intentions = new IntentionService(ctx, {
       intentionRepository: { getRows: () => undefined, saveRows: () => undefined } as never,
       rowMemory: rowMemory as never,
+      procedures: procedures as never,
     });
     const corinne = entry('100', 'Corinne Hart', {
       self: { goal_pool: [{ id: 'objective_Garden', source: 'aspiration', label: 'Plant', affordances: ['x'] }] },

@@ -539,6 +539,53 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       ALTER TABLE vocabulary_seen ADD COLUMN super_key TEXT;
       `);
     },
+    // Renovation R4: procedures (what clicked and ran for a row key, drafted by code from the
+    // game's own outcome, revised in place by the night call when it fails) and pitfalls (the
+    // lessons failures taught: the night call's diagnoses and its add_pitfall). Exact keys, no
+    // embeddings; scope is a sim id or '*' for everyone on the lot.
+    '029-procedures-pitfalls': (db: Database) => {
+      db.exec(`
+      CREATE TABLE procedures (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        scope                TEXT NOT NULL  ,
+        key                  TEXT NOT NULL  ,
+        zone                 TEXT     ,
+        target_kind          TEXT     ,
+        target_name          TEXT     ,
+        items                TEXT NOT NULL  ,
+        why                  TEXT     ,
+        uses                 INTEGER NOT NULL DEFAULT 0  ,
+        ran                  INTEGER NOT NULL DEFAULT 0  ,
+        failed               INTEGER NOT NULL DEFAULT 0  ,
+        fires_since_ran      INTEGER NOT NULL DEFAULT 0  ,
+        last_cause           TEXT     ,
+        last_structural      INTEGER NOT NULL DEFAULT 0  ,
+        last_failure         TEXT     ,
+        status               TEXT NOT NULL DEFAULT 'active'  ,
+        source               TEXT NOT NULL DEFAULT 'code'  ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        revisions            INTEGER NOT NULL DEFAULT 0  ,
+        revised_day          INTEGER     ,
+        UNIQUE ( scope, key )
+      );
+      CREATE INDEX procedures_key ON procedures ( key );
+      CREATE TABLE pitfalls (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        scope                TEXT NOT NULL  ,
+        about                TEXT NOT NULL  ,
+        text                 TEXT NOT NULL  ,
+        evidence             TEXT     ,
+        seen                 INTEGER NOT NULL DEFAULT 1  ,
+        status               TEXT NOT NULL DEFAULT 'active'  ,
+        source               TEXT NOT NULL  ,
+        zone                 TEXT     ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        UNIQUE ( scope, about )
+      );
+      `);
+    },
   }),
 );
 

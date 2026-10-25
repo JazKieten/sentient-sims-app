@@ -28,6 +28,8 @@ import { RowMemoryRepository } from '../db/RowMemoryRepository';
 import { RowMemoryService } from '../services/intentions/RowMemoryService';
 import { VocabularySampler } from '../services/intentions/VocabularySampler';
 import { BudgetGate } from '../services/intentions/BudgetGate';
+import { ProcedureRepository } from '../db/ProcedureRepository';
+import { ProcedureService } from '../services/intentions/ProcedureService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -43,6 +45,9 @@ export interface AutonomyServices {
   rowMemoryRepository: RowMemoryRepository;
   // Counters per row key across days, the decision log, the household log, the menus seen (R1)
   rowMemory: RowMemoryService;
+  // Procedures and pitfalls (R4, migration 029): what ran for a key, what failures taught
+  procedureRepository: ProcedureRepository;
+  procedures: ProcedureService;
   // The ordered row list per household Sim (autonomy part 5)
   intentions: IntentionService;
   // Once a day per Sim, the menus that matter (renovation R2)
@@ -81,6 +86,8 @@ function construct(ctx: ApiContext) {
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
   autonomy.rowMemoryRepository = new RowMemoryRepository(ctx.db);
   autonomy.rowMemory = new RowMemoryService(ctx, autonomy);
+  autonomy.procedureRepository = new ProcedureRepository(ctx.db);
+  autonomy.procedures = new ProcedureService(ctx, autonomy);
   autonomy.budgetGate = new BudgetGate();
   // The household's interactions the mod forwards (interactions/ss_household_log.py)
   autonomy.modQuery.onInteractionLog((event) => {
@@ -183,6 +190,10 @@ function routes(app: Express, ctx: ApiContext) {
   app.post('/cognition/debug/rows/fire', controller.debugFireRow);
   // The night call (part 6), forced now for one Sim
   app.post('/cognition/debug/night-call', controller.debugNightCall);
+  // Procedures and pitfalls (R4), and the live check's forced failure
+  app.get('/cognition/procedures', controller.getProcedures);
+  app.get('/cognition/procedures/:simId', controller.getProcedures);
+  app.post('/cognition/debug/procedure-fail', controller.debugProcedureFail);
 }
 
 export const autonomyTier: TierRegistration = {
@@ -205,6 +216,7 @@ export const autonomyTier: TierRegistration = {
     // Rows are per save, and so is their memory
     autonomyOf(ctx).intentions.onDatabaseLoaded();
     autonomyOf(ctx).rowMemory.onDatabaseLoaded();
+    autonomyOf(ctx).procedures.onDatabaseLoaded();
     autonomyOf(ctx).vocabularySampler.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {

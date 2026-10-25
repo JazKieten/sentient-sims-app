@@ -30,7 +30,7 @@ type Pending = {
 };
 
 export type NightCallDeps = Pick<AutonomyServices, 'intentions'> &
-  Partial<Pick<AutonomyServices, 'actionOutcomeRepository'>>;
+  Partial<Pick<AutonomyServices, 'actionOutcomeRepository' | 'procedures'>>;
 
 export class NightCallService {
   private readonly ctx: ApiContext;
@@ -146,6 +146,15 @@ export class NightCallService {
     }
   }
 
+  private lessonsOf(simId: string, day: number) {
+    try {
+      return this.deps.procedures?.nightLessons(simId, day);
+    } catch (error) {
+      log.debug(`[Night] lessons unavailable for sim ${simId}: ${String(error)}`);
+      return undefined;
+    }
+  }
+
   private textFor(item: Pending): { text: string; rows: number; memories: number } {
     const memories = this.memoriesOf(item.simId, item.endingDay);
     const todayRows = this.deps.intentions.rowsFor(item.simId);
@@ -162,6 +171,7 @@ export class NightCallService {
       outcomes: this.outcomesOf(item.simId),
       stats: this.deps.intentions.statsFor(item.simId),
       vocabulary: this.deps.intentions.vocabularySeen(item.simId, item.endingDay),
+      lessons: this.lessonsOf(item.simId, item.newDay),
     });
     return { text, rows: todayRows.length, memories: memories.length };
   }

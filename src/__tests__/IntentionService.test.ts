@@ -419,7 +419,9 @@ describe('IntentionService: the night call (part 6)', () => {
       rewrite: [{ row_id: want.id, say: 'I miss talking to Alex.', rank: 0 }],
       add: [{ why: 'I want to finish my novel', say: 'One more chapter, then bed.' }],
     });
-    expect(result.changed).toBe("Jonah's list: dropped 1, rewrote 1, added 1 story row (0 with a click), 0 diagnoses");
+    expect(result.changed).toBe(
+      "Jonah's list: dropped 1, rewrote 1, added 1 story row (0 with a click), 0 diagnoses, 0 procedures revised, 0 pitfalls",
+    );
     expect(service.editsApplied('100')).toBe(1);
     const rows = service.rowsFor('100');
     expect(rows.map((row) => row.source)).toEqual(['want', 'bills', 'story', 'aspiration']);

@@ -17,6 +17,8 @@ export type {
   IntentionDiagnosis,
   IntentionEdits,
   IntentionEditSlot,
+  IntentionPitfallAdd,
+  IntentionProcedureRevision,
   IntentionRewrite,
   IntentionStoryAdd,
 } from '../tiers/types';
@@ -138,8 +140,10 @@ export type IntentionRow = {
   // Consecutive initiation-set failures (R2): counted at most once per game hour; at
   // MAX_ABSENT the row expires
   absent?: { count: number; lastAt: number; cause: string };
-  // The night call's one-line reading of why this key died (R3; R4 reads it)
+  // The night call's one-line reading of why this key died (R3; R4 keeps it as a pitfall)
   diagnosis?: string;
+  // A story row's aim as the night call keyed it (R4): its procedure is kept under this key
+  procedureKey?: string;
 };
 
 export type RowClockContext = {

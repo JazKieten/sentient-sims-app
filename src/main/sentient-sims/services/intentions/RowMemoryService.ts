@@ -123,9 +123,6 @@ export class RowMemoryService {
 
   private readonly daySkips = new Map<string, { notOnMenu: number; noTarget: number }>();
 
-  // `${simId}|${seedKey}` -> the night call's last diagnosis of why that key died (R3, for R4)
-  private readonly diagnoses = new Map<string, string>();
-
   private prunedDay: number | undefined;
 
   constructor(ctx: ApiContext, deps: RowMemoryDeps) {
@@ -625,14 +622,7 @@ export class RowMemoryService {
     return view;
   }
 
-  // The night call's reading of why a key died (R3; kept in memory, R4 gives it a table)
-  diagnose(simId: string, seedKey: string, text: string) {
-    this.diagnoses.set(`${simId}|${seedKey}`, text);
-  }
-
-  diagnosisFor(simId: string, seedKey: string): string | undefined {
-    return this.diagnoses.get(`${simId}|${seedKey}`);
-  }
+  // The night call's diagnoses live in R4's pitfalls table (ProcedureService.diagnose)
 
   // Every item a menu offered the Sim on a day, every zone (the night text's clickable lists)
   vocabularySeen(simId: string, day: number): VocabularySeenEntry[] {

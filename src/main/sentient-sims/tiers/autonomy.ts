@@ -30,6 +30,8 @@ import { VocabularySampler } from '../services/intentions/VocabularySampler';
 import { BudgetGate } from '../services/intentions/BudgetGate';
 import { ProcedureRepository } from '../db/ProcedureRepository';
 import { ProcedureService } from '../services/intentions/ProcedureService';
+import { ExperienceRepository } from '../db/ExperienceRepository';
+import { ExperienceService } from '../services/intentions/ExperienceService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
@@ -48,6 +50,9 @@ export interface AutonomyServices {
   // Procedures and pitfalls (R4, migration 029): what ran for a key, what failures taught
   procedureRepository: ProcedureRepository;
   procedures: ProcedureService;
+  // The private view's experiences (R5a, migration 030), ranked for the night call
+  experienceRepository: ExperienceRepository;
+  experiences: ExperienceService;
   // The ordered row list per household Sim (autonomy part 5)
   intentions: IntentionService;
   // Once a day per Sim, the menus that matter (renovation R2)
@@ -88,6 +93,8 @@ function construct(ctx: ApiContext) {
   autonomy.rowMemory = new RowMemoryService(ctx, autonomy);
   autonomy.procedureRepository = new ProcedureRepository(ctx.db);
   autonomy.procedures = new ProcedureService(ctx, autonomy);
+  autonomy.experienceRepository = new ExperienceRepository(ctx.db);
+  autonomy.experiences = new ExperienceService(ctx, autonomy);
   autonomy.budgetGate = new BudgetGate();
   // The household's interactions the mod forwards (interactions/ss_household_log.py)
   autonomy.modQuery.onInteractionLog((event) => {
@@ -194,6 +201,8 @@ function routes(app: Express, ctx: ApiContext) {
   app.get('/cognition/procedures', controller.getProcedures);
   app.get('/cognition/procedures/:simId', controller.getProcedures);
   app.post('/cognition/debug/procedure-fail', controller.debugProcedureFail);
+  // The private view (R5a): a Sim's experiences and how the night would rank them now
+  app.get('/cognition/experiences/:simId', controller.getExperiences);
 }
 
 export const autonomyTier: TierRegistration = {
@@ -217,6 +226,7 @@ export const autonomyTier: TierRegistration = {
     autonomyOf(ctx).intentions.onDatabaseLoaded();
     autonomyOf(ctx).rowMemory.onDatabaseLoaded();
     autonomyOf(ctx).procedures.onDatabaseLoaded();
+    autonomyOf(ctx).experiences.onDatabaseLoaded();
     autonomyOf(ctx).vocabularySampler.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {

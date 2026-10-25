@@ -586,6 +586,37 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       );
       `);
     },
+    // Renovation R5a: the private view's experiences. One row per thing a household Sim did, did
+    // with someone, or had change in the game's record, built by code at night from
+    // interaction_log, the memories and the game facts (sim_fact, source 'game'), with importance
+    // from game signals (never a model). The night call reads them ranked the Generative Agents way
+    // (recency since last access, importance, relevance).
+    '030-experience': (db: Database) => {
+      db.exec(`
+      CREATE TABLE experience (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        holder               TEXT NOT NULL  ,
+        day                  INTEGER NOT NULL  ,
+        minute               INTEGER     ,
+        kind                 TEXT NOT NULL  ,
+        participants         TEXT     ,
+        verb                 TEXT     ,
+        verb_family          TEXT     ,
+        target               TEXT     ,
+        zone                 TEXT     ,
+        outcome              TEXT     ,
+        finishing            TEXT     ,
+        importance           REAL NOT NULL  ,
+        last_access          INTEGER     ,
+        source               TEXT NOT NULL  ,
+        source_id            TEXT NOT NULL  ,
+        scene_id             TEXT     ,
+        text                 TEXT     ,
+        UNIQUE ( holder, source, source_id )
+      );
+      CREATE INDEX experience_holder_day ON experience ( holder, day );
+      `);
+    },
   }),
 );
 

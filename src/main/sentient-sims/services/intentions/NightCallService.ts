@@ -30,7 +30,7 @@ type Pending = {
 };
 
 export type NightCallDeps = Pick<AutonomyServices, 'intentions'> &
-  Partial<Pick<AutonomyServices, 'actionOutcomeRepository' | 'procedures'>>;
+  Partial<Pick<AutonomyServices, 'actionOutcomeRepository' | 'procedures' | 'experiences'>>;
 
 export class NightCallService {
   private readonly ctx: ApiContext;
@@ -155,9 +155,27 @@ export class NightCallService {
     }
   }
 
-  private textFor(item: Pending): { text: string; rows: number; memories: number } {
-    const memories = this.memoriesOf(item.simId, item.endingDay);
+  // R5a: the game's record of what changed and the ranked experiences, built and read at night
+  private experiencesOf(item: Pending, todayRows: IntentionRow[]) {
+    if (!this.deps.experiences) {
+      return undefined;
+    }
+    try {
+      if (!this.ctx.db.isLoaded()) {
+        return undefined;
+      }
+      return this.deps.experiences.nightView(item.simId, item.endingDay, item.newDay, todayRows);
+    } catch (error) {
+      log.debug(`[Night] experiences unavailable for sim ${item.simId}: ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  private textFor(item: Pending): { text: string; rows: number; memories: number; experiences?: number } {
     const todayRows = this.deps.intentions.rowsFor(item.simId);
+    const experiences = this.experiencesOf(item, todayRows);
+    // The memories are read only when there is no private view (a core-less test, no save)
+    const memories = experiences ? [] : this.memoriesOf(item.simId, item.endingDay);
     const text = buildNightText({
       simId: item.simId,
       simName: this.simName(item.simId),
@@ -172,8 +190,9 @@ export class NightCallService {
       stats: this.deps.intentions.statsFor(item.simId),
       vocabulary: this.deps.intentions.vocabularySeen(item.simId, item.endingDay),
       lessons: this.lessonsOf(item.simId, item.newDay),
+      experiences: experiences ? { changes: experiences.changes, lived: experiences.lived } : undefined,
     });
-    return { text, rows: todayRows.length, memories: memories.length };
+    return { text, rows: todayRows.length, memories: memories.length, experiences: experiences?.count };
   }
 
   private async run(item: Pending): Promise<void> {
@@ -181,10 +200,11 @@ export class NightCallService {
     this.running = item.simId;
     this.done.add(NightCallService.key(item.simId, item.newDay));
     try {
-      const { text, rows, memories } = this.textFor(item);
+      const { text, rows, memories, experiences } = this.textFor(item);
+      const read = experiences !== undefined ? `${experiences} experiences` : `${memories} memories`;
       log.info(
         `[Night] ${name} call starts (day ${item.endingDay} -> ${item.newDay}, ${item.endingRows.length} rows yesterday, ` +
-          `${rows} today, ${memories} memories, ${text.length} chars)`,
+          `${rows} today, ${read}, ${text.length} chars)`,
       );
       const before = this.deps.intentions.editsApplied(item.simId);
       const result = await this.ctx.plum.runTurn(text, { night: true });

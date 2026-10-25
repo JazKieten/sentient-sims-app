@@ -22,6 +22,16 @@ export type DossierRelationship = {
   friendship?: number;
   romance?: number;
   bits?: string[];
+  // What this Sim KNOWS about the other one (the game's SimKnowledge, renovation R5a): the traits
+  // it has learned, the career and major, the secrets it found, whether it knows they are taken.
+  // Names are the game's tuning names, as the dossier's own traits and careers.
+  knowledge?: {
+    traits?: string[];
+    careers?: string[];
+    major?: string;
+    secrets?: string[];
+    relationship_status?: boolean;
+  };
 };
 
 export type SimDossier = {

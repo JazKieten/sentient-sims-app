@@ -142,6 +142,7 @@ export type FireOutcome = { outcome: string; ran?: boolean; finishing?: string; 
 
 // One household interaction as the mod forwarded it (interactions/ss_household_log.py)
 export type InteractionLogEntry = {
+  id?: number;
   at: string;
   simId: string;
   interactionId?: string;
@@ -355,6 +356,53 @@ export class RowMemoryRepository extends Repository {
       out[row.origin ?? 'unknown'] = row.total;
     });
     return out;
+  }
+
+  // One Sim's interactions on a day as the actor, or (target) the ones aimed at them (R5a)
+  interactionsFor(simId: string, day: number, as: 'actor' | 'target' = 'actor'): InteractionLogEntry[] {
+    const column = as === 'actor' ? 'sim_id' : 'target_id';
+    const rows = this.dbService
+      .getDb()
+      .prepare(`SELECT * FROM interaction_log WHERE ${column} = ? AND day = ? ORDER BY id ASC`)
+      .all([simId, day]) as {
+      id: number;
+      at: string;
+      sim_id: string;
+      interaction_id: string | null;
+      name: string | null;
+      super_name: string | null;
+      is_super: number | null;
+      target_kind: string | null;
+      target_id: string | null;
+      ran: number | null;
+      canceled: number | null;
+      user_canceled: number | null;
+      finishing: string | null;
+      origin: string | null;
+      day: number | null;
+      minute: number | null;
+      zone: string | null;
+    }[];
+    const flag = (value: number | null) => (value === null ? undefined : value === 1);
+    return rows.map((row) => ({
+      id: row.id,
+      at: row.at,
+      simId: row.sim_id,
+      interactionId: row.interaction_id ?? undefined,
+      name: row.name ?? undefined,
+      superName: row.super_name ?? undefined,
+      isSuper: flag(row.is_super),
+      targetKind: row.target_kind ?? undefined,
+      targetId: row.target_id ?? undefined,
+      ran: flag(row.ran),
+      canceled: flag(row.canceled),
+      userCanceled: flag(row.user_canceled),
+      finishing: row.finishing ?? undefined,
+      origin: row.origin ?? undefined,
+      day: row.day ?? undefined,
+      minute: row.minute ?? undefined,
+      zone: row.zone ?? undefined,
+    }));
   }
 
   pruneInteractions(beforeDay: number) {

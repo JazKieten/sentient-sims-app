@@ -331,6 +331,12 @@ export class CognitionController {
     res.json({ sim_id: simId, ...this.autonomy.procedures.view(simId) });
   };
 
+  // The private view (R5a): the Sim's experiences of the window and the night's ranking now
+  getExperiences = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId: string };
+    res.json(this.autonomy.experiences.view(simId, this.autonomy.intentions.rowsFor(simId)));
+  };
+
   // Dev seam (the R4 live check): one structural failure on a Sim's procedure, through the same
   // code an outcome takes, so the next night call is asked to revise it
   debugProcedureFail = (req: Request, res: Response) => {

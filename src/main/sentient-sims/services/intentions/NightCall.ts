@@ -42,6 +42,9 @@ export type NightCallInput = {
   vocabulary?: VocabularySeenEntry[];
   // What worked, what failed and what it taught (R4), rendered by ProcedureService
   lessons?: NightLessons;
+  // The private view (R5a), rendered by ExperienceService: the game's record of what changed
+  // yesterday, and the ranked experiences that replace the memories block
+  experiences?: { changes: string[]; lived: string[] };
 };
 
 // The heading a list is clicked by: 'self', 'phone', a Sim's name, or the object kind
@@ -334,9 +337,17 @@ export function buildNightText(input: NightCallInput): string {
   }
   const first = input.simName.trim().split(/\s+/)[0] || input.simName;
   lines.push(...lessonLines(input.lessons, first));
-  lines.push('', 'What happened yesterday (their own memories, oldest first):');
-  const memories = memoryLines(input.memories);
-  lines.push(...(memories.length > 0 ? memories : ['- (nothing remembered)']));
+  if (input.experiences) {
+    if (input.experiences.changes.length > 0) {
+      lines.push('', `What changed for ${first} yesterday (the game's own record):`, ...input.experiences.changes);
+    }
+    lines.push('', `What ${first} lived through (most recent, important and relevant to today first; oldest first):`);
+    lines.push(...(input.experiences.lived.length > 0 ? input.experiences.lived : ['- (nothing kept)']));
+  } else {
+    lines.push('', 'What happened yesterday (their own memories, oldest first):');
+    const memories = memoryLines(input.memories);
+    lines.push(...(memories.length > 0 ? memories : ['- (nothing remembered)']));
+  }
   const outcomes = outcomeLines(input.outcomes, input.endingDay);
   if (outcomes.length > 0) {
     lines.push('', "What the day loop's clicks came to:", ...outcomes);

@@ -151,7 +151,14 @@ function clickOnce(
   sim: SimStateEntry,
   rep: SimStateReport,
   requestId: string,
-  answer: { outcome: string; reason?: string; cause?: string; label?: string; ran?: boolean },
+  answer: {
+    outcome: string;
+    reason?: string;
+    cause?: string;
+    interaction_name?: string;
+    label?: string;
+    ran?: boolean;
+  },
 ) {
   const row = must(built.service.pick(sim, rep, { force: true }));
   built.service.markFired(row.id, '');
@@ -307,7 +314,12 @@ describe('ProcedureService with the intention list', () => {
     const rep = report([seth]);
     built.cache.ingest(rep);
     built.service.sync(seth, rep);
-    clickOnce(built, seth, rep, 'req-1', { outcome: 'success', ran: true, label: 'Plant Seeds' });
+    clickOnce(built, seth, rep, 'req-1', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
     const procedure = must(built.procedures.procedureFor('100', 'objective_Garden@1'));
     expect(procedure).toMatchObject({ source: 'code', ran: 1, status: 'active', targetKind: 'find' });
     expect(procedure.items[0]).toBe('Plant Seeds');
@@ -325,7 +337,12 @@ describe('ProcedureService with the intention list', () => {
     const rep = report([seth]);
     built.cache.ingest(rep);
     built.service.sync(seth, rep);
-    clickOnce(built, seth, rep, 'req-1', { outcome: 'success', ran: true, label: 'Plant Seeds' });
+    clickOnce(built, seth, rep, 'req-1', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
     const tomorrow = report([seth], 41);
     built.cache.ingest(tomorrow);
     built.service.sync(seth, tomorrow);
@@ -348,7 +365,12 @@ describe('ProcedureService with the intention list', () => {
     const rep = report([seth]);
     built.cache.ingest(rep);
     built.service.sync(seth, rep);
-    clickOnce(built, seth, rep, 'req-1', { outcome: 'success', ran: true, label: 'Plant Seeds' });
+    clickOnce(built, seth, rep, 'req-1', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
     built.procedures.recordFailureNow('100', 'objective_Garden@1');
     const result = built.service.applyEdits('100', {
       drop: [],
@@ -392,7 +414,12 @@ describe('ProcedureService with the intention list', () => {
     built.cache.ingest(rep);
     built.service.sync(seth, rep);
     built.procedures.diagnose('100', 'objective_Garden', 'No planter.');
-    clickOnce(built, seth, rep, 'req-1', { outcome: 'success', ran: true, label: 'Plant Seeds' });
+    clickOnce(built, seth, rep, 'req-1', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
     expect(built.fake.pitfalls.get('100|objective_Garden')?.status).toBe('stale');
   });
 
@@ -404,8 +431,18 @@ describe('ProcedureService with the intention list', () => {
     built.cache.ingest(rep);
     built.service.sync(seth, rep);
     built.service.sync(arlene, rep);
-    clickOnce(built, seth, rep, 'req-1', { outcome: 'success', ran: true, label: 'Plant Seeds' });
-    clickOnce(built, arlene, rep, 'req-2', { outcome: 'success', ran: true, label: 'Plant Seeds' });
+    clickOnce(built, seth, rep, 'req-1', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
+    clickOnce(built, arlene, rep, 'req-2', {
+      outcome: 'success',
+      ran: true,
+      label: 'Plant something',
+      interaction_name: 'Plant Seeds',
+    });
     expect(built.procedures.procedureFor(SHARED_SCOPE, 'objective_Garden@1')).toMatchObject({
       items: ['Plant Seeds', 'super_PottedPlants_Gardening_Plant_Cont', 'gardening_Plant'],
     });

@@ -35,7 +35,14 @@ import {
 export type ProcedureDeps = { procedureRepository?: ProcedureRepository; rowMemory?: RowMemoryService };
 
 // What came back for a row's click (InteractionOutcomeEvent's fields that matter here)
-export type ProcedureOutcome = { outcome: string; cause?: string; reason?: string; ran?: boolean; label?: string };
+export type ProcedureOutcome = {
+  outcome: string;
+  cause?: string;
+  reason?: string;
+  ran?: boolean;
+  // The interaction that ran (its tuning name; find_item takes keys as well as labels)
+  interaction?: string;
+};
 
 const PITFALL_TEXT_CHARS = 200;
 const EVIDENCE_FIRES = 3;
@@ -154,7 +161,7 @@ export class ProcedureService {
     const name = this.simName(simId);
     if (facts.outcome === 'success' && facts.ran !== false) {
       const existing = this.procedureFor(simId, key);
-      const clicked = facts.label?.trim() || undefined;
+      const clicked = facts.interaction?.trim() || undefined;
       const next = draftFrom(existing, { scope: simId, key, zone: this.zone(), row, clicked, day });
       this.saveProcedure(next);
       if (!existing || existing.status !== 'active') {

@@ -171,7 +171,8 @@ export function fold(experiences: Experience[]): Folded[] {
       out.push({ ...experience, count: 1, members: [experience] });
       return;
     }
-    const key = `${experience.day}|${experience.kind}|${experience.verb ?? ''}|${experience.target ?? ''}`;
+    // By the Sims involved, not the object: five puddles mopped are one chore (live 10-24)
+    const key = `${experience.day}|${experience.kind}|${experience.verb ?? ''}|${experience.participants.join(',')}`;
     const group = groups.get(key);
     if (!group) {
       const created: Folded = { ...experience, count: 1, members: [experience] };

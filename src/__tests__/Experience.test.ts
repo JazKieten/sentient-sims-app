@@ -73,7 +73,8 @@ describe('Experience (pure)', () => {
   });
 
   it('folds a repeated interaction on one day and ranks by the three terms', () => {
-    const sits = [1, 2, 3].map((index) => experience({ verb: 'sit', minute: 600 + index }));
+    // three sits on three different chairs are one experience, counted
+    const sits = [1, 2, 3].map((index) => experience({ verb: 'sit', minute: 600 + index, target: `chair${index}` }));
     const folded = fold([...sits, experience({ source: 'memory', verb: 'sit' })]);
     expect(folded.map((item) => item.count)).toEqual([3, 1]);
     const bit = experience({

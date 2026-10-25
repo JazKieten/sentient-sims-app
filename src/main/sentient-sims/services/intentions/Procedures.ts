@@ -172,7 +172,11 @@ export function draftFrom(
   const base = existing ? { ...existing } : emptyProcedure(args.scope, args.key);
   const candidates = args.row.what.kind === 'pie' ? args.row.what.candidates : [];
   const rest = existing && existing.items.length > 0 ? existing.items : candidates;
-  base.items = dedupe([...(args.clicked ? [args.clicked] : []), ...rest]).slice(0, MAX_PROCEDURE_ITEMS);
+  // The row's own label is what it meant, never an item to click
+  const meant = args.row.what.kind === 'pie' ? args.row.what.label.trim().toLowerCase() : undefined;
+  base.items = dedupe([...(args.clicked ? [args.clicked] : []), ...rest])
+    .filter((item) => item.trim().toLowerCase() !== meant)
+    .slice(0, MAX_PROCEDURE_ITEMS);
   if (!existing || existing.source === 'code') {
     const target = targetOf(args.row);
     base.targetKind = target.kind;

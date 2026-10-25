@@ -850,7 +850,8 @@ export class IntentionService {
         cause: event.cause,
         reason: event.reason,
         ran: event.ran ?? undefined,
-        label: event.label,
+        // What actually ran (the outcome's `label` echoes the row's own label, live 10-24)
+        interaction: event.interaction_name,
       });
     } catch (error) {
       log.debug(`[Rows] procedure outcome not kept for ${item.id}: ${String(error)}`);

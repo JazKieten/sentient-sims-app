@@ -1,6 +1,6 @@
 // The game ending a conversation the app is airing: the sims in it walked apart, or one of
-// them left the lot. See the mod's scene/ss_scene_watch.py. Core since 2026-09-28 (it was
-// the stream tier's onModMessage): the mod's scene watch ships in every build.
+// them left the lot. See the mod's scene/ss_scene_watch.py. Core, since the mod's scene
+// watch ships in every build.
 import log from 'electron-log';
 import type { ScenePlaybackRegistry } from '../services/ScenePlaybackRegistry';
 import type { SceneFreshness } from '../services/SceneFreshness';

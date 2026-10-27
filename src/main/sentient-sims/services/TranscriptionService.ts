@@ -12,6 +12,7 @@ import { buildTranscriptionPrompt, keyterms, NameGroups, nameTerms, SIMS_WORLDS 
 import { isPromptEcho } from '../util/nameCorrection';
 import { elevenLabsHealthCheck, elevenLabsTranscribe } from '../clients/ElevenLabsSTTRequest';
 import { getRandomItem } from '../util/getRandomItem';
+import { plainKeyTestError } from '../util/providerErrorWords';
 
 export class TranscriptionError extends Error {
   constructor(message: string) {
@@ -318,7 +319,7 @@ export class TranscriptionService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.error('Error testing transcription endpoint:', error);
-      return { error: `not working, ${message}` };
+      return { error: plainKeyTestError(message) };
     }
   }
 }

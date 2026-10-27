@@ -42,6 +42,9 @@ export enum ModWebsocketMessageType {
   PLUM_TOOL_CALL = 'plum_tool_call',
   // Plum: a row, status, history or error for the Plum tab (overlay/overlay_plum.py)
   PLUM_EVENT = 'plum_event',
+  // What the in-game status tab shows about the app: voices, voice input and the AI in
+  // use; sent on every mod connect and when one of them changes
+  APP_STATUS = 'app_status',
 }
 
 export type ModWebsocketMessage = {
@@ -202,8 +205,9 @@ export type ModPlayerVoiceStatus = ModWebsocketMessage & {
   detail?: string;
   // V-3: the persona label the player speaks as (byte-identical to the reply's speaker)
   speaker?: string;
-  // V-8: 'command' = the utterance is an order the sim will act on, not talk
-  mode?: 'chat' | 'command';
+  // V-8: 'command' = the utterance is an order the sim will act on, not talk;
+  // 'dictate' = the memories window's talk button, whose transcript comes back as a draft
+  mode?: 'chat' | 'command' | 'dictate';
 };
 
 // Chord strings as the settings spell them ("Ctrl+Space", "F13"); '' clears a binding
@@ -226,11 +230,20 @@ export type ModPlumEvent = ModWebsocketMessage & {
   [field: string]: unknown;
 };
 
+export type ModAppStatus = ModWebsocketMessage & {
+  tts_enabled: boolean;
+  tts_provider: string;
+  voice_input_enabled: boolean;
+  voice_input_mode: string;
+  ai_provider: string;
+};
+
 export type WebsocketNotification =
   | ModWebsocketMessage
   | ModPlumToolCall
   | ModPlumEvent
   | ModVoiceHotkeys
+  | ModAppStatus
   | ModWebsocketNotification
   | ModWebsocketNotificationMemoryEdited
   | ModWebsocketNotificationMemoryDeleted

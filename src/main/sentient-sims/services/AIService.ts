@@ -421,6 +421,8 @@ type RequestDeadline = {
 // signal, and the time the game gives up on the request it serves
 export type OneShotOptions = {
   stageId?: StageId;
+  // Usage purpose when the action type does not say enough (sim vs location description)
+  purpose?: string;
   signal?: AbortSignal;
   deadlineAt?: number;
   images?: MessageImage[];
@@ -573,6 +575,7 @@ export class AIService {
         ...promptRequest,
         model: promptRequest.model ?? providerConfig.model,
         apiType: promptRequest.apiType ?? providerConfig.apiType,
+        purpose: promptRequest.purpose ?? AIActionType.GENERATE,
       }),
     );
   }
@@ -988,7 +991,17 @@ ${factsBlock}
         play = ready;
       },
     };
-    const result = await this.runDirectedGeneration(primaryEvent, { action: options.preAction }, playbackOptions);
+    const result = this.ctx.settings.directedScenesEnabled
+      ? await this.runDirectedGeneration(primaryEvent, { action: options.preAction }, playbackOptions)
+      : await this.runGeneration(
+          primaryEvent,
+          {
+            preAction: options.preAction,
+            prePreAction: 'At {location} ({location_type}), {postures},',
+            purpose: 'interaction_prefetch',
+          },
+          playbackOptions,
+        );
     return {
       result,
       play: once((claimedAt?: number) => play(claimedAt)),
@@ -1295,6 +1308,7 @@ ${factsBlock}
     openAIRequest.apiType = providerConfig.apiType;
 
     const generationAction = actionTypeForEvent(event.event_type);
+    openAIRequest.purpose = options.purpose ?? generationAction;
     const response = await this.ctx.aiExchangeLog.runLabeled('Scene Generation', generationAction, () =>
       this.ctx.getGenerationService(providerConfig.apiType).sentientSimsGenerate(openAIRequest),
     );
@@ -1601,6 +1615,7 @@ ${factsBlock}
     // An explicit model (scenario tester's per-stage picks) wins over the action's provider config
     openAIRequest.model = resolvedModel;
     openAIRequest.apiType = providerConfig.apiType;
+    openAIRequest.purpose = options?.purpose ?? actionType;
     const userMessage = openAIRequest.messages.findLast((message) => message.role === 'user');
     if (userMessage && options?.images?.length) {
       userMessage.images = options.images;
@@ -1863,6 +1878,9 @@ ${factsBlock}
         directorAction =
           `${liarAction}\n\n${target} does not know it is a lie. Only ${liar}'s private briefing may say so; ` +
           `the shared briefing and ${target}'s briefing describe the beat as ${target} experiences it: "${deception.targetView}"`;
+      }
+      if (sceneAction && intimateAct) {
+        sceneAction = `${sceneAction} ${INTIMATE_SCENE_FRAMING}`;
       }
     }
 
@@ -2981,6 +2999,7 @@ ${factsBlock}
     const openAIRequest = openAIRequestBuilder.buildOneShotOpenAIRequest(oneShotRequest);
     openAIRequest.model = providerConfig.model;
     openAIRequest.apiType = apiType;
+    openAIRequest.purpose = actionType === AIActionType.BUFF ? 'buff_classification' : actionType;
 
     const response = await this.ctx.aiExchangeLog.runLabeled(
       `Classification: ${classificationRequest.name}`,
@@ -3076,6 +3095,7 @@ Write me a buff description based on the conversation so that ${buffRequest.name
     const openAIRequest = openAIRequestBuilder.buildOneShotOpenAIRequest(oneShotRequest);
     openAIRequest.model = providerConfig.model;
     openAIRequest.apiType = apiType;
+    openAIRequest.purpose = 'buff_description';
 
     const response = await this.ctx.aiExchangeLog.runLabeled(
       `Buff Description: ${buffRequest.name}`,

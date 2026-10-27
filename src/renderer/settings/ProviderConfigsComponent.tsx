@@ -97,9 +97,9 @@ const OVERRIDE_ACTION_TYPES = AllAIActionTypes.filter(
 );
 const CAPABILITIES: Record<ProviderCapability, CapabilityDefinition> = {
   text: {
-    title: 'Text Generation',
+    title: 'AI Model',
     description:
-      'Configure multiple AI providers and models. The default configuration handles every AI request unless an action-specific override is set below.',
+      'The AI that writes what your Sims say and do. The default handles everything unless an override below picks another for one kind of request.',
     configsKey: SettingsEnum.AI_PROVIDER_CONFIGS,
     defaultIdKey: SettingsEnum.DEFAULT_AI_PROVIDER_CONFIG_ID,
     apiTypes: generationApiTypes,
@@ -685,7 +685,9 @@ export function ProviderConfigsComponent({
           </AccordionSummary>
           <AccordionDetails>
             <FormHelperText sx={{ marginBottom: 1 }}>
-              Route specific AI actions to a different provider configuration than the default.
+              Route specific AI actions to a different provider configuration than the default. A Wicked Whims override
+              runs every stage of those scenes (Director, Actor, Reviewer and Scores), ahead of any stage override
+              below.
             </FormHelperText>
             {OVERRIDE_ACTION_TYPES.map((action) => {
               const overrideId = overrides[action];

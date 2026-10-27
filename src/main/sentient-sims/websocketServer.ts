@@ -1,8 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import log from 'electron-log';
-import { notifyClockState } from './util/notifyRenderer';
-import { parseModMessage } from './util/modWebsocketMessage';
 import { formatLog } from './util/format';
+import { notifyClockState, sendAppStatusToMod } from './util/notifyRenderer';
+import { parseModMessage, rawDataToString } from './util/modWebsocketMessage';
 import { mirrorModLog } from './util/modLogMirror';
 import { onSceneControl } from './util/sceneControl';
 import { LogLevel } from './models/LogLevel';
@@ -84,6 +84,7 @@ export const startWebSocketServer = (ctx: ApiContext) => {
     lastModInfo = undefined;
     // The overlay starts with no voice chords bound
     voiceKeySink?.onModConnected();
+    sendAppStatusToMod(ctx.settings);
     notifyWebsocketStatus({
       type: 'mod',
       status: true,

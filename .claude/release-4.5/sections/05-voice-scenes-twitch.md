@@ -66,7 +66,7 @@ IPC: main→renderer `on-voice` (lines, {paced, preamble, pacedText, priority, s
 | Twitch IRC (anon) + OAuth device flow + Helix | main Twitch* | `twitchClientId`, `twitchAuth` tokens | STREAM |
 | Local Kokoro (HuggingFace voice .bin, WebGPU) | renderer kokoro/voices.ts getVoiceData | none | dead |
 
-Settings read: CORE `ttsEnabled`, `ttsApiType`, `ttsVolume`, `directedScenesEnabled`, `sceneMaxRounds`(3), `playbackFollowsGameClock`(true), `playerVoicePersona`('voice')/`Bio`/`Name`, `playerReplyMaxTokens`(400), `playerConversationIdleMinutes`(5), `voiceInput*` (Enabled false, Endpoint, Key, Model, Hotkey Ctrl+Space, HotkeyMode hold, Language, DeviceId). AUTONOMY `voiceCommandHotkey`(''), `askActionsEnabled`(true), `conversationActionsEnabled`(true), `conversationActionScoreThreshold`. STREAM `twitch*` (13 keys incl. `twitchSpeakQuestions`, `twitchChatVoiceId`, `twitchSimAliases`).
+Settings read: CORE `ttsEnabled`, `ttsApiType`, `ttsVolume`, `directedScenesEnabled`, `sceneMaxRounds`(3), `playbackFollowsGameClock`(true), `playerVoicePersona`('voice')/`Bio`/`Name`, `playerReplyMaxTokens`(400), `playerConversationIdleMinutes`(5), `voiceInput*` (Enabled false, Endpoint, Key, Model, Hotkey Ctrl+S (Mac Alt+V), HotkeyMode hold, Language, DeviceId). AUTONOMY `voiceCommandHotkey`(''), `askActionsEnabled`(true), `conversationActionsEnabled`(true), `conversationActionScoreThreshold`. STREAM `twitch*` (13 keys incl. `twitchSpeakQuestions`, `twitchChatVoiceId`, `twitchSimAliases`).
 
 ## 4. (1) Scene playback timeline
 

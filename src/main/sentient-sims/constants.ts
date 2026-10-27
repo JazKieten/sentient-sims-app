@@ -267,8 +267,11 @@ export const geminiDefaultTranscriptionModel = geminiTranscriptionModels[0];
 // ElevenLabs Scribe, the speech-to-text behind the Voices key; takes the names in play as keyterms.
 export const elevenLabsTranscriptionModels = ['scribe_v2', 'scribe_v1'];
 export const elevenLabsDefaultTranscriptionModel = elevenLabsTranscriptionModels[0];
-export const defaultVoiceInputHotkey = 'Ctrl+Space';
-// macOS takes Ctrl+Space to switch input sources before the game ever sees it
+// No Space in a voice chord: The Sims 4 binds Space, and the overlay only observes keys
+export const defaultVoiceInputHotkey = 'Ctrl+S';
+// The old Windows default; runMigrations moves a store still holding it to the current one
+export const formerDefaultVoiceInputHotkey = 'Ctrl+Space';
+// macOS takes Ctrl+Space to switch input sources, and leaves Opt+V to the game
 export const defaultVoiceInputHotkeyMac = 'Alt+V';
 export function defaultVoiceInputHotkeyFor(isMac: boolean): string {
   return isMac ? defaultVoiceInputHotkeyMac : defaultVoiceInputHotkey;

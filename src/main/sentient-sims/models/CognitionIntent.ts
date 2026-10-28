@@ -5,6 +5,7 @@
 // POST, and that rule lives in CognitionService's state machine, not in any prompt.
 
 import { SimStateEntry, VenueEntry } from './SimStateReport';
+import type { PieIntent, VocabularyRow } from './ActionIntent';
 import {
   ROMANCE_ACTIONS,
   SOLO_TRAVEL_ACTIONS,
@@ -39,7 +40,107 @@ export type CognitionIntent = {
   // the model at choice time; default 1, cap 3; never spent on ineligible/structural
   // causes and always behind the same suppression backoff as any other close.
   retries?: number;
+  // Pie vocabulary (autonomy part 2): the row id the model answered with, the option it
+  // chose from a collapsed row, and the resolved click the mod runs
+  row?: string;
+  option?: string;
+  pie?: PieIntent;
 };
+
+// Part 4 (10-19 review): the model answers "null" / "none" for an absent target and the
+// string used to reach the mod as a parse error. Any such word, or an empty string, is no id.
+export function cleanId(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed === '' || ['null', 'none', 'undefined'].includes(trimmed.toLowerCase())) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+// 'r12', 'R12', '12' all name row r12; 'w1' / 'W1' the first whitelist row
+function findRow(rows: VocabularyRow[], wanted: string): VocabularyRow | undefined {
+  const text = wanted.trim().toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  const exact = rows.find((row) => row.id.toLowerCase() === text);
+  if (exact) {
+    return exact;
+  }
+  if (/^\d+$/.test(text)) {
+    return rows.find((row) => row.id.toLowerCase() === `r${text}`);
+  }
+  return undefined;
+}
+
+// A pie-vocabulary answer: the row must be offered (present, not greyed, not a picker), an
+// option must be one the row lists, and the result is the click the mod runs. A synthetic
+// whitelist row resolves through the whitelist path (go_out keeps its destination).
+function validateRowIntent(
+  candidate: CognitionIntent,
+  rows: VocabularyRow[],
+  entry: SimStateEntry,
+  lotActionKeys: string[] | undefined,
+  venues: VenueEntry[] | undefined,
+  thought: string | undefined,
+): ValidatedIntent {
+  const row = findRow(rows, String(candidate.row));
+  if (!row) {
+    return { ok: false, reason: `row '${String(candidate.row)}' was not offered`, fallback: fallbackContinue(thought) };
+  }
+  if (row.greyed) {
+    return { ok: false, reason: `row ${row.id} (${row.label}) is greyed out`, fallback: fallbackContinue(thought) };
+  }
+  if (row.picker) {
+    return { ok: false, reason: `row ${row.id} (${row.label}) opens a picker`, fallback: fallbackContinue(thought) };
+  }
+  if (row.source === 'whitelist') {
+    return validateIntent(
+      { ...candidate, action: row.key, row: undefined, option: undefined },
+      entry,
+      lotActionKeys,
+      venues,
+    );
+  }
+  let option: string | undefined;
+  if (row.options && row.options.length > 0) {
+    const wanted = cleanId(candidate.option)?.toLowerCase();
+    option = row.options.find((candidateOption) => candidateOption.toLowerCase() === wanted);
+    if (!option) {
+      return {
+        ok: false,
+        reason: `row ${row.id} (${row.label}) needs one of its options`,
+        fallback: fallbackContinue(thought),
+      };
+    }
+  }
+  const pie: PieIntent = {
+    target_id: row.target_id || undefined,
+    target_kind: row.target_kind,
+    item: row.key,
+    label: option ?? row.label,
+    option,
+  };
+  return {
+    ok: true,
+    intent: {
+      kind: 'action',
+      action: row.key,
+      target_sim_id: row.target_kind === 'sim' ? row.target_id : undefined,
+      target_object_id: row.target_kind === 'object' || row.target_kind === 'inventory' ? row.target_id : undefined,
+      row: row.id,
+      option,
+      pie,
+      thought,
+      motivation: candidate.motivation,
+      urgency: candidate.urgency,
+      retries: candidate.retries,
+    },
+  };
+}
 
 // Social actions ride sim_Chat + a mixer; on strangers everything except 'chat' fails the
 // has_met relationship test, so target selection coerces accordingly (rule enforced in
@@ -212,11 +313,24 @@ export function validateIntent(
   entry: SimStateEntry,
   lotActionKeys?: string[],
   venues?: VenueEntry[],
+  // The pie vocabulary this tick offered; a candidate naming a `row` resolves against it
+  rows?: VocabularyRow[],
 ): ValidatedIntent {
   if (!candidate || typeof candidate !== 'object') {
     return { ok: false, reason: 'unparseable intent', fallback: fallbackContinue() };
   }
   const thought = typeof candidate.thought === 'string' ? candidate.thought.slice(0, 300) : undefined;
+  // "null" targets are no targets (part 4), before anything reads them
+  if (candidate.target_sim_id !== undefined || candidate.target_object_id !== undefined) {
+    candidate = {
+      ...candidate,
+      target_sim_id: cleanId(candidate.target_sim_id),
+      target_object_id: cleanId(candidate.target_object_id),
+    };
+  }
+  if (rows && candidate.row !== undefined && candidate.row.trim() !== '') {
+    return validateRowIntent(candidate, rows, entry, lotActionKeys, venues, thought);
+  }
 
   if (candidate.kind === 'continue' || candidate.kind === 'wait') {
     return { ok: true, intent: { ...candidate, thought } };

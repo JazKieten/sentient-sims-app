@@ -193,6 +193,29 @@ export function dossierToFacts(dossier: SimDossier, options: DossierToFactsOptio
     if (ex) {
       add(FactPredicate.EX_PARTNER, ex, edge.sim_id);
     }
+    // Renovation R5a: every interesting bit is a game fact of its own (a friendship bit that
+    // flips closes its row, Zep-style), and so is what this Sim knows about the other one
+    for (const bit of edge.bits ?? []) {
+      add(FactPredicate.REL_BIT, bit, edge.sim_id);
+    }
+    const knowledge = edge.knowledge;
+    if (knowledge) {
+      for (const trait of knowledge.traits ?? []) {
+        add(FactPredicate.KNOWS_TRAIT, trait, edge.sim_id);
+      }
+      for (const career of knowledge.careers ?? []) {
+        add(FactPredicate.KNOWS_CAREER, career, edge.sim_id);
+      }
+      if (knowledge.major) {
+        add(FactPredicate.KNOWS_MAJOR, knowledge.major, edge.sim_id);
+      }
+      for (const secret of knowledge.secrets ?? []) {
+        add(FactPredicate.KNOWS_SECRET, secret, edge.sim_id);
+      }
+      if (knowledge.relationship_status) {
+        add(FactPredicate.KNOWS_STATUS, 'yes', edge.sim_id);
+      }
+    }
   }
 
   // De-duplicate: family_bits and the id lists overlap by design, and a dossier can name

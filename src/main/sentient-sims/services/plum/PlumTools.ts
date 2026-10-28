@@ -22,7 +22,7 @@ export type AppTool = {
   // Offered only when the context has this tier slot (the scripted whisper tools need the
   // director, the chat poll the stream tier): PlumService filters by it when it builds the
   // catalogue
-  onlyWith?: 'director' | 'chatPoll';
+  onlyWith?: 'director' | 'chatPoll' | 'intentions';
 };
 
 export type CatalogueEntry = {

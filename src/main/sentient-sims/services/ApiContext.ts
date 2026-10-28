@@ -65,6 +65,7 @@ import { LogsService } from './LogsService';
 import { MemoryAnnotationService } from './MemoryAnnotationService';
 import { MemoryRetrievalService } from './MemoryRetrievalService';
 import { AIExchangeLogService } from './AIExchangeLogService';
+import { DecisionService } from './DecisionService';
 import { InteractionSemanticSearchService } from './InteractionSemanticSearchService';
 import { ModelSettingsService } from './ModelSettingsService';
 import { NovelAIService } from './NovelAIService';
@@ -294,6 +295,8 @@ export class ApiContext {
   private readonly _memoryAnnotationService: MemoryAnnotationService;
   private readonly _memoryRetrievalService: MemoryRetrievalService;
   private readonly _aiExchangeLogService: AIExchangeLogService;
+
+  private readonly _decisionService: DecisionService;
   private readonly _semanticMemoryService: SemanticMemoryService;
   private readonly _transcriptionService: TranscriptionService;
 
@@ -466,6 +469,7 @@ export class ApiContext {
     this._elevenLabsVoicesService = new ElevenLabsVoicesService(this);
     this._transcriptionService = new TranscriptionService(this);
     this._aiExchangeLogService = new AIExchangeLogService();
+    this._decisionService = new DecisionService(this);
     // Names come from the participant table rather than being passed around: the fact
     // store holds ids, and every rendering of a fact needs a name for them.
     this._semanticMemoryService = new SemanticMemoryService(this._simFactRepository, (simIds) => {
@@ -649,6 +653,11 @@ export class ApiContext {
 
   get aiExchangeLog(): AIExchangeLogService {
     return this._aiExchangeLogService;
+  }
+
+  // The Jev day: typed decisions on the OpenRouter Decisions API
+  get decisions(): DecisionService {
+    return this._decisionService;
   }
 
   get interactionSemanticSearch(): InteractionSemanticSearchService {

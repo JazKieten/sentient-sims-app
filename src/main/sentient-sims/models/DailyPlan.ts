@@ -1,4 +1,5 @@
 import { GoalPoolEntry } from './SimStateReport';
+import type { IntentionRow } from './IntentionRow';
 
 // How this plan came to be: the nightly diary call, the mid-day lazy fallback, or a
 // parse-failure placeholder written so the lazy path stops re-firing for the day.
@@ -22,6 +23,9 @@ export type DailyPlan = {
   loadout?: string[];
   source: DailyPlanSource;
   review?: DailyPlanGoalReview[];
+  // Autonomy part 5: the Sim's intention rows for the day, a VIEW filled by IntentionService
+  // for the planner prompt and the night call; savePlan never writes it (its own table)
+  rows?: IntentionRow[];
 };
 
 // A sim who goes to bed at 00:05 is ALREADY in the day they will wake into, so the
@@ -36,10 +40,7 @@ export const SMALL_HOURS_END_HOUR = 5;
 // Which day a sleep boundary plans for, and which day its review grades.
 // undefined = this sleep is a daytime nap: the sim wakes into a day that is already
 // planned and only half-lived, so there is nothing to plan and nothing to grade.
-export function sleepPlanDays(
-  endingDay: number,
-  hour?: number,
-): { targetDay: number; reviewDay: number } | undefined {
+export function sleepPlanDays(endingDay: number, hour?: number): { targetDay: number; reviewDay: number } | undefined {
   if (hour === undefined) {
     // Older mod sends no clock hour — keep the original behaviour rather than guess
     return { targetDay: endingDay + 1, reviewDay: endingDay };

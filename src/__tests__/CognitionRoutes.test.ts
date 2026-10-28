@@ -48,6 +48,46 @@ describe('cognition routes', () => {
     });
   });
 
+  it('the intention rows are inspectable and the debug fire answers without a report', async () => {
+    const list = await fetch(`${apiUrl}/cognition/rows/555`).then(
+      (response) => response.json() as Promise<Record<string, unknown>>,
+    );
+    expect(list).toEqual({ sim_id: '555', rows: [] });
+    const all = await fetch(`${apiUrl}/cognition/rows`).then(
+      (response) => response.json() as Promise<Record<string, unknown>>,
+    );
+    expect(all).toEqual({});
+    const missing = await fetch(`${apiUrl}/cognition/debug/rows/fire`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555' }),
+    });
+    expect(missing.status).toBe(400);
+    const fire = await fetch(`${apiUrl}/cognition/debug/rows/fire`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555', row_id: 'i000001' }),
+    });
+    expect(fire.status).toBe(409);
+    expect(await fire.json()).toMatchObject({ ok: false });
+  });
+
+  it('the debug night call needs a sim_id and answers 409 with no report', async () => {
+    const missing = await fetch(`${apiUrl}/cognition/debug/night-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(400);
+    const night = await fetch(`${apiUrl}/cognition/debug/night-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sim_id: '555' }),
+    });
+    expect(night.status).toBe(409);
+    expect(await night.json()).toEqual({ ok: false, error: 'no state report for sim 555' });
+  });
+
   it('debug enqueue dispatches an ENQUEUE_INTERACTION message and the outcome becomes a memory', async () => {
     const enqueue = await post('/cognition/debug/enqueue', {
       sim_id: '123',
@@ -102,6 +142,50 @@ describe('cognition routes', () => {
       outcome: 'failure',
     });
     expect(duplicate).toMatchObject({ ok: true, correlated: false });
+  });
+
+  it('a pie click is echoed to the mod and its outcome reads by the label', async () => {
+    createdMemories.length = 0;
+    sentToMod.length = 0;
+    const enqueue = await post('/cognition/debug/enqueue', {
+      sim_id: '123',
+      action: 'mixer_social_AskAboutDay',
+      target_sim_id: '456',
+      pie: { target_id: '456', target_kind: 'sim', item: 'mixer_social_AskAboutDay', label: 'Ask about Day' },
+    });
+    const requestId = enqueue.request_id as string;
+    expect(sentToMod[0]).toMatchObject({
+      type: 'enqueue_interaction',
+      request_id: requestId,
+      pie: { target_id: '456', target_kind: 'sim', item: 'mixer_social_AskAboutDay', label: 'Ask about Day' },
+    });
+    await post('/cognition/outcome', {
+      request_id: requestId,
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      target_sim_id: '456',
+      target_sim_name: 'Peyton Puckett',
+      action: 'mixer_social_AskAboutDay',
+      label: 'Ask about Day',
+      interaction_name: 'mixer_social_AskAboutDay_targeted_Friendly_alwaysOn',
+      outcome: 'success',
+    });
+    expect(createdMemories[0].memory.observation).toBe(
+      "Marisol Rocca tried 'Ask about Day' with Peyton Puckett and it succeeded.",
+    );
+    expect(createdMemories[0].memory.action).toBe('mixer_social_AskAboutDay');
+  });
+
+  it('an uncorrelated outcome with a label reads by the label too', async () => {
+    createdMemories.length = 0;
+    await post('/cognition/outcome', {
+      sim_id: '123',
+      sim_name: 'Marisol Rocca',
+      action: 'stereo_Listen',
+      label: 'Jazz',
+      outcome: 'failure',
+    });
+    expect(createdMemories[0].memory.observation).toBe("Marisol Rocca tried 'Jazz' and it failed.");
   });
 
   it('writes an uncorrelated failure outcome using the reported names', async () => {

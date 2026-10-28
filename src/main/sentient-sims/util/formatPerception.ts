@@ -43,8 +43,11 @@ function describeSim(sim: PerceivedSim): string {
 
 function describeObject(object: PerceivedObject): string {
   const actions = object.action_keys.map(pretty).join(' or ');
-  const distance = object.distance !== undefined ? `, ${Math.round(object.distance)}m away` : '';
-  return `a ${objectLabel(object)} (could ${actions}${distance})`;
+  const distance = object.distance !== undefined ? `${Math.round(object.distance)}m away` : '';
+  // An object with no verb left (a broken provider's keys emptied upstream) is still a
+  // thing in the room: "a chair (4m away)", never "a chair (could , 4m away)"
+  const detail = [actions ? `could ${actions}` : '', distance].filter(Boolean).join(', ');
+  return detail ? `a ${objectLabel(object)} (${detail})` : `a ${objectLabel(object)}`;
 }
 
 // Renders a mod perception snapshot as the <PERCEPTION> prose block cognition prompts

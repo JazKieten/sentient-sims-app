@@ -123,6 +123,8 @@ export class ActionDispatcherService {
       preempt: intent.preempt,
       zone_id: intent.zone_id,
       source: intent.source ?? 'cognition',
+      pie: intent.pie,
+      row_id: intent.row_id,
     };
     this.pending.set(requestId, { requestId, intent, dispatchedAt: Date.now() });
     this.inFlightBySim.set(intent.sim_id, requestId);
@@ -136,6 +138,9 @@ export class ActionDispatcherService {
       zone_id: intent.zone_id,
       priority: intent.priority,
       source: intent.source ?? 'cognition',
+      pie_item: intent.pie?.item,
+      option: intent.pie?.option,
+      row_id: intent.row_id,
     });
     return requestId;
   }

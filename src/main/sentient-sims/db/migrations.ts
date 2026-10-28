@@ -430,6 +430,193 @@ export const migrations: Map<string, DbMigrationSql> = new Map(
       );
       `);
     },
+    // Intention rows (autonomy part 5, 2026-10-21): a household Sim's ordered row list for
+    // one game day, as JSON. Its OWN table, never a daily_plan column: that row's existence is
+    // what the lazy planner keys on, and a Sim with rows but no plan must not get a plan row.
+    '026-create-intention-rows': `
+      CREATE TABLE intention_rows (
+        sim_id               TEXT NOT NULL  ,
+        absolute_day         INTEGER NOT NULL  ,
+        rows                 TEXT     ,
+        updated_at           DATETIME DEFAULT CURRENT_TIMESTAMP  ,
+        PRIMARY KEY ( sim_id, absolute_day )
+      );
+    `,
+    // Row memory (autonomy renovation R1, 2026-10-24): what each row key did across days
+    // (row_stats, counted by code, never by a model), every fire with the state before it and
+    // its propensity (row_fire_log), what the game did for the household beside our own fires
+    // (interaction_log, a separate arm with an unknown policy) and the pie items each target
+    // offered a Sim (vocabulary_seen, read by the night call in R3).
+    '027-create-row-memory': (db: Database) => {
+      db.exec(`
+      CREATE TABLE row_stats (
+        sim_id               TEXT NOT NULL  ,
+        seed_key             TEXT NOT NULL  ,
+        fires                INTEGER NOT NULL DEFAULT 0  ,
+        clicked              INTEGER NOT NULL DEFAULT 0  ,
+        ran                  INTEGER NOT NULL DEFAULT 0  ,
+        canceled             INTEGER NOT NULL DEFAULT 0  ,
+        refused              INTEGER NOT NULL DEFAULT 0  ,
+        not_on_menu          INTEGER NOT NULL DEFAULT 0  ,
+        no_target            INTEGER NOT NULL DEFAULT 0  ,
+        expired              INTEGER NOT NULL DEFAULT 0  ,
+        nights_kept          INTEGER NOT NULL DEFAULT 0  ,
+        rewrites             INTEGER NOT NULL DEFAULT 0  ,
+        fires_since_ran      INTEGER NOT NULL DEFAULT 0  ,
+        last_cause           TEXT     ,
+        last_structural      INTEGER NOT NULL DEFAULT 0  ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        said_day             INTEGER     ,
+        retired_day          INTEGER     ,
+        retired_cause        TEXT     ,
+        retired_zone         TEXT     ,
+        why                  TEXT     ,
+        PRIMARY KEY ( sim_id, seed_key )
+      );
+      CREATE TABLE row_fire_log (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        at                   TEXT NOT NULL  ,
+        day                  INTEGER     ,
+        minute               INTEGER     ,
+        sim_id               TEXT NOT NULL  ,
+        row_id               TEXT NOT NULL  ,
+        seed_key             TEXT NOT NULL  ,
+        source               TEXT     ,
+        what_kind            TEXT     ,
+        eligible             TEXT     ,
+        chosen               TEXT     ,
+        propensity           REAL     ,
+        context              TEXT     ,
+        request_id           TEXT     ,
+        outcome              TEXT     ,
+        ran                  INTEGER     ,
+        finishing            TEXT     ,
+        cause                TEXT     ,
+        reason               TEXT
+      );
+      CREATE INDEX row_fire_log_sim_day ON row_fire_log ( sim_id, day );
+      CREATE INDEX row_fire_log_request ON row_fire_log ( request_id );
+      CREATE TABLE interaction_log (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        at                   TEXT NOT NULL  ,
+        sim_id               TEXT NOT NULL  ,
+        interaction_id       TEXT     ,
+        name                 TEXT     ,
+        super_name           TEXT     ,
+        is_super             INTEGER     ,
+        target_kind          TEXT     ,
+        target_id            TEXT     ,
+        ran                  INTEGER     ,
+        canceled             INTEGER     ,
+        user_canceled        INTEGER     ,
+        finishing            TEXT     ,
+        origin               TEXT     ,
+        day                  INTEGER     ,
+        minute               INTEGER     ,
+        zone                 TEXT
+      );
+      CREATE INDEX interaction_log_sim_day ON interaction_log ( sim_id, day );
+      CREATE TABLE vocabulary_seen (
+        sim_id               TEXT NOT NULL  ,
+        target               TEXT NOT NULL  ,
+        kind                 TEXT NOT NULL  ,
+        label                TEXT NOT NULL  ,
+        key                  TEXT NOT NULL  ,
+        greyed               TEXT     ,
+        zone                 TEXT NOT NULL  ,
+        day                  INTEGER NOT NULL  ,
+        minute               INTEGER     ,
+        PRIMARY KEY ( sim_id, day, zone, target, key, label )
+      );
+      `);
+    },
+    // Renovation R2: the click's own menu refusal counted apart from the prior's skip, and the
+    // super a menu item stages (a row naming a super is on the menu when one of its items is)
+    '028-row-memory-r2': (db: Database) => {
+      db.exec(`
+      ALTER TABLE row_stats ADD COLUMN refused_live INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE vocabulary_seen ADD COLUMN super_key TEXT;
+      `);
+    },
+    // Renovation R4: procedures (what clicked and ran for a row key, drafted by code from the
+    // game's own outcome, revised in place by the night call when it fails) and pitfalls (the
+    // lessons failures taught: the night call's diagnoses and its add_pitfall). Exact keys, no
+    // embeddings; scope is a sim id or '*' for everyone on the lot.
+    '029-procedures-pitfalls': (db: Database) => {
+      db.exec(`
+      CREATE TABLE procedures (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        scope                TEXT NOT NULL  ,
+        key                  TEXT NOT NULL  ,
+        zone                 TEXT     ,
+        target_kind          TEXT     ,
+        target_name          TEXT     ,
+        items                TEXT NOT NULL  ,
+        why                  TEXT     ,
+        uses                 INTEGER NOT NULL DEFAULT 0  ,
+        ran                  INTEGER NOT NULL DEFAULT 0  ,
+        failed               INTEGER NOT NULL DEFAULT 0  ,
+        fires_since_ran      INTEGER NOT NULL DEFAULT 0  ,
+        last_cause           TEXT     ,
+        last_structural      INTEGER NOT NULL DEFAULT 0  ,
+        last_failure         TEXT     ,
+        status               TEXT NOT NULL DEFAULT 'active'  ,
+        source               TEXT NOT NULL DEFAULT 'code'  ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        revisions            INTEGER NOT NULL DEFAULT 0  ,
+        revised_day          INTEGER     ,
+        UNIQUE ( scope, key )
+      );
+      CREATE INDEX procedures_key ON procedures ( key );
+      CREATE TABLE pitfalls (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        scope                TEXT NOT NULL  ,
+        about                TEXT NOT NULL  ,
+        text                 TEXT NOT NULL  ,
+        evidence             TEXT     ,
+        seen                 INTEGER NOT NULL DEFAULT 1  ,
+        status               TEXT NOT NULL DEFAULT 'active'  ,
+        source               TEXT NOT NULL  ,
+        zone                 TEXT     ,
+        first_day            INTEGER     ,
+        last_day             INTEGER     ,
+        UNIQUE ( scope, about )
+      );
+      `);
+    },
+    // Renovation R5a: the private view's experiences. One row per thing a household Sim did, did
+    // with someone, or had change in the game's record, built by code at night from
+    // interaction_log, the memories and the game facts (sim_fact, source 'game'), with importance
+    // from game signals (never a model). The night call reads them ranked the Generative Agents way
+    // (recency since last access, importance, relevance).
+    '030-experience': (db: Database) => {
+      db.exec(`
+      CREATE TABLE experience (
+        id                   INTEGER NOT NULL  PRIMARY KEY AUTOINCREMENT  ,
+        holder               TEXT NOT NULL  ,
+        day                  INTEGER NOT NULL  ,
+        minute               INTEGER     ,
+        kind                 TEXT NOT NULL  ,
+        participants         TEXT     ,
+        verb                 TEXT     ,
+        verb_family          TEXT     ,
+        target               TEXT     ,
+        zone                 TEXT     ,
+        outcome              TEXT     ,
+        finishing            TEXT     ,
+        importance           REAL NOT NULL  ,
+        last_access          INTEGER     ,
+        source               TEXT NOT NULL  ,
+        source_id            TEXT NOT NULL  ,
+        scene_id             TEXT     ,
+        text                 TEXT     ,
+        UNIQUE ( holder, source, source_id )
+      );
+      CREATE INDEX experience_holder_day ON experience ( holder, day );
+      `);
+    },
   }),
 );
 

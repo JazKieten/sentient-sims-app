@@ -153,7 +153,10 @@ export class CognitionController {
         event.target_sim_name ||
         lookupParticipantName(this.ctx, event.target_sim_id) ||
         (event.target_sim_id ? `Sim ${event.target_sim_id}` : undefined);
-      const attempt = target ? `${actor} tried '${action}' with ${target}` : `${actor} tried '${action}'`;
+      // A pie-menu click reads by its label ("tried 'Ask about Day'"); the key stays on
+      // memory.action for the suppression maps
+      const tried = pending?.intent.pie?.label ?? known?.intent.pie?.label ?? event.label ?? action;
+      const attempt = target ? `${actor} tried '${tried}' with ${target}` : `${actor} tried '${tried}'`;
       const observation = outcomeObservation(attempt, event.outcome, event.reason, event.recovery_action, verdict);
 
       const participants: ParticipantDTO[] = [{ id: event.sim_id }];
@@ -269,6 +272,103 @@ export class CognitionController {
         limit: parsedLimit && parsedLimit > 0 ? parsedLimit : undefined,
       }),
     );
+  };
+
+  // Intention rows (autonomy part 5): the whole list per Sim, or one Sim's (decision 13:
+  // this and the mod's `[Rows]` log lines are the inspection surface)
+  @CatchErrors()
+  getRows = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    if (simId) {
+      res.json({ sim_id: simId, rows: this.autonomy.intentions.rowsFor(simId) });
+      return;
+    }
+    res.json(this.autonomy.intentions.all());
+  };
+
+  // Row memory (renovation R1): every key's counters across days, the retired keys, and for one
+  // Sim today's fire log and the household's interactions by origin. Chat 4's stream review
+  // reads this (or greps the `[Rows] <Sim> day <D>:` lines) instead of counting by hand.
+  @CatchErrors()
+  getRowStats = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    const { rowMemory } = this.autonomy;
+    if (!simId) {
+      const stats = rowMemory.allStats();
+      res.json({ stats, retired: stats.filter((entry) => entry.retiredDay !== undefined) });
+      return;
+    }
+    const day = this.ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
+    const stats = rowMemory.statsFor(simId);
+    res.json({
+      sim_id: simId,
+      day,
+      stats,
+      retired: stats.filter((entry) => entry.retiredDay !== undefined),
+      fires: rowMemory.firesFor(simId, day),
+      interactions: rowMemory.interactionCounts(simId, day),
+    });
+  };
+
+  // Dev seam: fire one row now, past the pace and the preconditions (the gate still applies)
+  debugFireRow = async (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId, row_id: rowId } = req.body as { sim_id?: string; row_id?: string };
+      if (!simId || !rowId) {
+        return res.status(400).json({ error: 'sim_id and row_id are required' });
+      }
+      const result = await this.autonomy.cognitionService.fireRowNow(simId, rowId);
+      return res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      log.error('Error firing an intention row', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
+  // Procedures and pitfalls (R4): the Sim's own and everyone's here, or every one in the save
+  getProcedures = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId?: string };
+    res.json({ sim_id: simId, ...this.autonomy.procedures.view(simId) });
+  };
+
+  // The private view (R5a): the Sim's experiences of the window and the night's ranking now
+  getExperiences = (req: Request, res: Response) => {
+    const { simId } = req.params as { simId: string };
+    res.json(this.autonomy.experiences.view(simId, this.autonomy.intentions.rowsFor(simId)));
+  };
+
+  // Dev seam (the R4 live check): one structural failure on a Sim's procedure, through the same
+  // code an outcome takes, so the next night call is asked to revise it
+  debugProcedureFail = (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId, key, cause } = req.body as { sim_id?: string; key?: string; cause?: string };
+      if (!simId || !key) {
+        return res.status(400).json({ error: 'sim_id and key are required' });
+      }
+      const procedure = this.autonomy.procedures.recordFailureNow(simId, key, cause);
+      return procedure
+        ? res.json({ ok: true, procedure })
+        : res.status(404).json({ ok: false, error: `no procedure [${key}] for sim ${simId}` });
+    } catch (err) {
+      log.error('Error forcing a procedure failure', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
+  };
+
+  // Dev seam: run the night call for one Sim now (autonomy part 6); the turn runs on
+  // after the answer, its end is the `[Night] ... call ended` log line
+  debugNightCall = (req: Request, res: Response) => {
+    try {
+      const { sim_id: simId } = req.body as { sim_id?: string };
+      if (!simId) {
+        return res.status(400).json({ error: 'sim_id is required' });
+      }
+      const result = this.autonomy.nightCall.runNow(simId);
+      return res.status(result.ok ? 200 : 409).json(result);
+    } catch (err) {
+      log.error('Error starting a night call', err);
+      return res.status(500).json({ error: errorMessage(err) });
+    }
   };
 
   // Dev seam: ask the mod for a sim's perception snapshot; the mod replies by POSTing

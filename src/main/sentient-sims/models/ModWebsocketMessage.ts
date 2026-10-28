@@ -45,6 +45,10 @@ export enum ModWebsocketMessageType {
   // What the in-game status tab shows about the app: voices, voice input and the AI in
   // use; sent on every mod connect and when one of them changes
   APP_STATUS = 'app_status',
+  // Cognition asks the mod before a model call (interactions/ss_cognition_query.py, autonomy
+  // tier): the moment predicate, or the pie-menu vocabulary. The mod answers
+  // {cognition: {kind: 'query_result', request_id, ...}}
+  COGNITION_QUERY = 'cognition_query',
 }
 
 export type ModWebsocketMessage = {
@@ -162,6 +166,24 @@ export type ModAddBuff = ModWebsocketMessage & {
   source?: 'scene' | 'chat';
 };
 
+// A pie-menu row the options stage offered (the mod's cognition vocabulary), sent back on the
+// push so the mod clicks that item instead of resolving a whitelist verb
+// (interactions/ss_cognition_click.py). `item` is the row's tuning key, `option` the label
+// chosen from a collapsed row's options (stereo channels, snacks). Core-owned: the push message
+// carries it in every build; only the autonomy tier ever fills it.
+export type PieIntent = {
+  target_id?: string;
+  // 'find' (autonomy part 5): an intention row with no target of its own; the mod resolves a Sim
+  // id in target_id or the nearest object providing one of the candidates; 'kind' (renovation
+  // R3): target_id is an object kind, the nearest such object (a story row's click)
+  target_kind: 'self' | 'sim' | 'object' | 'inventory' | 'phone' | 'find' | 'kind';
+  item: string;
+  label?: string;
+  option?: string;
+  // Tuning names tried in order on the built menu; the first runnable one is clicked
+  candidates?: string[];
+};
+
 // Pushes a whitelisted action into a sim's interaction queue. The mod resolves the action key
 // via its affordance whitelist (ss_affordance_whitelist.py) and reports what happened back to
 // POST /cognition/outcome with the same request_id.
@@ -181,6 +203,10 @@ export type ModEnqueueInteraction = ModWebsocketMessage & {
   // validates it against its venue directory and falls back to its own picker
   zone_id?: string;
   source: string;
+  // A pie-menu click instead of a whitelist verb (autonomy part 2, 2026-10-21)
+  pie?: PieIntent;
+  // The intention row this push fires (autonomy part 5); rides the outcome body for the log
+  row_id?: string;
 };
 
 // Asks the mod for one sim's perception snapshot; the mod replies by POSTing the
@@ -238,8 +264,18 @@ export type ModAppStatus = ModWebsocketMessage & {
   ai_provider: string;
 };
 
+// One question for the mod's cognition query listener; args depend on the kind
+// ('moment': {sim_id, target_sim_id?, lane}; 'vocabulary': {sim_id, target_sim_id?})
+export type ModCognitionQuery = ModWebsocketMessage & {
+  request_id: string;
+  kind: string;
+  args: Record<string, unknown>;
+  timeout_ms: number;
+};
+
 export type WebsocketNotification =
   | ModWebsocketMessage
+  | ModCognitionQuery
   | ModPlumToolCall
   | ModPlumEvent
   | ModVoiceHotkeys

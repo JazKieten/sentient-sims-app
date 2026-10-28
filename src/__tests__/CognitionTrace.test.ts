@@ -56,6 +56,8 @@ describe('Cognition tick tracing', () => {
     // Cognition knobs are read-only properties over the settings store
     ctx.settings.set(SettingsEnum.COGNITION_ENABLED, true);
     ctx.settings.set(SettingsEnum.COGNITION_AUTONOMY_LEVEL, 'suggest');
+    // The tick stages traced here run with the legacy tick only (part 7)
+    ctx.settings.set(SettingsEnum.COGNITION_LEGACY_TICK, true);
 
     // The provider mock dispatches on the stage's system prompt — labels are an
     // exchange-log concern, invisible at this layer

@@ -294,6 +294,50 @@ describe('semantic memory', () => {
     expect(ctx.semanticMemory.speciesFor('100')).toBeUndefined();
   });
 
+  // Renovation R5a: a relationship bit and what one sim KNOWS about another are game facts (a
+  // flip closes the old row, Zep-style), and no prompt renders them yet (R5b decides where)
+  it('keeps relationship bits and SimKnowledge as game facts that KNOWN_FACTS does not render', () => {
+    const edge = (bits: string[]) => ({
+      sim_id: '200',
+      name: 'Mackenzie Scott',
+      has_met: true,
+      friendship: 100,
+      romance: 0,
+      bits,
+      knowledge: {
+        traits: ['trait_Geek'],
+        careers: ['career_Adult_Athletic'],
+        secrets: ['secret_Cheating'],
+        relationship_status: true,
+      },
+    });
+    ctx.semanticMemory.ingestDossier(dossier({ relationships: [edge(['friendship-friend'])] }), { day: 10 });
+    ctx.semanticMemory.ingestDossier(dossier({ relationships: [edge(['friendship-bff'])] }), { day: 11 });
+    const history = ctx.semanticMemory.getHistory('100').filter((fact) => fact.predicate === FactPredicate.REL_BIT);
+    expect(history.find((fact) => fact.objectText === 'friendship-friend')).toMatchObject({
+      validFromDay: 10,
+      validToDay: 11,
+      source: 'game',
+    });
+    expect(history.find((fact) => fact.objectText === 'friendship-bff')).toMatchObject({ validFromDay: 11 });
+    const current = ctx.semanticMemory.getCurrentFacts('100');
+    expect(current.find((fact) => fact.predicate === FactPredicate.KNOWS_TRAIT)).toMatchObject({
+      objectSimId: '200',
+      objectText: 'trait_Geek',
+    });
+    expect(current.some((fact) => fact.predicate === FactPredicate.KNOWS_STATUS)).toBe(true);
+    // The same block with and without the R5a facts: core's prompts are unchanged
+    const block = ctx.semanticMemory.recall('100', { mentionedSimIds: ['200'] });
+    ctx.db
+      .getDb()
+      .prepare(
+        `DELETE FROM sim_fact WHERE predicate IN
+           ('rel_bit', 'knows_trait', 'knows_career', 'knows_major', 'knows_secret', 'knows_status')`,
+      )
+      .run();
+    expect(ctx.semanticMemory.recall('100', { mentionedSimIds: ['200'] })).toBe(block);
+  });
+
   it('renders what the sim knows into a KNOWN_FACTS block', () => {
     ctx.semanticMemory.ingestDossier(dossier(), { day: 10 });
     const block = ctx.semanticMemory.recall('100', { mentionedSimIds: ['200'] });

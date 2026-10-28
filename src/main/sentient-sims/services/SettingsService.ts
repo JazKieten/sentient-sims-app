@@ -317,6 +317,81 @@ export function defaultStore(cwd?: string) {
         // reports) and every failure path fails open to pre-plan behavior
         default: true,
       },
+      [SettingsEnum.COGNITION_VOCABULARY.toString()]: {
+        type: 'string',
+        // 'pie' offers the game's own pie menu through the mod; an older mod (no
+        // cognition_query listener) falls back to the whitelist prompt on its own
+        default: 'pie',
+      },
+      [SettingsEnum.COGNITION_GATE_ENABLED.toString()]: {
+        type: 'boolean',
+        // The moment gate before every model lane; off = the pre-2026-10-21 behaviour
+        default: true,
+      },
+      [SettingsEnum.INTENTION_ROWS_ENABLED.toString()]: {
+        type: 'boolean',
+        // The row lane (autonomy part 5); off = chat 1's behaviour, rows never seeded or fired
+        default: true,
+      },
+      [SettingsEnum.INTENTION_BEAT_MINUTES.toString()]: {
+        type: 'number',
+        // One beat per Sim per this many sim-minutes (need rows are exempt)
+        default: 120,
+      },
+      [SettingsEnum.INTENTION_NEED_FLOOR.toString()]: {
+        type: 'number',
+        // A need under this gets a row; the -85 critical rule lane sits below it untouched
+        default: -60,
+      },
+      [SettingsEnum.COGNITION_LEGACY_TICK.toString()]: {
+        type: 'boolean',
+        // Autonomy part 7: the per-tick deliberation (monologue, scores) and the review stage
+        // run only when this is on; off = the rows decide
+        default: false,
+      },
+      [SettingsEnum.INTENTION_NIGHT_CALL_ENABLED.toString()]: {
+        type: 'boolean',
+        // Autonomy part 6: one Plum turn per household Sim at the day rollover edits the list
+        default: true,
+      },
+      [SettingsEnum.INTENTION_VOICE_WHY.toString()]: {
+        type: 'boolean',
+        // A fired row with a `say` line voices it as a "(to self)" line
+        default: true,
+      },
+      [SettingsEnum.JEV_DAY_AUTONOMY.toString()]: {
+        type: 'boolean',
+        // The one switch between the Jev day and release/4.6's autonomy (see SettingsEnum)
+        default: true,
+      },
+      [SettingsEnum.DECISION_PROVIDER.toString()]: {
+        type: 'string',
+        // The Jev day: 'jev' runs the row pick, the hands and the scene impulse on the
+        // Decisions API; 'off' is the pipeline as it was
+        default: 'jev',
+      },
+      [SettingsEnum.DECISION_MODEL.toString()]: {
+        type: 'string',
+        default: 'typesafe/jev-1.13',
+      },
+      [SettingsEnum.JEV_SCENE_IMPULSE.toString()]: {
+        type: 'boolean',
+        // After a scene whose scores were skipped, one Jev yes-no per household Sim arms a
+        // scene row (4.6's scene-armed desires, re-created)
+        default: true,
+      },
+      [SettingsEnum.THOUGHT_SHOW_SCORE.toString()]: {
+        type: 'number',
+        // A decided beat at this importance (1-5) or above gets a one-line thought in the
+        // memories window. Replay 2026-10-28: Jev reads about one beat in ten as a 4 and one
+        // in a hundred as a 5; a 3 is nearly half of them.
+        default: 4,
+      },
+      [SettingsEnum.THOUGHT_VOICE_SCORE.toString()]: {
+        type: 'number',
+        // ...and at this importance or above the thought is voiced as well (rarer)
+        default: 5,
+      },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
         // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
@@ -406,6 +481,11 @@ export function defaultStore(cwd?: string) {
         // Above the tick's 6: on the 09-22 stream 78 of 119 player-facing beats crossed
         // 6 and most of them were casual lines. 8 is "I really should" territory.
         default: 8,
+      },
+      [SettingsEnum.CONVERSATION_ACTIONS_FROM_VIEWERS.toString()]: {
+        type: 'boolean',
+        // A viewer is not in the world; their lines are talk, never an order (10-19 review)
+        default: false,
       },
       [SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS.toString()]: {
         type: 'boolean',
@@ -1319,6 +1399,81 @@ export class SettingsService {
     return this.get(SettingsEnum.DAILY_GOALS_ENABLED) as boolean;
   }
 
+  // The one switch (2026-10-27): on, the Jev day; off, release/4.6's autonomy. Every getter
+  // it covers answers from the switch, so one flip changes the whole pipeline mid-run (the
+  // cognition lanes read these each tick). The stored per-feature values stay in the store
+  // for a dev who flips them with the switch on.
+  get jevDayAutonomy(): boolean {
+    return this.get(SettingsEnum.JEV_DAY_AUTONOMY) !== false;
+  }
+
+  get cognitionVocabulary(): 'pie' | 'whitelist' {
+    if (!this.jevDayAutonomy) {
+      return 'whitelist';
+    }
+    return (this.get(SettingsEnum.COGNITION_VOCABULARY) as string) === 'whitelist' ? 'whitelist' : 'pie';
+  }
+
+  get cognitionGateEnabled(): boolean {
+    return this.jevDayAutonomy && this.get(SettingsEnum.COGNITION_GATE_ENABLED) !== false;
+  }
+
+  get intentionRowsEnabled(): boolean {
+    return this.jevDayAutonomy && this.get(SettingsEnum.INTENTION_ROWS_ENABLED) !== false;
+  }
+
+  get intentionBeatMinutes(): number {
+    const raw = Number(this.get(SettingsEnum.INTENTION_BEAT_MINUTES));
+    return Math.min(480, Math.max(15, Number.isFinite(raw) ? raw : 120));
+  }
+
+  get intentionNeedFloor(): number {
+    const raw = Number(this.get(SettingsEnum.INTENTION_NEED_FLOOR));
+    return Math.min(-20, Math.max(-84, Number.isFinite(raw) ? raw : -60));
+  }
+
+  get cognitionLegacyTick(): boolean {
+    // 4.6's autonomy IS the legacy tick
+    return !this.jevDayAutonomy || this.get(SettingsEnum.COGNITION_LEGACY_TICK) === true;
+  }
+
+  get intentionNightCallEnabled(): boolean {
+    return this.jevDayAutonomy && this.get(SettingsEnum.INTENTION_NIGHT_CALL_ENABLED) !== false;
+  }
+
+  get intentionVoiceWhy(): boolean {
+    return this.get(SettingsEnum.INTENTION_VOICE_WHY) !== false;
+  }
+
+  get decisionProvider(): 'off' | 'jev' {
+    if (!this.jevDayAutonomy) {
+      return 'off';
+    }
+    return this.get(SettingsEnum.DECISION_PROVIDER) === 'jev' ? 'jev' : 'off';
+  }
+
+  get decisionModel(): string {
+    const raw = this.get(SettingsEnum.DECISION_MODEL);
+    return typeof raw === 'string' && raw.trim() ? raw.trim() : 'typesafe/jev-1.13';
+  }
+
+  get jevSceneImpulse(): boolean {
+    return this.jevDayAutonomy && this.get(SettingsEnum.JEV_SCENE_IMPULSE) !== false;
+  }
+
+  private importanceSetting(setting: SettingsEnum, fallback: number): number {
+    const raw = Number(this.get(setting));
+    return Math.min(5, Math.max(1, Number.isFinite(raw) ? Math.round(raw) : fallback));
+  }
+
+  get thoughtShowScore(): number {
+    return this.importanceSetting(SettingsEnum.THOUGHT_SHOW_SCORE, 4);
+  }
+
+  get thoughtVoiceScore(): number {
+    return this.importanceSetting(SettingsEnum.THOUGHT_VOICE_SCORE, 5);
+  }
+
   get dailyLoadoutSize(): number {
     return Math.min(10, Math.max(3, this.get(SettingsEnum.DAILY_LOADOUT_SIZE) as number));
   }
@@ -1454,6 +1609,10 @@ export class SettingsService {
   get conversationActionScoreThreshold(): number {
     const raw = Number(this.get(SettingsEnum.CONVERSATION_ACTION_SCORE_THRESHOLD));
     return Math.min(10, Math.max(1, Number.isFinite(raw) ? raw : 8));
+  }
+
+  get conversationActionsFromViewers(): boolean {
+    return this.get(SettingsEnum.CONVERSATION_ACTIONS_FROM_VIEWERS) === true;
   }
 
   get voiceInputProvider(): VoiceInputProvider {

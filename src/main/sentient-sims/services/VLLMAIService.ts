@@ -18,6 +18,7 @@ import { TokenizeException } from '../exceptions/TokenizeException';
 import { axiosClient } from '../clients/AxiosClient';
 import { ApiContext } from './ApiContext';
 import { ApiType } from '../models/ApiType';
+import { plainProviderError } from '../util/providerErrorWords';
 
 export class VLLMAIService implements GenerationService {
   protected ctx: ApiContext;
@@ -246,7 +247,7 @@ export class VLLMAIService implements GenerationService {
       log.error('Error checking health', e);
 
       return {
-        error: e instanceof Error ? e.message : String(e),
+        error: plainProviderError(e instanceof Error ? e.message : String(e)).plain,
       };
     }
   }

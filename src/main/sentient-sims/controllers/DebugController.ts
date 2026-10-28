@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import log from 'electron-log';
 import { ApiTypeFromValue } from '../models/ApiType';
 import { OpenAIKeyNotSetError } from '../services/OpenAIService';
 import { webhookUrl } from '../services/LogSendService';
@@ -6,6 +7,7 @@ import { SendLogsRequest } from '../models/SendLogsRequest';
 import { ApiContext } from '../services/ApiContext';
 import { SendLogsResponse } from '../models/SendLogsResponse';
 import { InteractionBugReport } from '../models/InteractionBugReport';
+import { plainProviderError } from '../util/providerErrorWords';
 
 export class DebugController {
   private readonly ctx: ApiContext;
@@ -35,10 +37,9 @@ export class DebugController {
     } catch (e) {
       if (e instanceof OpenAIKeyNotSetError) {
         res.status(400).send({ status: 'API key not set!' });
-      } else if (e instanceof Error) {
-        res.status(500).send({ error: `${e.name}: ${e.message}` });
       } else {
-        res.status(500).send({ error: String(e) });
+        log.error('AI connection test failed', e);
+        res.status(500).send({ error: plainProviderError(e instanceof Error ? e.message : String(e)).plain });
       }
     }
   };

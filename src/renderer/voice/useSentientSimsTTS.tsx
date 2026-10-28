@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import { useState, useCallback, useRef, useEffect } from 'react';
 import log from 'electron-log';
+import { plainSentientSimsError } from 'main/sentient-sims/util/providerErrorWords';
 import axios from 'axios';
 import { useAISettings } from 'renderer/providers/AISettingsProvider';
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
@@ -99,14 +100,14 @@ export function useSentientSimsTTS(): TTSHook {
         if (!response.ok) {
           const errorMessage = `Unable to fetch audio: ${response.status}`;
           log.error(errorMessage);
+          let bodyResponse = '';
           try {
-            const bodyResponse = await response.text();
+            bodyResponse = await response.text();
             log.error(bodyResponse);
-            setError(bodyResponse);
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          } catch (err: any) {
-            setError(errorMessage);
+          } catch {
+            // The status alone decides the message
           }
+          setError(plainSentientSimsError(`${response.status} ${bodyResponse}`));
           return null;
         }
 
@@ -127,7 +128,7 @@ export function useSentientSimsTTS(): TTSHook {
       } catch (err) {
         const errorMessage = `TTS request failed: ${err instanceof Error ? err.message : String(err)}`;
         log.error(errorMessage);
-        setError(errorMessage);
+        setError("Couldn't reach the Sentient Sims voice server. Check your internet connection and try again.");
         return null;
       }
     },
@@ -235,7 +236,7 @@ export function useSentientSimsTTS(): TTSHook {
         const errorMessage = `Sentence tokenization failed: ${err instanceof Error ? err.message : String(err)}`;
         const responseData: unknown = axios.isAxiosError(err) ? err.response?.data : undefined;
         log.error(errorMessage, responseData);
-        setError(errorMessage);
+        setError(plainSentientSimsError(errorMessage));
       }
     },
     [

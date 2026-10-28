@@ -1,6 +1,8 @@
 import log from 'electron-log';
 import { correctNames, correctPlaces } from '../util/nameCorrection';
 import { isPlaceholderName } from '../util/simAliases';
+import { ApiType } from '../models/ApiType';
+import { plainProviderError, plainSentientSimsError } from '../util/providerErrorWords';
 import { ApiContext } from './ApiContext';
 import { VoiceHotkeyService } from './VoiceHotkeyService';
 import { SettingsEnum } from '../models/SettingsEnum';
@@ -209,8 +211,13 @@ export class VoiceInputService {
       return text;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      log.error(`Voice transcription failed: ${message}`);
+      const plain =
+        this.ctx.settings.voiceInputProvider === ApiType.SentientSimsAI
+          ? plainSentientSimsError(message)
+          : plainProviderError(message).plain;
       sendPlayerVoiceStatusToMod('error', 'Transcription failed');
-      sendPopUpNotification(`Voice transcription failed: ${message}`);
+      sendPopUpNotification(`Voice input didn't work. ${plain}`);
       return '';
     } finally {
       this.reset();

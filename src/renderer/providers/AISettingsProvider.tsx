@@ -6,6 +6,7 @@ import { ApiType, ApiTypeFromValue, ApiTypeName } from 'main/sentient-sims/model
 import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import { createContext, ReactNode, use, useEffect, useMemo, useRef, useState } from 'react';
 import useSetting, { SettingsHook } from 'renderer/hooks/useSetting';
+import { knownPlainError } from 'main/sentient-sims/util/providerErrorWords';
 
 interface AISettingsContextType {
   aiApiName: string;
@@ -72,11 +73,9 @@ export function AISettingsProvider({ children }: AISettingsProviderProps) {
       status = result.status || '';
       error = result.error || '';
     } catch (err) {
-      if (err instanceof Error) {
-        error = `Error getting AI Status: ${err.message}`;
-      } else {
-        error = `Error getting AI Status: ${String(err)}`;
-      }
+      const raw = err instanceof Error ? err.message : String(err);
+      log.error(`Error getting AI Status: ${raw}`);
+      error = knownPlainError(raw) ?? "Couldn't check the AI connection. Restart the app and try again.";
     }
 
     setAIStatus({

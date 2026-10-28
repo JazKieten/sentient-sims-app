@@ -1,4 +1,10 @@
-import { plainKeyTestError, plainProviderError } from 'main/sentient-sims/util/providerErrorWords';
+import {
+  knownPlainError,
+  plainKeyTestError,
+  plainProviderError,
+  plainSentientSimsError,
+  SIGN_IN_TIMED_OUT,
+} from 'main/sentient-sims/util/providerErrorWords';
 
 // What a provider's error means for the player, by the raw texts seen live or documented
 describe('plainProviderError', () => {
@@ -76,5 +82,37 @@ describe('plainKeyTestError', () => {
   it('keeps the plain words for anything that is not the key', () => {
     expect(plainKeyTestError('getaddrinfo ENOTFOUND api.openai.com')).toContain('internet connection');
     expect(plainKeyTestError('something odd')).toBe('The AI provider returned an error.');
+  });
+});
+
+// A Sentient Sims AI refusal is the player's sign-in, never a key (2026-10-28 support ticket)
+describe('plainSentientSimsError', () => {
+  it('tells the player to sign in again for the expired-token reply', () => {
+    expect(plainSentientSimsError('401 {"message":"token has invalid claims: token is expired","code":401}')).toBe(
+      SIGN_IN_TIMED_OUT,
+    );
+    expect(plainSentientSimsError('Request failed with status code 401')).toBe(SIGN_IN_TIMED_OUT);
+  });
+
+  it('keeps the plain words for other failures', () => {
+    expect(plainSentientSimsError('Request failed with status code 502')).toContain('on its end');
+    expect(plainSentientSimsError('something odd')).toContain('Sentient Sims AI server');
+  });
+});
+
+describe('knownPlainError', () => {
+  it('knows the expired token even without a provider', () => {
+    expect(knownPlainError('token has invalid claims: token is expired')).toBe(SIGN_IN_TIMED_OUT);
+    expect(knownPlainError(SIGN_IN_TIMED_OUT)).toBe(SIGN_IN_TIMED_OUT);
+  });
+
+  it("passes the app's own plain messages through", () => {
+    const maintenance =
+      'Sentient Sims AI Server is in maintenance mode, check #api-status in discord for details and try again later.';
+    expect(knownPlainError(maintenance)).toBe(maintenance);
+  });
+
+  it('answers undefined for an error no rule knows', () => {
+    expect(knownPlainError('no database loaded')).toBeUndefined();
   });
 });

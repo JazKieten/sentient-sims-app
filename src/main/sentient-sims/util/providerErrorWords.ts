@@ -9,6 +9,14 @@ export type PlainProviderError = {
   inSettings: boolean;
 };
 
+export const SIGN_IN_TIMED_OUT =
+  'Your Sentient Sims sign-in timed out. Close the app, open it again and sign in, then try again.';
+
+const SIGN_IN_EXPIRED = /token has invalid claims|token is expired|sign-in timed out/i;
+
+// Messages the app writes itself are already plain and pass through as they are
+const ALREADY_PLAIN = /maintenance mode|No AI workers available|Must be a Founder or Patron|Upgrade on Patreon/i;
+
 const KEY_REFUSED =
   /\b401\b|invalid api key|incorrect api key|invalid_api_key|api key not valid|unauthori[sz]ed|no .*key.* set/i;
 
@@ -16,6 +24,7 @@ const KEY_REFUSED =
 // 404 before model-not-found, an exhausted quota before a plain 429, Gemini's disabled API
 // before a plain 403)
 const RULES: Array<[RegExp, string, boolean]> = [
+  [SIGN_IN_EXPIRED, SIGN_IN_TIMED_OUT, false],
   [
     /image input|support(?:s|ing)? images?|vision is not supported|image_url/i,
     "The model you picked can't look at pictures. Pick one that can in Settings > AI Model.",
@@ -79,6 +88,23 @@ export function plainProviderError(raw: string): PlainProviderError {
     return { plain: 'The AI provider returned an error.', raw, inSettings: false };
   }
   return { plain: rule[1], raw, inSettings: rule[2] };
+}
+
+// The plain sentence for an error a rule knows, else undefined
+export function knownPlainError(raw: string): string | undefined {
+  if (ALREADY_PLAIN.test(raw)) {
+    return raw;
+  }
+  return RULES.find(([pattern]) => pattern.test(raw))?.[1];
+}
+
+// Sentient Sims AI is reached with the player's sign-in, never a key, so a refusal there
+// means the sign-in timed out
+export function plainSentientSimsError(raw: string): string {
+  if (/\b401\b|unauthori[sz]ed/i.test(raw)) {
+    return SIGN_IN_TIMED_OUT;
+  }
+  return knownPlainError(raw) ?? 'The Sentient Sims AI server returned an error. Try again in a minute.';
 }
 
 // A key test answers about the key the player just typed, so a refused key says so plainly.

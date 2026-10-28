@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import fs from 'fs';
 import { ApiType } from 'main/sentient-sims/models/ApiType';
 import { ChatInteractionEvent, SSEventType } from 'main/sentient-sims/models/InteractionEvents';
@@ -86,6 +87,8 @@ describe('Memory trace end to end', () => {
 
   beforeEach(() => {
     ctx = mockApiContext();
+    // These tests mock the 4.6 pipeline by stage label; the default is lean (2026-10-27)
+    ctx.settings.set(SettingsEnum.SCENE_PIPELINE_MODE, 'full');
     fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
     ctx.db.loadDatabase({ sessionId: `trace-${Math.random().toString(36).slice(2)}`, saveId: '1' });
     ctx.settings.aiApiType = ApiType.OpenAI;

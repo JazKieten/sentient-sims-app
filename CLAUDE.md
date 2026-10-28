@@ -61,6 +61,46 @@ Frontend (src/renderer/):
   providers/   - React context providers
   settings/    - Settings UI components
 
+Lean voice pipeline (2026-10-27, DEFAULT): setting `scenePipelineMode` 'lean' | 'full' (SettingsEnum, a select
+under Directed Scenes on the Settings page; SettingsService.scenePipelineMode reads anything but 'full' as lean). Lean
+runs ONE actor call per Sim per round in AIService.runDirectedGeneration and nothing else: no Director Briefing, no
+Director Review, no Scene Scores on pair / 3+ / monologue scenes, fixed rounds (`wantsMore` is always true, so
+sceneMaxRounds, partnerless, gameWaiting, the 50 s budget and saveMemory are the only stops), and
+PromptRequestBuilderService skips the director-only material (lot roster, <DIRECTOR>/<SCENE_GUIDANCE>, diaries,
+retrieval + its embedding query, the scene facts list) under `options.lean`. The actor prompt is
+pipeline/prompts/scene.ts buildLeanActorSystemPrompt: [rules][You are playing <name> + own <CHARACTER_IN_INTERACTION>
+(ownCharacterBlock)][<LOCATION>][<KNOWN_FACTS> computed on round 1 and carried in DirectedGenerationOptions.factsBySim
+so the text is identical every round][<STATUS>, player-facing only]; the USER message
+(buildLeanActorUserMessage) is the now-block (<DATE>/<SEASON>/<WEATHER>/postures, moved out of the system prompt),
+"Previously in this scene:" with THIS scene's aired lines only on rounds 2+, the beat, then "The conversation so
+far". THE one real change: the game's beat rides into every round PER SIM (`frameBeat`, `carriedBeat`: "This scene:
+<the Sim's own round-1 beat, opener stripped>" + the continuation line), so the liar keeps the lie and the dupe the
+cover beat on rounds 2-3; in 4.6 only the director re-stated it and without one the actors drifted to the transcript's
+tail (series 2, insight 1). The rules text is speechRules(kind, {simName?, lean?}), shared with the 4.6
+buildSpeechSystemPrompt (pinned byte for byte by SpeechPromptFixture.test.ts); `leanNameFreeRules` (default true,
+series 3) drops the name from the rules ("Stay in character at all times", "your character's voice") so [rules] is
+one prefix for every Sim and every user, and lean says "in the tone of the scene" (no director). A reply to the
+player still runs Scene Scores once (the thread's `landed`, the conversation action); a pair scene's empty score map
+makes actOnConversation / armCognitionDesires no-ops and the monologue row gets its importance from the idle-lane
+annotator. Why (three of Jaz's streams + two offline series, .claude/voice-pipeline-tests in the mod repo): director
+51% of directed tokens for nothing a judge could see on ordinary scenes, reviewer 18% changing 2-5% of rounds (and a
+parser bug dropped most of those), scores 6% saying "continue" 92% of the time; series 3 (RESULTS-LEAN-2026-10-27.md)
+LEAN +0.85/10 over FULL at -66% tokens/scene, the lie kept through round 3 in every sample. 'full' is the whole 4.6
+pipeline, untouched, for an A/B (tests that mock stages by label set it). Log: `[Pipeline] lean round N: <cast>,
+<ms>, <lines>`. LeanPipeline.test.ts pins the contract. LIVE 2026-10-27 night (game 1.129.39.1030, dev app):
+a pushed chat ran three lean rounds (1.4-2.9 s each, round 1's first line 2.2 s after the round began), round
+2's message carried `This scene:` and only round 1's lines, the system prompt was the same 4,261 chars every
+round; a pie-clicked LieAboutCareer kept the lie through round 3 with the dupe's message holding only the
+cover beat; a chat-window line ran one actor + one Scene Scores (action 8 -> actOnConversation fired,
+partnerless stop); solo beats ran one THINK call and no scores; flipping to 'full' brought Director Briefing,
+reviewer's cut and scores back. A lean monologue row has no scorer's memory score, so its memory_index row is
+stamped heuristicImportance('monologue') (3) at creation (AIService storeMonologues / finishMonologueScene;
+a real score still wins): the idle-lane annotator only runs after the queue has been quiet for
+backgroundIdleDelayMs, which the 5 s cognition tick never allows while the game runs (3 of 34 rows rated
+in 12 min, 2026-10-27), and it keeps any numeric stamp as final, so the stamp is the row's rating.
+LeanPipeline.test.ts (i) pins it. Nothing on release/4.6 reads the column raw; the autonomy branch's
+ExperienceService ranks a Sim's day by it, which is why no NULL may land there.
+
 Player-facing replies (2026-09-21): a directed scene driven by a playerLine (chat window, voice/conscience, Twitch !ask)
 is `playerFacing` in AIService.runDirectedGeneration — full-length straight answers (pipeline/prompts/scene.ts
 playerFacing branch, playerReplyMaxTokens), the sim's live <STATUS>/<TODAYS_PLAN> block (util/formatCognitionPrompt

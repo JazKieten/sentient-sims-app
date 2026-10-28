@@ -107,6 +107,12 @@ export enum SettingsEnum {
   OUTCOME_INSTANT_SUCCESS_MS = 'outcomeInstantSuccessMs',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // Lean (default, 2026-10-27): one actor call per Sim per round, the beat carried into every
+  // round, fixed rounds; no director, reviewer or per-round scores. Full: the 4.6 pipeline.
+  SCENE_PIPELINE_MODE = 'scenePipelineMode',
+  // Lean only: the actor rules without the Sim's name (one cacheable prefix shared by every
+  // Sim and every user). Series 3 of the voice-pipeline bench sets the default.
+  LEAN_NAME_FREE_RULES = 'leanNameFreeRules',
   // A directed scene is dropped, not aired late, once its game event is older than this:
   // the sims have moved on by then (stream 2026-10-11: fans at a VIP rope stacked up
   // scenes that aired minutes after the game had paired the celebrity with someone else)
@@ -170,6 +176,9 @@ export enum SettingsEnum {
 
 // The values of SettingsEnum.PLUM_BRAIN
 export type PlumBrain = 'api' | 'claude-code';
+
+// The directed-scene pipeline: see SettingsEnum.SCENE_PIPELINE_MODE
+export type ScenePipelineMode = 'lean' | 'full';
 
 export enum DeprecatedSettingsEnum {
   CUSTOM_LLM_ENABLED = 'customLLMEnabled',

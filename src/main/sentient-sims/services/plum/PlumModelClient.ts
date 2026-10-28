@@ -90,8 +90,18 @@ export class AnthropicPlumClient implements PlumModelClient {
   }
 }
 
-// A friendly sentence for the tab, from the SDK's typed errors. Never the raw stack.
+// The SDK's message is the status plus the raw JSON body; the reason sits inside the body
+function anthropicReason(error: { error?: unknown }): string {
+  const body = error.error as { error?: { message?: unknown } } | undefined;
+  const message = body?.error?.message;
+  return typeof message === 'string' ? message.replace(/\.\s*$/, '') : '';
+}
+
+// A friendly sentence for the tab, from the SDK's typed errors. Never the raw stack or body.
 export function describeModelError(error: unknown): string {
+  if (error instanceof Anthropic.APIError && /credit balance/i.test(anthropicReason(error))) {
+    return 'Your Anthropic account is out of credit. Add credit at console.anthropic.com under Billing, then try again.';
+  }
   if (error instanceof Anthropic.AuthenticationError) {
     return "Plum can't sign in to Anthropic: check Plum's API key in the app's Settings.";
   }
@@ -105,16 +115,16 @@ export function describeModelError(error: unknown): string {
     return 'Anthropic is rate limiting Plum; try again in a moment.';
   }
   if (error instanceof Anthropic.BadRequestError) {
-    return `Anthropic rejected the request: ${error.message}`;
+    return `Anthropic turned down Plum's request: ${anthropicReason(error) || 'it gave no reason'}.`;
   }
   if (error instanceof Anthropic.APIConnectionError) {
     return "Plum can't reach Anthropic right now (network).";
   }
   if (error instanceof Anthropic.APIError) {
-    return `Anthropic answered with an error (${error.status ?? '?'}): ${error.message}`;
+    if (typeof error.status === 'number' && error.status >= 500) {
+      return 'Anthropic is busy or having trouble right now; try again in a minute.';
+    }
+    return `Anthropic answered with an error: ${anthropicReason(error) || `status ${error.status ?? 'unknown'}`}.`;
   }
-  if (error instanceof Error) {
-    return `Plum hit an error: ${error.message}`;
-  }
-  return `Plum hit an error: ${String(error)}`;
+  return 'Plum hit a problem it did not expect. If it keeps happening, send your logs from the app.';
 }

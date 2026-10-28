@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import Anthropic from '@anthropic-ai/sdk';
-import { AnthropicPlumClient, resetStrictBudget } from 'main/sentient-sims/services/plum/PlumModelClient';
+import {
+  AnthropicPlumClient,
+  describeModelError,
+  resetStrictBudget,
+} from 'main/sentient-sims/services/plum/PlumModelClient';
 import { mergeCatalogue, toApiTools, type ModToolDef } from 'main/sentient-sims/services/plum/PlumTools';
 
 // The request the SDK is handed: both cache markers (explicit on the system block, automatic
@@ -97,5 +101,39 @@ describe('AnthropicPlumClient', () => {
     // The next request starts from the smaller number
     await client.create(request);
     expect(sent[3]).toHaveLength(2);
+  });
+});
+
+describe('describeModelError', () => {
+  const apiError = (status: number, message: string) =>
+    Anthropic.APIError.generate(
+      status,
+      { type: 'error', error: { type: 'invalid_request_error', message } },
+      undefined,
+      new Headers(),
+    );
+
+  it('says an empty Anthropic account needs credit, not the raw body', () => {
+    const text = describeModelError(
+      apiError(400, 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.'),
+    );
+    expect(text).toContain('out of credit');
+    expect(text).not.toContain('{');
+  });
+
+  it('gives the reason from inside the body for other refusals', () => {
+    expect(describeModelError(apiError(400, 'max_tokens is too large.'))).toBe(
+      "Anthropic turned down Plum's request: max_tokens is too large.",
+    );
+  });
+
+  it('calls a server-side failure busy', () => {
+    expect(describeModelError(apiError(529, 'Overloaded'))).toContain('busy');
+  });
+
+  it('never shows an unexpected error raw', () => {
+    expect(describeModelError(new TypeError("Cannot read properties of undefined (reading 'map')"))).not.toContain(
+      'Cannot read',
+    );
   });
 });

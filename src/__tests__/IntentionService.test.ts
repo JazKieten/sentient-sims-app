@@ -115,6 +115,28 @@ describe('IntentionService', () => {
     expect(service.pick(jonah, paid)?.seedKey).toBe('bills');
   });
 
+  it('candidates lists every row that could fire, in order, and recordPick logs a non-first choice', () => {
+    const { service, cache } = build();
+    const jonah = entry('100', { goal_pool: WANT_POOL });
+    const rep = report([jonah], { bills: { due: true, amount: 5000 }, funds: 6000 });
+    cache.ingest(rep);
+    service.sync(jonah, rep);
+    const eligible = service.candidates(jonah, rep);
+    expect(eligible.map((row) => row.seedKey)).toEqual(['bills', 'objective_Asp_1', 'want_ChatWith']);
+    // pick is still the first of them
+    expect(service.pick(jonah, rep)?.seedKey).toBe('bills');
+    // The Jev day picks the second: the decision log carries that id with the whole set
+    const second = eligible[1];
+    service.recordPick(jonah, rep, second, eligible);
+    service.markFired(second.id, '-> mixer_social_TellJoke');
+    expect(service.rowsFor('100').find((row) => row.id === second.id)?.firedAt).toBeDefined();
+    // Inside the beat the pace holds: no candidates at all
+    const later = report([jonah], { bills: { due: true, amount: 5000 }, funds: 6000 }, 30);
+    cache.ingest(later);
+    service.sync(jonah, later);
+    expect(service.candidates(jonah, later)).toEqual([]);
+  });
+
   it('the pace: a second pick inside the beat is refused, a need row passes', () => {
     const { service, cache } = build({ beatMinutes: 120 });
     const jonah = entry('100', { goal_pool: WANT_POOL });

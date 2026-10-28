@@ -345,6 +345,39 @@ export function defaultStore(cwd?: string) {
         // A fired row with a `say` line voices it as a "(to self)" line
         default: true,
       },
+      [SettingsEnum.JEV_DAY_AUTONOMY.toString()]: {
+        type: 'boolean',
+        // The one switch between the Jev day and release/4.6's autonomy (see SettingsEnum)
+        default: true,
+      },
+      [SettingsEnum.DECISION_PROVIDER.toString()]: {
+        type: 'string',
+        // The Jev day: 'jev' runs the row pick, the hands and the scene impulse on the
+        // Decisions API; 'off' is the pipeline as it was
+        default: 'jev',
+      },
+      [SettingsEnum.DECISION_MODEL.toString()]: {
+        type: 'string',
+        default: 'typesafe/jev-1.13',
+      },
+      [SettingsEnum.JEV_SCENE_IMPULSE.toString()]: {
+        type: 'boolean',
+        // After a scene whose scores were skipped, one Jev yes-no per household Sim arms a
+        // scene row (4.6's scene-armed desires, re-created)
+        default: true,
+      },
+      [SettingsEnum.THOUGHT_SHOW_SCORE.toString()]: {
+        type: 'number',
+        // A decided beat at this importance (1-5) or above gets a one-line thought in the
+        // memories window. Replay 2026-10-28: Jev reads about one beat in ten as a 4 and one
+        // in a hundred as a 5; a 3 is nearly half of them.
+        default: 4,
+      },
+      [SettingsEnum.THOUGHT_VOICE_SCORE.toString()]: {
+        type: 'number',
+        // ...and at this importance or above the thought is voiced as well (rarer)
+        default: 5,
+      },
       [SettingsEnum.DAILY_LOADOUT_SIZE.toString()]: {
         type: 'number',
         // 8 not 6 (2026-08-15): the discretionary set grew from 22 to 34 keys with the
@@ -1338,16 +1371,27 @@ export class SettingsService {
     return this.get(SettingsEnum.DAILY_GOALS_ENABLED) as boolean;
   }
 
+  // The one switch (2026-10-27): on, the Jev day; off, release/4.6's autonomy. Every getter
+  // it covers answers from the switch, so one flip changes the whole pipeline mid-run (the
+  // cognition lanes read these each tick). The stored per-feature values stay in the store
+  // for a dev who flips them with the switch on.
+  get jevDayAutonomy(): boolean {
+    return this.get(SettingsEnum.JEV_DAY_AUTONOMY) !== false;
+  }
+
   get cognitionVocabulary(): 'pie' | 'whitelist' {
+    if (!this.jevDayAutonomy) {
+      return 'whitelist';
+    }
     return (this.get(SettingsEnum.COGNITION_VOCABULARY) as string) === 'whitelist' ? 'whitelist' : 'pie';
   }
 
   get cognitionGateEnabled(): boolean {
-    return this.get(SettingsEnum.COGNITION_GATE_ENABLED) !== false;
+    return this.jevDayAutonomy && this.get(SettingsEnum.COGNITION_GATE_ENABLED) !== false;
   }
 
   get intentionRowsEnabled(): boolean {
-    return this.get(SettingsEnum.INTENTION_ROWS_ENABLED) !== false;
+    return this.jevDayAutonomy && this.get(SettingsEnum.INTENTION_ROWS_ENABLED) !== false;
   }
 
   get intentionBeatMinutes(): number {
@@ -1361,15 +1405,45 @@ export class SettingsService {
   }
 
   get cognitionLegacyTick(): boolean {
-    return this.get(SettingsEnum.COGNITION_LEGACY_TICK) === true;
+    // 4.6's autonomy IS the legacy tick
+    return !this.jevDayAutonomy || this.get(SettingsEnum.COGNITION_LEGACY_TICK) === true;
   }
 
   get intentionNightCallEnabled(): boolean {
-    return this.get(SettingsEnum.INTENTION_NIGHT_CALL_ENABLED) !== false;
+    return this.jevDayAutonomy && this.get(SettingsEnum.INTENTION_NIGHT_CALL_ENABLED) !== false;
   }
 
   get intentionVoiceWhy(): boolean {
     return this.get(SettingsEnum.INTENTION_VOICE_WHY) !== false;
+  }
+
+  get decisionProvider(): 'off' | 'jev' {
+    if (!this.jevDayAutonomy) {
+      return 'off';
+    }
+    return this.get(SettingsEnum.DECISION_PROVIDER) === 'jev' ? 'jev' : 'off';
+  }
+
+  get decisionModel(): string {
+    const raw = this.get(SettingsEnum.DECISION_MODEL);
+    return typeof raw === 'string' && raw.trim() ? raw.trim() : 'typesafe/jev-1.13';
+  }
+
+  get jevSceneImpulse(): boolean {
+    return this.jevDayAutonomy && this.get(SettingsEnum.JEV_SCENE_IMPULSE) !== false;
+  }
+
+  private importanceSetting(setting: SettingsEnum, fallback: number): number {
+    const raw = Number(this.get(setting));
+    return Math.min(5, Math.max(1, Number.isFinite(raw) ? Math.round(raw) : fallback));
+  }
+
+  get thoughtShowScore(): number {
+    return this.importanceSetting(SettingsEnum.THOUGHT_SHOW_SCORE, 4);
+  }
+
+  get thoughtVoiceScore(): number {
+    return this.importanceSetting(SettingsEnum.THOUGHT_VOICE_SCORE, 5);
   }
 
   get dailyLoadoutSize(): number {

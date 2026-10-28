@@ -58,6 +58,10 @@ export enum StageId {
   // Plain words for the furnishing names the dev build's Lot Words panel has none for (JSON)
   LOT_WORDS = 'lot_words',
   MAPPING_REVIEW = 'mapping_review',
+  // The Jev day (2026-10-27): a typed decision (row pick, hands, after-scene impulse) on the
+  // Decisions API, no text; and the one-line thought an important decided beat earns.
+  BASAL_GANGLIA_DECISION = 'basal_ganglia_decision',
+  BEAT_THOUGHT = 'beat_thought',
   CLASSIFICATION = 'classification',
   BUFF = 'buff',
   // Not a brain part — the world. Turn order, round caps, pacing. No LLM.
@@ -255,6 +259,24 @@ export const STAGES: StageDefinition[] = [
     job: 'Feedback on a tested interaction or animation mapping',
     legacyActionType: AIActionType.MAPPING_REVIEW,
     defaultMaxResponseTokens: 600,
+    usesLLM: true,
+  },
+  {
+    id: StageId.BASAL_GANGLIA_DECISION,
+    brainName: 'Basal ganglia',
+    job: 'A typed decision (which row, which pie item, act after a scene) with no text',
+    legacyActionType: AIActionType.DECISION,
+    // A model call (the decision model answers typed questions), logged like one, with no
+    // text budget to speak of
+    defaultMaxResponseTokens: 0,
+    usesLLM: true,
+  },
+  {
+    id: StageId.BEAT_THOUGHT,
+    brainName: 'Default mode network',
+    job: 'The one-line thought an important decided beat earns, after the click',
+    legacyActionType: AIActionType.BEAT_THOUGHT,
+    defaultMaxResponseTokens: 60,
     usesLLM: true,
   },
   {

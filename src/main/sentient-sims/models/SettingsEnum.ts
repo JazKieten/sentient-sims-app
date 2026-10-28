@@ -81,6 +81,20 @@ export enum SettingsEnum {
   COGNITION_LEGACY_TICK = 'cognitionLegacyTick',
   INTENTION_NIGHT_CALL_ENABLED = 'intentionNightCallEnabled',
   INTENTION_VOICE_WHY = 'intentionVoiceWhy',
+  // The Jev day (2026-10-27): the row lane's WHETHER and WHICH, the hands for a deliberate
+  // row and the after-scene impulse run on the OpenRouter Decisions API ('jev') or not
+  // ('off'); the importance score from the same request sets the thought tier (a text
+  // thought in the memories window from `thoughtShowScore`, a voiced one from
+  // `thoughtVoiceScore`, both 1-5)
+  // THE ONE SWITCH (Scott, 2026-10-27): on = the Jev day (rows decide, Jev picks, pie menu,
+  // the gate, the night call); off = release/4.6's autonomy (the legacy tick over the
+  // whitelist, no gate, no rows, no Jev). The getters below derive from it.
+  JEV_DAY_AUTONOMY = 'jevDayAutonomy',
+  DECISION_PROVIDER = 'decisionProvider',
+  DECISION_MODEL = 'decisionModel',
+  JEV_SCENE_IMPULSE = 'jevSceneImpulse',
+  THOUGHT_SHOW_SCORE = 'thoughtShowScore',
+  THOUGHT_VOICE_SCORE = 'thoughtVoiceScore',
   // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
   DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
   DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',

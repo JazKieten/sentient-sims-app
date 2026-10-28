@@ -97,6 +97,12 @@ export interface ConversationActionsSlot {
     simId: string,
     desire: { score: number; reason?: string; thought?: string; targetSimId?: string },
   ): void;
+  // The Jev day (2026-10-27): a scene whose scores were skipped asks the decision model, per
+  // household performer, whether it leaves them wanting to act; yes arms a scene row
+  armSceneImpulses?(
+    performers: Array<{ sim_id: string; name: string }>,
+    scene: { summary?: string; dialogue: string },
+  ): Promise<void>;
 }
 
 // AUTONOMY: the nightly planner riding the sleep diary. prepare() returns undefined when

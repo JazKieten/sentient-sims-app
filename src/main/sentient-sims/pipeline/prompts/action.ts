@@ -35,3 +35,12 @@ Rules:
 - At least one option should directly answer what is pulling at them.
 - If any need is below -50, at least one option MUST address that need with a row that serves it; if several are, address the worst.
 - If a TODAYS_PLAN block is present, at least one option should serve one of today's goals.`;
+
+// The Jev day (2026-10-27): the one-line thought a decided beat earns when it mattered. Jev
+// (the decision model) never writes text, so this is the only text call on the day path and
+// runs AFTER the click went out, never before it. Approved = the Sim is about to do it;
+// declined = Jev said none of the rows fits this moment.
+export const BEAT_THOUGHT_SYSTEM_PROMPT = `You are one Sim in The Sims 4 thinking to yourself for a moment.
+Given your situation and what you just decided, reply with ONLY the thought: one or two short first-person sentences in your own voice, the way a person actually thinks, no quotes, no narration, no emoji.
+If you decided to do something, the thought is about going to do it now ("Right, I'm going to..."); if you decided against, the thought says why not now ("Not now, ...").
+Never mention Sims, the game, a list, a decision model, or being told what to do.`;

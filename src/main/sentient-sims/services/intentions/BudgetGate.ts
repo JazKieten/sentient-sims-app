@@ -27,8 +27,13 @@ export class BudgetGate {
   // Real seconds per game minute, smoothed; undefined until two reports moved the clock
   private paceSeconds: number | undefined;
 
-  recordLatency(ms: number) {
-    if (!Number.isFinite(ms) || ms < LATENCY_MIN_MS) {
+  // The seed until enough deliberations ran; the Jev day lowers it (a decision is ~0.3 s)
+  private seedMs = LATENCY_SEED_MS;
+
+  // `minMs`: a deliberation shorter than this never reached a model, unless the caller says
+  // otherwise (a Jev hands call is a model call and finishes well under the 2 s floor)
+  recordLatency(ms: number, minMs = LATENCY_MIN_MS) {
+    if (!Number.isFinite(ms) || ms < minMs) {
       return;
     }
     this.latencies.push(ms);
@@ -37,10 +42,16 @@ export class BudgetGate {
     }
   }
 
-  // The p90 of the last LATENCY_SAMPLES model deliberations, LATENCY_SEED_MS until enough ran
+  seed(ms: number) {
+    if (Number.isFinite(ms) && ms > 0) {
+      this.seedMs = ms;
+    }
+  }
+
+  // The p90 of the last LATENCY_SAMPLES model deliberations, the seed until enough ran
   p90Ms(): number {
     if (this.latencies.length < LATENCY_MIN_SAMPLES) {
-      return LATENCY_SEED_MS;
+      return this.seedMs;
     }
     const sorted = [...this.latencies].sort((a, b) => a - b);
     return sorted[Math.min(sorted.length - 1, Math.ceil(0.9 * sorted.length) - 1)];

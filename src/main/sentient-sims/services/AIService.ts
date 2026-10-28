@@ -2175,8 +2175,19 @@ ${factsBlock}
         options,
         sceneId,
       );
-    } else {
+    } else if (sceneScores.scores.size > 0) {
       this.armCognitionDesires(event, sceneScores.scores, monologueBySim);
+    } else {
+      // The Jev day: no scores (the lean pipeline skips them, or the scorer failed), so the
+      // decision model says per Sim whether the scene leaves them wanting to act
+      void this.ctx.ext.conversationActions
+        ?.armSceneImpulses?.(
+          performers.map((sim) => ({ sim_id: sim.sim_id, name: sim.name })),
+          { summary: sharedScene || sceneAction, dialogue: dialogueText },
+        )
+        .catch((error: unknown) => {
+          log.warn('[Pipeline] scene impulses failed', error);
+        });
     }
     // The thread hears the verdict: every performer has said their piece (the scorer's
     // "done"; without one, a beat that landed — nothing hanging, no pull for another round)

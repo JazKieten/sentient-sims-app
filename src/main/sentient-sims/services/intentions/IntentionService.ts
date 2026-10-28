@@ -493,14 +493,26 @@ export class IntentionService {
   // The first waiting row whose preconditions hold, whose claim is free and whose keys the
   // runtime is not holding off, inside the pace (need rows skip it). Note rows never pick.
   pick(entry: SimStateEntry, report: SimStateReport, options: PickOptions = {}): IntentionRow | undefined {
+    const eligible = this.candidates(entry, report, options);
+    const chosen = eligible[0];
+    if (chosen) {
+      this.recordPick(entry, report, chosen, eligible);
+    }
+    return chosen;
+  }
+
+  // The Jev day (2026-10-27): the rows that could fire now, in list order, so a decision model
+  // can choose among them instead of the list taking the first. Empty when the pace holds.
+  // `pick` is this plus `recordPick` of the first, so its callers see no change.
+  candidates(entry: SimStateEntry, report: SimStateReport, options: PickOptions = {}): IntentionRow[] {
     const simId = entry.sim_id;
     const ctx = this.context(entry, report);
     if (!simId || !ctx || ctx.absoluteDay === undefined) {
-      return undefined;
+      return [];
     }
     const state = this.stateFor(simId, ctx.absoluteDay);
     if (!options.force && this.settling()) {
-      return undefined;
+      return [];
     }
     const rowsById = new Map(state.rows.map((item) => [item.id, item]));
     const claimsHeld = this.claimsHeld(simId, ctx.nowMinutes);
@@ -539,7 +551,10 @@ export class IntentionService {
                 `[Rows] ${firstName(entry, simId)} pace: ${item.id} waits for the next beat in ${next - ctx.nowMinutes} min`,
               );
             }
-            return undefined;
+            if (expired) {
+              this.markDirty(simId, state);
+            }
+            return [];
           }
         }
         chosen = item;
@@ -549,14 +564,22 @@ export class IntentionService {
     if (expired) {
       this.markDirty(simId, state);
     }
-    if (chosen) {
-      state.lastPick = {
-        rowId: chosen.id,
-        eligible: eligible.map((item) => ({ id: item.id, source: item.source, kind: item.what.kind })),
-        context: contextSnapshot(entry, report),
-      };
+    return eligible;
+  }
+
+  // The decision log's candidate set for the row about to fire (consumed by markFired)
+  recordPick(entry: SimStateEntry, report: SimStateReport, chosen: IntentionRow, eligible: IntentionRow[]) {
+    const simId = entry.sim_id;
+    const ctx = this.context(entry, report);
+    if (!simId || !ctx || ctx.absoluteDay === undefined) {
+      return;
     }
-    return chosen;
+    const state = this.stateFor(simId, ctx.absoluteDay);
+    state.lastPick = {
+      rowId: chosen.id,
+      eligible: eligible.map((item) => ({ id: item.id, source: item.source, kind: item.what.kind })),
+      context: contextSnapshot(entry, report),
+    };
   }
 
   // R3, SOFAI's rule: never start a call that cannot finish in the time left. A refused row is

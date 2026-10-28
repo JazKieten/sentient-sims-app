@@ -38,7 +38,13 @@ type CtxOptions = {
   // Part 7: the legacy per-tick deliberation (default on here so chat 1-2's cases hold)
   legacyTick?: boolean;
   voiceWhy?: boolean;
+  // The Jev day: a scripted decision model (undefined = the setting off, as before)
+  jev?: JevAnswer;
+  thoughtShow?: number;
+  thoughtVoice?: number;
 };
+
+type JevAnswer = (questions: Record<string, unknown>, state?: unknown) => Record<string, unknown>;
 
 type VoicedCall = {
   lines: { speaker: string; text: string; simId?: string }[];
@@ -89,10 +95,15 @@ function buildCtx(options: CtxOptions = {}) {
   const voiced: VoicedCall[] = [];
   const memories: { memory: { content?: string; event_type?: string; action?: string } }[] = [];
   const turns: { text: string; options: PlumTurnOptions }[] = [];
+  const decisions: { label: string; questions: Record<string, unknown>; state: unknown }[] = [];
   const ctx = {
     settings: {
       cognitionLegacyTick: options.legacyTick ?? true,
       intentionVoiceWhy: options.voiceWhy ?? true,
+      decisionProvider: options.jev ? 'jev' : 'off',
+      jevSceneImpulse: true,
+      thoughtShowScore: options.thoughtShow ?? 4,
+      thoughtVoiceScore: options.thoughtVoice ?? 5,
       intentionNightCallEnabled: true,
       nonControllableSimsSpeak: true,
       plumEnabled: true,
@@ -135,6 +146,16 @@ function buildCtx(options: CtxOptions = {}) {
       },
     },
     generationQueue: { runCognition: <T>(task: () => Promise<T>) => task() },
+    decisions: {
+      enabled: () => options.jev !== undefined,
+      decide: (state: unknown, questions: Record<string, unknown>, decideOptions: { label: string }) => {
+        decisions.push({ label: decideOptions.label, questions, state });
+        if (!options.jev) {
+          return Promise.reject(new Error('jev off'));
+        }
+        return Promise.resolve({ answers: options.jev(questions, state), ms: 1, cost: 0.00001 });
+      },
+    },
     ai: {
       playTtsLines: (lines: VoicedCall['lines'], _sims: unknown, playOptions: VoicedCall['options']) => {
         voiced.push({ lines, options: playOptions });
@@ -151,6 +172,8 @@ function buildCtx(options: CtxOptions = {}) {
           text = options.optionsJson ?? SNACK_OPTIONS;
         } else if (label.startsWith('Action Choice')) {
           text = options.choiceJson ?? PICK_FIRST;
+        } else if (label.startsWith('Beat Thought')) {
+          text = 'Right, bills first.';
         }
         return Promise.resolve({ text, exchange: {} });
       },
@@ -225,6 +248,7 @@ function buildCtx(options: CtxOptions = {}) {
     voiced,
     memories,
     turns,
+    decisions,
   };
 }
 
@@ -961,5 +985,169 @@ describe('the legacy tick flag, the voiced why and the night call (parts 6 and 7
     expect(turns).toHaveLength(1);
     expect(turns[0].options).toEqual({ night: true });
     expect(turns[0].text).toContain('<night_call sim="Elliot Calloway" sim_id="100" ending_day="40" new_day="41">');
+  });
+});
+
+describe('the Jev day (2026-10-27)', () => {
+  const DAY_CLOCK = { hour: 10, minute: 0, absolute_day: 40, day: 2, paused: false };
+  const BILLS_LOT = { clock: DAY_CLOCK, bills: { due: true, amount: 300 }, action_keys: ['pay_bills'], funds: 900 };
+  const pickBy =
+    (word: string, importance = 1): JevAnswer =>
+    (questions) => {
+      const criteria = (questions.pick as { criteria?: Record<string, string> } | undefined)?.criteria ?? {};
+      const key = Object.keys(criteria).find((candidate) => criteria[candidate].includes(word)) ?? 'none';
+      return { pick: { choice: key, probabilities: { [key]: 0.8 } }, importance: { score: importance - 1 } };
+    };
+  const startWith =
+    (p: number, importance = 1): JevAnswer =>
+    () => ({
+      start: { noul: p },
+      importance: { score: importance - 1 },
+    });
+  const handsPick =
+    (rowId: string): JevAnswer =>
+    (questions) =>
+      questions.item ? { item: { choice: rowId } } : { target: { choice: 'g0' } };
+
+  function twoRows(options: CtxOptions) {
+    const built = buildCtx({ rows: true, legacyTick: false, vocabulary: 'pie', ...options });
+    // A desire armed before the first report becomes a scene row on it, beside the bills row
+    built.cognition.armDesireFromScene('100', {
+      score: 9,
+      reason: 'wants to clear the air with Adrian',
+      targetSimId: '200',
+    });
+    built.cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    return built;
+  }
+
+  it('picks the row the decision names (not the first) and the hands click the pie item with no text stage', async () => {
+    const jev: JevAnswer = (questions) =>
+      questions.pick ? pickBy('clear the air', 2)(questions) : handsPick('r12')(questions);
+    const { dispatched, oneShotCalls, decisions, intentions, voiced } = twoRows({ jev });
+    await settle();
+    expect(decisions.map((call) => call.label)).toEqual([
+      'Jev Row Pick: Elliot Calloway',
+      'Jev Hands: Elliot Calloway item',
+    ]);
+    expect(oneShotCalls.some((label) => label.startsWith('Action Options') || label.startsWith('Action Choice'))).toBe(
+      false,
+    );
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].pie).toMatchObject({ item: 'mixer_social_AskAboutDay', target_id: '200' });
+    const rows = intentions.rowsFor('100');
+    expect(rows.find((row) => row.source === 'bills')?.status).toBe('waiting');
+    expect(rows.find((row) => row.source === 'scene')?.status).toBe('in_flight');
+    // Importance 2 is under the show threshold (4): no thought, nothing voiced
+    expect(oneShotCalls).toEqual([]);
+    expect(voiced).toEqual([]);
+  });
+
+  it('none: nothing fires, no attempt is counted, the Sim cools down', async () => {
+    const { dispatched, oneShotCalls, cognition, intentions } = twoRows({ jev: pickBy('nothing-matches') });
+    await settle();
+    expect(dispatched).toEqual([]);
+    expect(oneShotCalls).toEqual([]);
+    expect(intentions.rowsFor('100').every((row) => row.status === 'waiting' && row.attempts === 0)).toBe(true);
+    expect(cognition.getPhase('100')).toBe('COOLDOWN');
+  });
+
+  it('a failed decision falls back to the first row', async () => {
+    const { dispatched } = twoRows({
+      jev: () => {
+        throw new Error('decisions down');
+      },
+    });
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].action).toBe('pay_bills');
+  });
+
+  it('a lone row is a yes-no: under 0.5 waits', async () => {
+    const { cache, dispatched } = buildCtx({ rows: true, legacyTick: false, jev: startWith(0.2) });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toEqual([]);
+  });
+
+  it('an important approved beat gets a text thought in the memories window after the click, replacing the row line', async () => {
+    const { cache, dispatched, oneShotCalls, prompts, memories, voiced } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      jev: startWith(0.9, 4),
+    });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(oneShotCalls).toEqual(['Beat Thought: Elliot Calloway']);
+    expect(prompts[0]).toContain('You decided: yes');
+    expect(voiced).toEqual([]);
+    expect(memories).toHaveLength(1);
+    expect(memories[0].memory).toMatchObject({
+      event_type: 'monologue',
+      content: 'Elliot Calloway (to self): Right, bills first.',
+    });
+  });
+
+  it('the top tier voices the thought as the Sim to self', async () => {
+    const { cache, dispatched, voiced, memories } = buildCtx({ rows: true, legacyTick: false, jev: startWith(0.9, 5) });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(voiced).toHaveLength(1);
+    expect(voiced[0].lines).toEqual([
+      { speaker: 'Elliot Calloway (to self)', text: 'Right, bills first.', simId: '100' },
+    ]);
+    expect(memories).toHaveLength(1);
+  });
+
+  it('an unimportant beat keeps the row line as before and makes no text call', async () => {
+    const { cache, dispatched, voiced, oneShotCalls } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      jev: startWith(0.9, 1),
+    });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toHaveLength(1);
+    expect(oneShotCalls).toEqual([]);
+    expect(voiced).toHaveLength(1);
+    expect(voiced[0].lines[0].text).toBe(BILLS_SAY);
+  });
+
+  it('an important decline is thought about too, in the memories window', async () => {
+    const { cache, dispatched, oneShotCalls, prompts, memories } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      jev: startWith(0.1, 4),
+    });
+    cache.ingest(report(1, { is_household: true }, BILLS_LOT));
+    await settle();
+    expect(dispatched).toEqual([]);
+    expect(oneShotCalls).toEqual(['Beat Thought: Elliot Calloway']);
+    expect(prompts[0]).toContain('You decided: no');
+    expect(memories).toHaveLength(1);
+  });
+
+  it('a scene with no scores asks per household Sim and arms a scene row on a yes', async () => {
+    const { cache, cognition, intentions, decisions } = buildCtx({
+      rows: true,
+      legacyTick: false,
+      jev: () => ({ impulse: { noul: 0.8 }, importance: { score: 2 } }),
+    });
+    cache.ingest(report(1, { is_household: true }, { clock: DAY_CLOCK }));
+    await settle();
+    await cognition.armSceneImpulses(
+      [
+        { sim_id: '100', name: 'Elliot Calloway' },
+        { sim_id: '200', name: 'Adrian Calloway' },
+      ],
+      { summary: 'A row over the dishes', dialogue: 'Elliot: You never wash up.\nAdrian: I do!' },
+    );
+    expect(decisions.map((call) => call.label)).toEqual(['Jev Impulse: Elliot Calloway']);
+    const scene = intentions.rowsFor('100').find((row) => row.source === 'scene');
+    expect(scene).toBeDefined();
+    expect(scene?.why).toContain('Adrian Calloway');
+    expect(scene?.what).toMatchObject({ kind: 'deliberate', desire: { score: 8, targetSimId: '200' } });
   });
 });

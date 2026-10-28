@@ -302,6 +302,19 @@ describe('the budget gate', () => {
     expect(gate.p90Ms()).toBe(40_000);
   });
 
+  it('the Jev day: a lower seed and sub-2 s samples when the caller says they reached a model', () => {
+    const gate = new BudgetGate();
+    gate.seed(2_000);
+    expect(gate.p90Ms()).toBe(2_000);
+    [300, 400, 500, 600, 700].forEach((ms) => {
+      gate.recordLatency(ms, 0);
+    });
+    expect(gate.p90Ms()).toBe(700);
+    // The default floor still drops a gate-only deliberation
+    gate.recordLatency(100);
+    expect(gate.p90Ms()).toBe(700);
+  });
+
   it('learns the pace from the reports and shuts a call that cannot finish in the window', () => {
     const gate = new BudgetGate();
     const now = 40 * 1440 + 600;

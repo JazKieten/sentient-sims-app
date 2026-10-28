@@ -342,3 +342,32 @@ gives each line a deliveryNote from the speaker's current mood (util/moodDeliver
 (elevenLabsLineText); other models ignore it. Tag words are voice qualities only, since v4 plays a noun tag as a
 sound effect, and bookkeeping moods (fine, asleep, possessed, recharging, hyper) get none. Switch: moodTags on
 the ElevenLabs settings (checkbox on the ElevenLabs tab, on by default). Tests: moodDeliveryTags, PlayTTS.
+
+The Jev day (branch jev-day off autonomy, 2026-10-27): the day-time actions pipeline primarily on Jev,
+the OpenRouter Decisions API, for a one-day comparison with release/4.6's autonomy. services/DecisionService.ts
+(core; `ctx.decisions`): `decide(state, questions, {label, stageId, timeoutMs 4 s})` POSTs
+https://openrouter.ai/api/alpha/decisions with the OpenRouter key (settings, else OPENROUTER_KEY), model
+`decisionModel` (typesafe/jev-1.13); questions are `choice {criteria: {key: label}}`, `noul {true,false}` and
+`score [levels]`, answers `choice` / `probabilities` / `noul` (P true) / `score` (0-based), all answered in
+parallel (a dependent pick is two calls). Logged under AIActionType.DECISION (StageId.BASAL_GANGLIA_DECISION)
+with a synthetic chat-shaped request and `usage.cost` in the response text (no cost column). `enabled()` =
+`decisionProvider` 'jev' and a key; off, every caller takes the path it took before. CognitionService:
+`fireRowDecided` (the row lane when enabled: `IntentionService.candidates` lists the eligible rows in order,
+`recordPick` logs the chosen one; a choice over the first 6 + none with an importance score, a lone row a
+yes-no; none = cooldown, no attempt; a failed call = the first row), `jevHands` (runActionScene on a pie
+vocabulary: targets then items, `validateIntent` on the row id, no text stages), `armSceneImpulses` (through
+`ctx.ext.conversationActions.armSceneImpulses` from AIService when a scene has no scores: noul >= 0.6 arms a
+scene row with a templated reason; setting `jevSceneImpulse`), and the thought tiers: `runtime.lastDecision`
+carries the importance to the dispatch; at `thoughtShowScore` (3) `queueThought` makes ONE text call after the
+click (AIActionType.BEAT_THOUGHT, StageId.BEAT_THOUGHT, prompt BEAT_THOUGHT_SYSTEM_PROMPT) and stores it as a
+monologue row (`noteToSelf`, memories window only); at `thoughtVoiceScore` (5) it is voiced (`sayToSelf`, the
+former voiceWhy body); an important decline is thought about too; under the threshold the row's `say` is voiced
+as before. BudgetGate: `recordLatency(ms, minMs)` and `seed(ms)` so sub-2 s Jev deliberations count. Tests:
+DecisionService.test.ts, the Jev-day block in CognitionAutonomy.test.ts, IntentionService.test.ts
+(candidates/recordPick), StoryClicks.test.ts (seed), JevDayToggle.test.ts. THE ONE SWITCH: `jevDayAutonomy`
+(SettingsEnum.JEV_DAY_AUTONOMY, default true; renderer/settings/JevDaySettingsComponent.tsx, a Switch on the
+autonomy tier's settings rows): off = release/4.6's autonomy in this same build, because the getters
+`cognitionLegacyTick` (true), `intentionRowsEnabled`, `cognitionGateEnabled`, `intentionNightCallEnabled`,
+`jevSceneImpulse` (false), `cognitionVocabulary` ('whitelist') and `decisionProvider` ('off') all answer from
+it; on, the stored per-feature values apply. The cognition lanes read the getters each tick, so a flip takes
+effect without a restart. The other Jev settings have no UI.

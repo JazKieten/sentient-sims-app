@@ -145,6 +145,7 @@ function construct(ctx: ApiContext) {
     armDesireFromScene: (simId, desire) => {
       autonomy.cognitionService.armDesireFromScene(simId, desire);
     },
+    armSceneImpulses: (performers, scene) => autonomy.cognitionService.armSceneImpulses(performers, scene),
   };
   ctx.ext.plumCognition = (simId) => {
     const absoluteDay = ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;

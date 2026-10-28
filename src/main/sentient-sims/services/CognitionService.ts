@@ -11,7 +11,9 @@ import { InteractionOutcomeEvent, VocabularyResult, VocabularyRow } from '../mod
 import { CognitionHoldReleased } from '../models/ModLogWebsocketMessage';
 import type { IntentionRow } from '../models/IntentionRow';
 import type { IntentionService } from './intentions/IntentionService';
-import { ACTION_OPTIONS_PIE_SYSTEM_PROMPT } from '../pipeline/prompts/action';
+import { ACTION_OPTIONS_PIE_SYSTEM_PROMPT, BEAT_THOUGHT_SYSTEM_PROMPT } from '../pipeline/prompts/action';
+import { chosenKey, DecisionQuestion, IMPORTANCE_LEVELS, scoreLevel } from './DecisionService';
+import { formatSelfStatusSections } from '../util/formatSelfStatus';
 import { offerableRows, whitelistRows } from '../util/formatVocabulary';
 import { describeSim } from './plum/plumLiveSims';
 import { GradedOutcomeEvent } from './OutcomeVerdictService';
@@ -96,7 +98,22 @@ type SimRuntime = {
   activeRowId?: string;
   // The armed desire came from a row: a refused gate must clear it (collision 2)
   rowArmed?: boolean;
+  // The Jev day: what the decision model said at the last row pick (the row it chose or
+  // 'none', and how much the moment mattered, 1-5). The thought tier reads it after the
+  // dispatch, so the thought rides the beat it belongs to.
+  lastDecision?: { rowId?: string; choice: string; importance: number; at: number };
 };
+
+// The Jev day: a row choice reads `why` text, and 'none' grows with the list, so the pick
+// sees at most this many rows (the first in list order, which is already by rank)
+const JEV_ROW_CAP = 6;
+// ...and the hands see at most this many targets and this many items of one target
+const JEV_TARGET_CAP = 12;
+const JEV_ITEM_CAP = 24;
+// Replay 2026-10-28 over Jaz's 4.6 streams: at 0.5 one character-scene in seven arms a row
+// (GPT's scores armed two in three, and under half of those pushes ran)
+const JEV_IMPULSE_MIN = 0.5;
+const JEV_NONE_COOLDOWN_TICKS = 4;
 
 // G-10: outcome causes (mod's ss_failure_reasons) that mean "the moment was wrong, the
 // verb is fine" — the only ones an automatic retry may spend itself on. Everything else
@@ -610,6 +627,12 @@ export class CognitionService {
 
   // The per-tick deliberation (monologue, scores) and the Action Scene's review stage
   // (autonomy part 7): on only when cognitionLegacyTick says so, whether or not rows are on
+  // The Jev day is on: the setting says 'jev' and an OpenRouter key resolves
+  private jev(): boolean {
+    const decisions = (this.ctx as Partial<Pick<ApiContext, 'decisions'>>).decisions;
+    return typeof decisions?.enabled === 'function' && decisions.enabled();
+  }
+
   private legacyTick(): boolean {
     return this.ctx.settings.cognitionLegacyTick;
   }
@@ -864,11 +887,32 @@ export class CognitionService {
           if (this.suspended(entry)) {
             return;
           }
-          const row = intentions.pick(entry, report, {
-            suppressed: (key) =>
+          const pickOptions = {
+            suppressed: (key: string) =>
               this.recentlyFailedActions(runtime).has(key) || (runtime.fixIneligibleUntil.get(key) ?? 0) > now,
             usable: this.usableVerbs(entry, report),
-          });
+          };
+          if (this.jev()) {
+            // The Jev day: the list says what could fire, the decision model says whether
+            // and which (fireRowDecided); a deliberate candidate takes a slot conservatively
+            const eligible = intentions.candidates(entry, report, pickOptions);
+            if (eligible.length === 0) {
+              return;
+            }
+            if (eligible.some((candidate) => candidate.what.kind === 'deliberate')) {
+              if (deliberating >= maxConcurrent) {
+                return;
+              }
+              deliberating += 1;
+            }
+            rowFired.add(entry.sim_id);
+            void this.fireRowDecided(entry, report, eligible).catch((error: unknown) => {
+              log.error(`[Rows] deciding for sim ${entry.sim_id} crashed`, error);
+              this.toCooldown(entry.sim_id);
+            });
+            return;
+          }
+          const row = intentions.pick(entry, report, pickOptions);
           if (!row) {
             return;
           }
@@ -2139,7 +2183,15 @@ export class CognitionService {
         // Part 7: the row's own line, said as the click goes out (pie, action and deliberate
         // rows all dispatch here)
         const row = this.autonomy.intentions?.rowsFor(simId).find((candidate) => candidate.id === rowId);
-        if (row?.say) {
+        const decision = runtime.lastDecision?.rowId === rowId ? runtime.lastDecision : undefined;
+        if (decision) {
+          runtime.lastDecision = undefined;
+        }
+        if (decision && decision.importance >= this.ctx.settings.thoughtShowScore) {
+          // The Jev day: an important beat gets its thought (text, or voiced at the top
+          // tier) AFTER the click went out; it replaces the row's own line for this beat
+          this.queueThought(entry, row, decision, 'approved');
+        } else if (row?.say) {
           this.voiceWhy(entry, row);
         }
       }
@@ -2167,14 +2219,27 @@ export class CognitionService {
       log.debug(`[Rows] ${name.split(/\s+/)[0]} already said ${row.seedKey} today`);
       return;
     }
+    if (this.sayToSelf(entry, say, row.why)) {
+      intentions?.markSaid(entry.sim_id, row);
+    }
+  }
+
+  // The voiced recipe: a "(to self)" line through the scene_line path (balloon, mouth,
+  // memories row), stored as the Sim's monologue. True when it went out.
+  private sayToSelf(entry: SimStateEntry, text: string, why?: string): boolean {
+    const name = entry.sim_name?.trim();
+    const say = text.trim();
+    if (!name || !say) {
+      return false;
+    }
     // Older test stubs carry no TTS
     const ai = this.ctx.ai as Partial<Pick<ApiContext['ai'], 'playTtsLines'>> | undefined;
     if (typeof ai?.playTtsLines !== 'function') {
-      return;
+      return false;
     }
     try {
       if (!canSpeak(this.ctx, { sim_id: entry.sim_id })) {
-        return;
+        return false;
       }
       const speaker = `${name} (to self)`;
       const finalText = `${speaker}: ${say}`;
@@ -2183,7 +2248,7 @@ export class CognitionService {
           content: finalText,
           location_id: entry.location?.zone_id ?? 0,
           event_type: 'monologue',
-          action: row.why,
+          action: why,
         },
         participants: [{ id: entry.sim_id }],
         index: { owner: entry.sim_id },
@@ -2193,11 +2258,390 @@ export class CognitionService {
         paced: true,
         pacedText: finalText,
       });
-      intentions?.markSaid(entry.sim_id, row);
       log.info(`[Rows] ${name.split(/\s+/)[0]} says: "${say}"`);
+      return true;
     } catch (error) {
-      log.warn(`[Rows] could not voice ${row.id} for sim ${entry.sim_id}`, error);
+      log.warn(`[Rows] could not voice a line for sim ${entry.sim_id}`, error);
+      return false;
     }
+  }
+
+  // The silent recipe (the Jev day's text tier): the same monologue row, memories window
+  // only. The mod keeps monologue rows off the subtitle/pause path, so nothing is voiced,
+  // nothing pauses, no balloon.
+  private noteToSelf(entry: SimStateEntry, text: string, why: string | undefined, importance: number): boolean {
+    const name = entry.sim_name?.trim();
+    const think = text.trim();
+    if (!name || !think) {
+      return false;
+    }
+    try {
+      this.ctx.memoryRepository.createMemory({
+        memory: {
+          content: `${name} (to self): ${think}`,
+          location_id: entry.location?.zone_id ?? 0,
+          event_type: 'monologue',
+          action: why,
+        },
+        participants: [{ id: entry.sim_id }],
+        index: { owner: entry.sim_id, importance },
+      });
+      log.info(`[Rows] ${name.split(/\s+/)[0]} thinks: "${think}"`);
+      return true;
+    } catch (error) {
+      log.warn(`[Rows] could not store a thought for sim ${entry.sim_id}`, error);
+      return false;
+    }
+  }
+
+  // --- the Jev day (2026-10-27) ---------------------------------------------------------------
+
+  // What the decision model sees of a Sim: the status block the prompts use, the clock, the
+  // Sims around, and the report's own line for the Sim
+  private jevState(entry: SimStateEntry, report: SimStateReport | undefined): Record<string, unknown> {
+    const clock = report?.lot?.clock;
+    const around = (report?.sims ?? [])
+      .filter((other) => other.sim_id !== entry.sim_id && speciesWord(other.self?.species) === undefined)
+      .slice(0, 8)
+      .map((other) => describeSim(other, false));
+    const hhmm =
+      clock && clock.hour !== undefined
+        ? `${String(clock.hour).padStart(2, '0')}:${String(clock.minute ?? 0).padStart(2, '0')}`
+        : undefined;
+    return {
+      sim: entry.sim_name ?? entry.sim_id,
+      now: describeSim(entry, false),
+      status: formatSelfStatusSections(entry, undefined, clock).join('\n'),
+      clock: hhmm,
+      venue: report?.lot?.venue,
+      around,
+    };
+  }
+
+  // Whether and which: one decision over the rows that could fire now (+ none = wait), with
+  // how much the moment matters. Failure or timeout = the list's own first row, as before.
+  private async fireRowDecided(entry: SimStateEntry, report: SimStateReport, eligible: IntentionRow[]): Promise<void> {
+    const simId = entry.sim_id;
+    const runtime = this.runtime(simId);
+    const intentions = this.autonomy.intentions;
+    const first = eligible.at(0);
+    if (!intentions || !first) {
+      return;
+    }
+    const simName = entry.sim_name ?? simId;
+    const name = simName.split(/\s+/)[0];
+    const rows = eligible.slice(0, JEV_ROW_CAP);
+    const state = {
+      ...this.jevState(entry, report),
+      could_do: rows.map((row) => ({
+        id: row.id,
+        source: row.source,
+        kind: row.what.kind,
+        why: row.why,
+        say: row.say,
+        target: row.target?.name,
+      })),
+    };
+    const criteria: Record<string, string> = {};
+    rows.forEach((row) => {
+      criteria[row.id] = `${row.why}${row.target?.name ? ` (with ${row.target.name})` : ''}`;
+    });
+    criteria.none = 'wait; none of these fits this moment';
+    const single = rows.length === 1;
+    const importance: DecisionQuestion = {
+      type: 'score',
+      instructions: `How much does this moment matter to ${simName} (their day, their feelings, their relationships)?`,
+      criteria: IMPORTANCE_LEVELS,
+    };
+    const asked: Record<string, DecisionQuestion> = single
+      ? {
+          start: {
+            type: 'noul',
+            instructions: `Would ${simName} start "${first.why}" right now, given their status, the hour and who is around?`,
+            criteria: { true: 'yes, they would start it now', false: 'no, not at this moment' },
+          },
+          importance,
+        }
+      : {
+          pick: {
+            type: 'choice',
+            instructions: `${simName} could start one of these now. Which would they actually start at this moment, given their status, the hour and who is around? Pick "none" to wait.`,
+            criteria,
+          },
+          importance,
+        };
+
+    runtime.gating = true;
+    let chosen: IntentionRow | undefined;
+    let level = 1;
+    let verdict: string;
+    try {
+      const result = await this.ctx.decisions.decide(state, asked, {
+        label: `Jev Row Pick: ${simName}`,
+        stageId: StageId.LIMBIC_SALIENCE,
+      });
+      level = scoreLevel(result.answers.importance, IMPORTANCE_LEVELS.length);
+      if (single) {
+        const p = result.answers.start?.noul;
+        const yes = typeof p === 'number' ? p >= 0.5 : true;
+        chosen = yes ? first : undefined;
+        verdict = `start=${typeof p === 'number' ? p.toFixed(2) : '?'}`;
+      } else {
+        const key = chosenKey(result.answers.pick, criteria);
+        chosen = key === 'none' ? undefined : rows.find((row) => row.id === key);
+        const p = result.answers.pick?.probabilities?.[key];
+        verdict = `pick=${key}${typeof p === 'number' ? ` (${p.toFixed(2)})` : ''}`;
+      }
+      log.info(
+        `[Rows] ${name} jev: ${verdict} importance=${level} of ${rows.length} row(s) in ${result.ms}ms${
+          result.cost !== undefined ? ` $${result.cost.toFixed(5)}` : ''
+        }`,
+      );
+    } catch (error) {
+      log.warn(`[Rows] ${name} jev decision failed; the list's first row fires`, error);
+      chosen = first;
+    } finally {
+      runtime.gating = false;
+    }
+
+    if (!chosen) {
+      runtime.lastDecision = { choice: 'none', importance: level, at: Date.now() };
+      // No attempt, no beat: the rows stay waiting. Four ticks, not one: live 2026-10-27 a
+      // declined Sim was re-asked every 15 s with the same answer
+      this.toCooldown(simId, JEV_NONE_COOLDOWN_TICKS);
+      this.queueThought(entry, first, runtime.lastDecision, 'declined');
+      return;
+    }
+    runtime.lastDecision = { rowId: chosen.id, choice: chosen.id, importance: level, at: Date.now() };
+    intentions.recordPick(entry, report, chosen, eligible);
+    await this.fireRow(entry, report, chosen);
+  }
+
+  // The hands: which target, then which item of that target, over the pie rows the mod
+  // offered. Returns the validated intent, or undefined when nothing fits (stood down).
+  private async jevHands(params: {
+    entryView: SimStateEntry;
+    lotActionKeys: string[] | undefined;
+    simLabel: string;
+    thought?: string;
+    actionReason?: string;
+    venues?: VenueEntry[];
+    rows: VocabularyRow[];
+  }): Promise<CognitionIntent | undefined> {
+    const { entryView, lotActionKeys, simLabel, thought, actionReason, venues, rows } = params;
+    const usable = rows.filter((row) => !row.greyed && !row.picker && row.id && row.key);
+    if (usable.length === 0) {
+      log.info(`[Cognition] ${simLabel} jev hands: nothing clickable offered`);
+      return undefined;
+    }
+    const report = this.ctx.simStateCache.getReport();
+    const base = {
+      ...this.jevState(entryView, report),
+      intention: actionReason ?? thought ?? '(a change of course)',
+      thought,
+    };
+    // Stage 1: the target. Groups keep the vocabulary's order (self first, then Sims, objects).
+    const groups = new Map<string, VocabularyRow[]>();
+    usable.forEach((row) => {
+      const key = `${row.target_kind}|${row.target_id ?? row.target}`;
+      const list = groups.get(key) ?? [];
+      list.push(row);
+      groups.set(key, list);
+    });
+    const groupList = [...groups.values()].slice(0, JEV_TARGET_CAP);
+    let group = groupList[0];
+    if (groupList.length > 1) {
+      const criteria: Record<string, string> = {};
+      groupList.forEach((list, index) => {
+        const head = list[0];
+        const peek = [...new Set(list.map((row) => row.category ?? row.label))].slice(0, 4).join(', ');
+        criteria[`g${index}`] = `${head.target_kind === 'self' ? `${head.target} (self menu)` : head.target}: ${peek}`;
+      });
+      criteria.none = 'nothing here fits; keep doing what I am doing';
+      const answer = await this.ctx.decisions.decide(
+        base,
+        {
+          target: {
+            type: 'choice',
+            instructions:
+              'The Sim wants to carry out the intention. Which target (person, object or their own menu) would a player click on for it? Pick "none" if nothing listed fits.',
+            criteria,
+          },
+        },
+        { label: `Jev Hands: ${simLabel} target`, stageId: StageId.BASAL_GANGLIA_OPTIONS },
+      );
+      const key = chosenKey(answer.answers.target, criteria);
+      if (key === 'none') {
+        log.info(`[Cognition] ${simLabel} jev hands: no target fits (${answer.ms}ms)`);
+        return undefined;
+      }
+      const picked = groupList.at(Number(key.slice(1)));
+      if (picked === undefined) {
+        return undefined;
+      }
+      group = picked;
+    }
+    // Stage 2: the item, one key per row and per option, labelled with its category
+    const items = group.slice(0, JEV_ITEM_CAP);
+    const criteria: Record<string, string> = {};
+    const lookup = new Map<string, { row: VocabularyRow; option?: string }>();
+    items.forEach((row) => {
+      const path = row.category ? `${row.category} > ` : '';
+      if (row.options?.length) {
+        row.options.forEach((option, index) => {
+          const key = `${row.id}|${index}`;
+          criteria[key] = `${path}${row.label.replace(/\s*<choice>\s*$/, '')} ${option}`;
+          lookup.set(key, { row, option });
+        });
+      } else {
+        criteria[row.id] = `${path}${row.label}`;
+        lookup.set(row.id, { row });
+      }
+    });
+    criteria.none = 'nothing in this menu fits the intention';
+    const head = group[0];
+    const answer = await this.ctx.decisions.decide(
+      { ...base, target: head.target },
+      {
+        item: {
+          type: 'choice',
+          instructions: `Which pie-menu item on ${head.target} carries out the intention? Pick "none" if nothing fits.`,
+          criteria,
+        },
+      },
+      { label: `Jev Hands: ${simLabel} item`, stageId: StageId.BASAL_GANGLIA_CHOICE },
+    );
+    const key = chosenKey(answer.answers.item, criteria);
+    const hit = lookup.get(key);
+    if (!hit) {
+      log.info(`[Cognition] ${simLabel} jev hands: no item fits on ${head.target} (${answer.ms}ms)`);
+      return undefined;
+    }
+    const validated = validateIntent(
+      { kind: 'action', row: hit.row.id, option: hit.option, motivation: actionReason, thought },
+      entryView,
+      lotActionKeys,
+      venues,
+      rows,
+    );
+    if (!validated.ok) {
+      log.info(`[Cognition] ${simLabel} jev hands: ${criteria[key]} refused: ${validated.reason}`);
+      return undefined;
+    }
+    log.info(`[Cognition] ${simLabel} jev hands: ${head.target} > ${criteria[key]} (${answer.ms}ms)`);
+    return validated.intent;
+  }
+
+  // After a scene whose scores were skipped (the lean pipeline): does it leave a household
+  // Sim wanting to act? One yes-no + importance per Sim; yes arms a scene row the way 4.6's
+  // scores did. Jev writes no text, so the reason is a template and the thought tier speaks
+  // when the row fires.
+  async armSceneImpulses(
+    performers: Array<{ sim_id: string; name: string }>,
+    scene: { summary?: string; dialogue: string },
+  ): Promise<void> {
+    if (!this.jev() || !this.ctx.settings.jevSceneImpulse) {
+      return;
+    }
+    const report = this.ctx.simStateCache.getReport();
+    for (const performer of performers) {
+      const entry = this.ctx.simStateCache.getSim(performer.sim_id);
+      if (!entry || entry.is_household !== true) {
+        continue;
+      }
+      const others = performers.filter((other) => other.sim_id !== performer.sim_id).map((other) => other.name);
+      try {
+        const result = await this.ctx.decisions.decide(
+          { ...this.jevState(entry, report), scene: scene.summary, dialogue: scene.dialogue, with: others },
+          {
+            impulse: {
+              type: 'noul',
+              instructions: `Does this conversation leave ${performer.name} wanting to go and DO something now (not just talk more)?`,
+              criteria: { true: 'yes, they want to act on it now', false: 'no, it changes nothing they do next' },
+            },
+            importance: {
+              type: 'score',
+              instructions: `How much did this conversation matter to ${performer.name}?`,
+              criteria: IMPORTANCE_LEVELS,
+            },
+          },
+          { label: `Jev Impulse: ${performer.name}`, stageId: StageId.LIMBIC_SALIENCE },
+        );
+        const p = result.answers.impulse?.noul ?? 0;
+        const level = scoreLevel(result.answers.importance, IMPORTANCE_LEVELS.length);
+        log.info(`[Cognition] ${performer.name} jev impulse ${p.toFixed(2)} importance=${level} (${result.ms}ms)`);
+        if (p >= JEV_IMPULSE_MIN) {
+          const score = Math.max(this.ctx.settings.cognitionActionScoreThreshold, Math.round(p * 10));
+          const targetSimId =
+            performers.length === 2 ? performers.find((other) => other.sim_id !== performer.sim_id)?.sim_id : undefined;
+          this.armDesireFromScene(performer.sim_id, {
+            score,
+            reason: `something in that conversation with ${others.join(' and ') || 'someone'}`,
+            targetSimId,
+          });
+        }
+      } catch (error) {
+        log.warn(`[Cognition] jev impulse failed for ${performer.name}`, error);
+      }
+    }
+  }
+
+  // The thought tiers (Scott, 2026-10-27): an important beat gets one cheap text call AFTER
+  // the click went out, in the Sim's own voice, saying what they decided. Text tier = the
+  // memories window only; voice tier (rarer) = the voiced "(to self)" line, which does the
+  // normal things. Fire-and-forget: nothing on the click path waits for it.
+  private queueThought(
+    entry: SimStateEntry,
+    row: IntentionRow | undefined,
+    decision: { importance: number },
+    verdict: 'approved' | 'declined',
+  ) {
+    if (decision.importance < this.ctx.settings.thoughtShowScore) {
+      return;
+    }
+    const name = entry.sim_name?.trim();
+    if (!name) {
+      return;
+    }
+    void (async () => {
+      try {
+        const state = this.jevState(entry, this.ctx.simStateCache.getReport());
+        const what = row ? `${row.why}${row.target?.name ? ` (with ${row.target.name})` : ''}` : 'a change of course';
+        const user = [
+          `You are ${name}.`,
+          String(state.status),
+          `Around you: ${(state.around as string[]).join('; ') || 'nobody'}`,
+          `What you were weighing: ${what}${row?.say ? `\nYour own words for it: ${row.say}` : ''}`,
+          verdict === 'approved' ? 'You decided: yes, you are going to do it right now.' : 'You decided: no, not now.',
+        ].join('\n');
+        // Not through the queue's cognition lane: live 2026-10-27 the running scenes starved
+        // that lane for minutes (as they held deliberate rows on 10-22), and a thought that
+        // lands minutes after its beat is noise. One small call, straight to the provider.
+        const shot = await this.ctx.ai.runOneShot(
+          `Beat Thought: ${name}`,
+          BEAT_THOUGHT_SYSTEM_PROMPT,
+          user,
+          60,
+          undefined,
+          AIActionType.BEAT_THOUGHT,
+        );
+        const text = shot.text
+          .trim()
+          .replace(/^["']|["']$/g, '')
+          .slice(0, 240);
+        if (!text) {
+          return;
+        }
+        if (decision.importance >= this.ctx.settings.thoughtVoiceScore && this.ctx.settings.intentionVoiceWhy) {
+          if (this.sayToSelf(entry, text, row?.why)) {
+            return;
+          }
+        }
+        this.noteToSelf(entry, text, row?.why, decision.importance);
+      } catch (error) {
+        log.warn(`[Rows] beat thought failed for sim ${entry.sim_id}`, error);
+      }
+    })();
   }
 
   // A directed scene's Reflection stage found this sim wanting a change (action score at
@@ -2359,7 +2803,8 @@ export class CognitionService {
           runtime.rowArmed = false;
         }
       }
-      this.autonomy.budgetGate?.recordLatency(Date.now() - startedAt);
+      // The Jev day: a hands deliberation is a model call that finishes under the 2 s floor
+      this.autonomy.budgetGate?.recordLatency(Date.now() - startedAt, this.jev() ? 0 : undefined);
       if (runtime.activeRowId === row.id) {
         intentions.onStoodDown(row.id, { reason: 'no dispatch' });
         runtime.activeRowId = undefined;
@@ -2440,6 +2885,10 @@ export class CognitionService {
       rows,
     } = params;
     const pie = rows !== undefined;
+    if (pie && this.jev()) {
+      // The Jev day: the hands pick over the menu in two typed decisions, no text stages
+      return this.jevHands({ entryView, lotActionKeys, simLabel, thought, actionReason, venues, rows: rows ?? [] });
+    }
     if (pie && !this.pieOverrideWarned) {
       const override = this.ctx.settings.stagePromptOverrides[StageId.BASAL_GANGLIA_OPTIONS];
       if (typeof override === 'string' && override.trim().length > 0) {

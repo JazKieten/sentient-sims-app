@@ -199,4 +199,19 @@ export const AllModelSettings: ModelSettingsType = {
   'gpt-4.1-nano-2025-04-14': {
     max_tokens: 32000,
   },
+
+  // OpenRouter-hosted models: their windows are 128k+, so the 3900 default only cut the head off
+  // long player replies. Nothing else fills to this budget today, so it costs nothing elsewhere.
+  'anthropic/claude-haiku-5.5': {
+    max_tokens: 8000,
+  },
+  '~anthropic/claude-sonnet-latest': {
+    max_tokens: 8000,
+  },
+  'meta-llama/llama-3.3-70b-instruct': {
+    max_tokens: 8000,
+  },
+  'meta-llama/llama-3.3-70b-instruct:nitro': {
+    max_tokens: 8000,
+  },
 };

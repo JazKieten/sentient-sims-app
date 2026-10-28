@@ -54,6 +54,18 @@ describe('Settings', () => {
     expect(ctx.settings.plumModel).toBe('claude-opus-5-5');
   });
 
+  it('autonomy parts 6 and 7 defaults: legacy tick off, night call on, the why voiced', () => {
+    expect(ctx.settings.cognitionLegacyTick).toBe(false);
+    expect(ctx.settings.intentionNightCallEnabled).toBe(true);
+    expect(ctx.settings.intentionVoiceWhy).toBe(true);
+    ctx.settings.set(SettingsEnum.COGNITION_LEGACY_TICK, true);
+    ctx.settings.set(SettingsEnum.INTENTION_NIGHT_CALL_ENABLED, false);
+    ctx.settings.set(SettingsEnum.INTENTION_VOICE_WHY, false);
+    expect(ctx.settings.cognitionLegacyTick).toBe(true);
+    expect(ctx.settings.intentionNightCallEnabled).toBe(false);
+    expect(ctx.settings.intentionVoiceWhy).toBe(false);
+  });
+
   it('get ai type openai', () => {
     ctx.settings.aiApiType = ApiType.OpenAI;
     expect(ctx.tokenCounter instanceof OpenAITokenCounter).toBeTruthy();

@@ -71,6 +71,33 @@ export enum SettingsEnum {
   COGNITION_PIPELINE = 'cognitionPipeline', // legacy review dial; unused since the Action Scene pipeline
   // Full Autonomy: a tick/scene action score at or above this stages an Action Scene
   COGNITION_ACTION_SCORE_THRESHOLD = 'cognitionActionScoreThreshold',
+  // Autonomy part 2 (2026-10-21): the options stage offers the game's pie menu ('pie', the
+  // mod's cognition vocabulary) or the 61-verb whitelist ('whitelist')
+  COGNITION_VOCABULARY = 'cognitionVocabulary',
+  // Autonomy part 1: every cognition lane asks the mod's moment predicate before a model call
+  COGNITION_GATE_ENABLED = 'cognitionGateEnabled',
+  // Autonomy part 5: the intention rows (the day loop's ordered list), the pace between
+  // beats in sim-minutes, and the need floor under which a need row exists
+  INTENTION_ROWS_ENABLED = 'intentionRowsEnabled',
+  INTENTION_BEAT_MINUTES = 'intentionBeatMinutes',
+  INTENTION_NEED_FLOOR = 'intentionNeedFloor',
+  COGNITION_LEGACY_TICK = 'cognitionLegacyTick',
+  INTENTION_NIGHT_CALL_ENABLED = 'intentionNightCallEnabled',
+  INTENTION_VOICE_WHY = 'intentionVoiceWhy',
+  // The Jev day (2026-10-27): the row lane's WHETHER and WHICH, the hands for a deliberate
+  // row and the after-scene impulse run on the OpenRouter Decisions API ('jev') or not
+  // ('off'); the importance score from the same request sets the thought tier (a text
+  // thought in the memories window from `thoughtShowScore`, a voiced one from
+  // `thoughtVoiceScore`, both 1-5)
+  // THE ONE SWITCH (Scott, 2026-10-27): on = the Jev day (rows decide, Jev picks, pie menu,
+  // the gate, the night call); off = release/4.6's autonomy (the legacy tick over the
+  // whitelist, no gate, no rows, no Jev). The getters below derive from it.
+  JEV_DAY_AUTONOMY = 'jevDayAutonomy',
+  DECISION_PROVIDER = 'decisionProvider',
+  DECISION_MODEL = 'decisionModel',
+  JEV_SCENE_IMPULSE = 'jevSceneImpulse',
+  THOUGHT_SHOW_SCORE = 'thoughtShowScore',
+  THOUGHT_VOICE_SCORE = 'thoughtVoiceScore',
   // Daily plans: nightly goals-from-pool + persona sentence + discretionary action loadout
   DAILY_GOALS_ENABLED = 'dailyGoalsEnabled',
   DAILY_LOADOUT_SIZE = 'dailyLoadoutSize',
@@ -107,6 +134,12 @@ export enum SettingsEnum {
   OUTCOME_INSTANT_SUCCESS_MS = 'outcomeInstantSuccessMs',
   // V-5a: how many rounds a directed scene may continue itself
   SCENE_MAX_ROUNDS = 'sceneMaxRounds',
+  // Lean (default, 2026-10-27): one actor call per Sim per round, the beat carried into every
+  // round, fixed rounds; no director, reviewer or per-round scores. Full: the 4.6 pipeline.
+  SCENE_PIPELINE_MODE = 'scenePipelineMode',
+  // Lean only: the actor rules without the Sim's name (one cacheable prefix shared by every
+  // Sim and every user). Series 3 of the voice-pipeline bench sets the default.
+  LEAN_NAME_FREE_RULES = 'leanNameFreeRules',
   // A directed scene is dropped, not aired late, once its game event is older than this:
   // the sims have moved on by then (stream 2026-10-11: fans at a VIP rope stacked up
   // scenes that aired minutes after the game had paired the celebrity with someone else)
@@ -120,6 +153,9 @@ export enum SettingsEnum {
   // The scorer's action verdict a reply must reach before it may act (its own bar, above
   // the tick's: a chat is not an invitation to go do chores)
   CONVERSATION_ACTION_SCORE_THRESHOLD = 'conversationActionScoreThreshold',
+  // A Twitch viewer's line may turn into an action (off: viewers never arm or stage one; the
+  // 10-19 stream had viewers' heckles waking a sleeping Sim into clean_up)
+  CONVERSATION_ACTIONS_FROM_VIEWERS = 'conversationActionsFromViewers',
   // Pets, babies and infants (the sims the player cannot control) take speaking turns.
   // Off: they still think, as a private monologue row, but never say a line aloud
   NON_CONTROLLABLE_SIMS_SPEAK = 'nonControllableSimsSpeak',
@@ -170,6 +206,9 @@ export enum SettingsEnum {
 
 // The values of SettingsEnum.PLUM_BRAIN
 export type PlumBrain = 'api' | 'claude-code';
+
+// The directed-scene pipeline: see SettingsEnum.SCENE_PIPELINE_MODE
+export type ScenePipelineMode = 'lean' | 'full';
 
 export enum DeprecatedSettingsEnum {
   CUSTOM_LLM_ENABLED = 'customLLMEnabled',

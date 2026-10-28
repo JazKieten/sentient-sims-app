@@ -113,6 +113,8 @@ describe('Ask actions', () => {
 
   beforeEach(() => {
     ctx = mockApiContext();
+    // These tests mock the 4.6 pipeline by stage label; the default is lean (2026-10-27)
+    ctx.settings.set(SettingsEnum.SCENE_PIPELINE_MODE, 'full');
     // No sqlite in this suite: the prompt builder (the only unguarded DB toucher on
     // these paths) is stubbed, and the repository calls under test are spied directly
     const promptRequest: PromptRequest = {

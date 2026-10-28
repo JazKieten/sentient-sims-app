@@ -67,6 +67,8 @@ const SCORES_WANTING_MORE = JSON.stringify({
 
 function scene(sessionId: string, options: { onLabel?: (label: string) => void } = {}) {
   const ctx: ApiContext = mockApiContext();
+  // These tests mock the 4.6 pipeline by stage label; the default is lean (2026-10-27)
+  ctx.settings.set(SettingsEnum.SCENE_PIPELINE_MODE, 'full');
   fs.mkdirSync(ctx.directory.getSentientSimsFolder(), { recursive: true });
   ctx.db.loadDatabase({ sessionId, saveId: '1' });
   ctx.settings.set(SettingsEnum.GENERATED_DEFAULT_DESCRIPTIONS, false);

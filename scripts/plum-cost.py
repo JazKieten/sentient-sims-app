@@ -2,7 +2,7 @@
 """Plum's meter: what Plum's model calls cost, from the app's main.log.
 
 Reads every `[Plum] turn N: stop=... in=... cache_read=... cache_write=... out=... ctx=...
-kind=chat|director|wake model=<id> detached=true|false` line (PlumService.runTurnInner; lines
+kind=chat|director|wake|night model=<id> detached=true|false` line (PlumService.runTurnInner; lines
 from before 2026-10-18 carry no kind/model and are priced as Opus chat) and prints, per kind:
 calls, turns, $ total, $/hour of wall time the kind was active, model calls per turn and the
 context p50 / p90 / max. The $/hour is the number the Jaz brief asks for after a director run.
@@ -171,7 +171,7 @@ def main():
     header = f'{"kind":<9} {"calls":>5} {"turns":>5} {"calls/turn":>10} {"$":>7} {"$/hour":>7} {"ctx p50":>8} {"ctx p90":>8} {"ctx max":>8} {"detached":>8}'
     print(header)
     print('-' * len(header))
-    for kind in ('chat', 'director', 'wake'):
+    for kind in ('chat', 'director', 'wake', 'night'):
         rows = [c for c in calls if c['kind'] == kind]
         if not rows:
             continue

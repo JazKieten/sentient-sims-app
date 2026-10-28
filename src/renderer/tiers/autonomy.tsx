@@ -5,11 +5,13 @@
 import { AIActionType } from 'main/sentient-sims/models/AIActionType';
 import type { RendererTier } from './types';
 import ConversationActionsSettingsComponent from '../settings/ConversationActionsSettingsComponent';
+import JevDaySettingsComponent from '../settings/JevDaySettingsComponent';
 import VoiceCommandKeyRow from '../settings/voice/VoiceCommandKeyRow';
 
 export const autonomyRendererTier: RendererTier = {
   name: 'autonomy',
   settingsRows: [
+    { id: 'jev-day', Component: JevDaySettingsComponent, after: 'directed-scenes' },
     { id: 'conversation-actions', Component: ConversationActionsSettingsComponent, after: 'directed-scenes' },
   ],
   overrideActionTypes: [
@@ -20,6 +22,8 @@ export const autonomyRendererTier: RendererTier = {
     AIActionType.ASK_TRIAGE,
     AIActionType.ASK_ACTION_MATCH,
     AIActionType.ASK_DECISION,
+    AIActionType.DECISION,
+    AIActionType.BEAT_THOUGHT,
   ],
   voiceCommandRow: VoiceCommandKeyRow,
 };

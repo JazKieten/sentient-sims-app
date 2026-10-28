@@ -20,13 +20,47 @@ import { VoiceCommandService } from '../services/VoiceCommandService';
 import { CognitionController } from '../controllers/CognitionController';
 import { createSleepPlanner } from '../services/SleepPlanner';
 import { DirectorService } from '../services/DirectorService';
+import { ModQueryService } from '../services/ModQueryService';
+import { IntentionRepository } from '../db/IntentionRepository';
+import { IntentionService } from '../services/intentions/IntentionService';
+import { NightCallService } from '../services/intentions/NightCallService';
+import { RowMemoryRepository } from '../db/RowMemoryRepository';
+import { RowMemoryService } from '../services/intentions/RowMemoryService';
+import { VocabularySampler } from '../services/intentions/VocabularySampler';
+import { BudgetGate } from '../services/intentions/BudgetGate';
+import { ProcedureRepository } from '../db/ProcedureRepository';
+import { ProcedureService } from '../services/intentions/ProcedureService';
+import { ExperienceRepository } from '../db/ExperienceRepository';
+import { ExperienceService } from '../services/intentions/ExperienceService';
 
 export interface AutonomyServices {
   dailyPlanRepository: DailyPlanRepository;
+  // The intention rows' own table (autonomy part 5)
+  intentionRepository: IntentionRepository;
   actionOutcomeRepository: ActionOutcomeRepository;
   actionDispatcher: ActionDispatcherService;
+  // Cognition's questions to the mod before a model call (the moment gate, the vocabulary)
+  modQuery: ModQueryService;
   outcomeVerdict: OutcomeVerdictService;
   dailyPlan: DailyPlanService;
+  // Row memory's tables (renovation R1, migration 027)
+  rowMemoryRepository: RowMemoryRepository;
+  // Counters per row key across days, the decision log, the household log, the menus seen (R1)
+  rowMemory: RowMemoryService;
+  // Procedures and pitfalls (R4, migration 029): what ran for a key, what failures taught
+  procedureRepository: ProcedureRepository;
+  procedures: ProcedureService;
+  // The private view's experiences (R5a, migration 030), ranked for the night call
+  experienceRepository: ExperienceRepository;
+  experiences: ExperienceService;
+  // The ordered row list per household Sim (autonomy part 5)
+  intentions: IntentionService;
+  // Once a day per Sim, the menus that matter (renovation R2)
+  vocabularySampler: VocabularySampler;
+  // SOFAI's rule for the day's remaining model calls: only when they fit the window (R3)
+  budgetGate: BudgetGate;
+  // One Plum turn per household Sim at the day rollover that edits the list (part 6)
+  nightCall: NightCallService;
   cognitionService: CognitionService;
   askAction: AskActionService;
   voiceCommand: VoiceCommandService;
@@ -49,10 +83,28 @@ function construct(ctx: ApiContext) {
   // from it when it runs
   const autonomy = {} as AutonomyServices;
   autonomy.dailyPlanRepository = new DailyPlanRepository(ctx.db);
+  autonomy.intentionRepository = new IntentionRepository(ctx.db);
   autonomy.actionOutcomeRepository = new ActionOutcomeRepository(ctx.db);
   autonomy.actionDispatcher = new ActionDispatcherService();
+  autonomy.modQuery = new ModQueryService();
   autonomy.outcomeVerdict = new OutcomeVerdictService(autonomy.actionOutcomeRepository);
   autonomy.dailyPlan = new DailyPlanService(ctx, autonomy);
+  autonomy.rowMemoryRepository = new RowMemoryRepository(ctx.db);
+  autonomy.rowMemory = new RowMemoryService(ctx, autonomy);
+  autonomy.procedureRepository = new ProcedureRepository(ctx.db);
+  autonomy.procedures = new ProcedureService(ctx, autonomy);
+  autonomy.experienceRepository = new ExperienceRepository(ctx.db);
+  autonomy.experiences = new ExperienceService(ctx, autonomy);
+  autonomy.budgetGate = new BudgetGate();
+  // The household's interactions the mod forwards (interactions/ss_household_log.py)
+  autonomy.modQuery.onInteractionLog((event) => {
+    autonomy.rowMemory.onInteractionLog(event.records);
+  });
+  // Needs modQuery for the game's goal_completed events
+  autonomy.intentions = new IntentionService(ctx, autonomy);
+  autonomy.vocabularySampler = new VocabularySampler(autonomy);
+  // Hears the rows' day rollover; cognition ticks it from the state report
+  autonomy.nightCall = new NightCallService(ctx, autonomy);
   // Subscribes to simStateCache reports and reaches back into ai/queue/dispatcher
   autonomy.cognitionService = new CognitionService(ctx, autonomy);
   autonomy.askAction = new AskActionService(ctx, autonomy);
@@ -63,6 +115,10 @@ function construct(ctx: ApiContext) {
   services.set(ctx, autonomy);
 
   ctx.ext.director = autonomy.director;
+  // The edit door of Plum's edit_intentions tool (the night call's one write)
+  ctx.ext.intentions = {
+    applyEdits: (simId, edits) => autonomy.intentions.applyEdits(simId, edits),
+  };
   ctx.ext.plumPush = (requestId, push) => {
     const sims = ctx.simStateCache.getReport()?.sims ?? [];
     const sim = sims.find((entry) => entry.sim_name?.toLowerCase() === push.sim_id.toLowerCase());
@@ -78,6 +134,7 @@ function construct(ctx: ApiContext) {
   ctx.ext.sleepPlanner = createSleepPlanner(ctx, autonomy);
   ctx.ext.conversationActions = {
     actOnConversation: async (simId, request) => {
+      // speakerKind rides the request as is (ConversationDesire carries the same field)
       const result = await autonomy.cognitionService.actOnConversation(simId, request);
       return {
         acted: result.acted,
@@ -88,6 +145,7 @@ function construct(ctx: ApiContext) {
     armDesireFromScene: (simId, desire) => {
       autonomy.cognitionService.armDesireFromScene(simId, desire);
     },
+    armSceneImpulses: (performers, scene) => autonomy.cognitionService.armSceneImpulses(performers, scene),
   };
   ctx.ext.plumCognition = (simId) => {
     const absoluteDay = ctx.simStateCache.getReport()?.lot?.clock?.absolute_day;
@@ -131,15 +189,46 @@ function routes(app: Express, ctx: ApiContext) {
   app.post('/cognition/debug/perception', controller.debugRequestPerception);
   // F5: graded outcomes for the loaded save
   app.get('/ai/outcomes', controller.getOutcomes);
+  // Intention rows (part 5): the inspection surface and the debug fire
+  app.get('/cognition/rows', controller.getRows);
+  // Row memory (R1): before /:simId, which would read 'stats' as a sim id
+  app.get('/cognition/rows/stats', controller.getRowStats);
+  app.get('/cognition/rows/stats/:simId', controller.getRowStats);
+  app.get('/cognition/rows/:simId', controller.getRows);
+  app.post('/cognition/debug/rows/fire', controller.debugFireRow);
+  // The night call (part 6), forced now for one Sim
+  app.post('/cognition/debug/night-call', controller.debugNightCall);
+  // Procedures and pitfalls (R4), and the live check's forced failure
+  app.get('/cognition/procedures', controller.getProcedures);
+  app.get('/cognition/procedures/:simId', controller.getProcedures);
+  app.post('/cognition/debug/procedure-fail', controller.debugProcedureFail);
+  // The private view (R5a): a Sim's experiences and how the night would rank them now
+  app.get('/cognition/experiences/:simId', controller.getExperiences);
 }
 
 export const autonomyTier: TierRegistration = {
   name: 'autonomy',
   construct,
   routes,
+  // {cognition: {...}} is the query channel's; everything else is not ours
+  onModMessage: (ctx, message) =>
+    message.cognition ? autonomyOf(ctx).modQuery.onModMessage(message.cognition) : false,
+  onModDisconnected: (ctx) => {
+    const autonomy = autonomyOf(ctx);
+    autonomy.modQuery.onModDisconnected();
+    autonomy.cognitionService.onModDisconnected();
+    autonomy.intentions.onModDisconnected();
+    autonomy.vocabularySampler.onModDisconnected();
+  },
   onDatabaseLoaded: (ctx) => {
     // The bounding pass for the graded outcomes this save holds (F5)
     autonomyOf(ctx).outcomeVerdict.pruneOnLoad();
+    // Rows are per save, and so is their memory
+    autonomyOf(ctx).intentions.onDatabaseLoaded();
+    autonomyOf(ctx).rowMemory.onDatabaseLoaded();
+    autonomyOf(ctx).procedures.onDatabaseLoaded();
+    autonomyOf(ctx).experiences.onDatabaseLoaded();
+    autonomyOf(ctx).vocabularySampler.onDatabaseLoaded();
   },
   onSceneClosed: (ctx, closed) => {
     // A reply to the player that wanted to act may act now that it has been heard
@@ -147,5 +236,6 @@ export const autonomyTier: TierRegistration = {
   },
   shutdown: (ctx) => {
     autonomyOf(ctx).director.stop();
+    autonomyOf(ctx).intentions.flush();
   },
 };

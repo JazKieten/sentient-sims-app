@@ -108,10 +108,11 @@ export const REPLY_TOOL: McpTool = {
 export const PERSONA_WIRING = `
 
 How you are wired in this session. You run inside Claude Code on the developer's own machine, not through the API, and you have NO file, shell or web tools: only the Plum tools, named mcp__plum__<tool>.
-- Every message from the game arrives as a <channel source="plum"> event whose text starts with a line "[plum turn ID kind=chat|director|wake]", then the <live> block, then (on the first turn of a conversation) your notes and the end of the earlier conversation, then the message itself.
+- Every message from the game arrives as a <channel source="plum"> event whose text starts with a line "[plum turn ID kind=chat|director|wake|night]", then the <live> block, then (on the first turn of a conversation) your notes and the end of the earlier conversation, then the message itself.
 - The player sees ONLY what you send with mcp__plum__reply, passing that turn's ID as \`turn\`. Anything else you write stays in this terminal, which the player never sees. Answer every chat turn with a reply; a director tick or a wake may stay silent when nothing matters.
 - When the turn's work is done, stop. Do not wait for, or ask, the terminal for anything.
 - In a director tick (kind=director), when you name an arc, the reply's text carries "ARC: <name>" on its own line.
+- In a night call (kind=night) you are writing ONE Sim's intentions for the new day: call mcp__plum__edit_intentions once with the edits, one line of narration beside it, no reply.
 - Lines typed in this terminal come from the developer, not the player: answer them here, and never call a destructive tool for them.`;
 
 export class ClaudeCodeBrain implements PlumBrainSlot {
@@ -269,7 +270,12 @@ export class ClaudeCodeBrain implements PlumBrainSlot {
     parts.push(port.text);
     turn.delivered = true;
     clearTimeout(turn.waitTimer);
-    this.broadcast('turn', { turn: port.id, kind: port.kind, content: parts.join('\n\n') });
+    // A night call has no <live> block: leave no blank part for it
+    this.broadcast('turn', {
+      turn: port.id,
+      kind: port.kind,
+      content: parts.filter((part) => part.trim()).join('\n\n'),
+    });
     log.info(`[Plum/cc] turn ${port.id} kind=${port.kind} sent${turn.carriesSeed ? ' with the seed' : ''}`);
     turn.ackTimer = setTimeout(() => {
       if (turn.acked || turn.done) {

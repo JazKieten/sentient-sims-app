@@ -60,6 +60,8 @@ function buildCtx(options: CtxOptions = {}) {
       cognitionMaxConcurrent: 1,
       cognitionPerSimHourlyBudget: options.hourlyBudget ?? 100,
       cognitionActionScoreThreshold: options.actionScoreThreshold ?? 7,
+      // These cases test the legacy per-tick pipeline (part 7 put it behind the flag)
+      cognitionLegacyTick: true,
     },
     simStateCache: cache,
     db: { isLoaded: () => true },
@@ -98,6 +100,7 @@ function buildCtx(options: CtxOptions = {}) {
           released.push(requestId);
         }
       },
+      getInFlight: () => undefined,
     },
     memoryRepository: {
       createMemory: (request: unknown) => {

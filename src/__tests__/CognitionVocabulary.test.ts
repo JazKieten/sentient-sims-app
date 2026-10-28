@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { offeredActions, validateIntent } from 'main/sentient-sims/models/CognitionIntent';
+import { cleanId, offeredActions, validateIntent } from 'main/sentient-sims/models/CognitionIntent';
+import type { VocabularyRow } from 'main/sentient-sims/models/ActionIntent';
 import { SimStateEntry, VenueEntry } from 'main/sentient-sims/models/SimStateReport';
 
 function entry(overrides: Partial<SimStateEntry> = {}): SimStateEntry {
@@ -123,6 +124,153 @@ describe('go_out destination resolution', () => {
     expect(validated.ok).toBe(true);
     if (validated.ok) {
       expect(validated.intent.zone_id).toBeUndefined();
+    }
+  });
+});
+
+// The pie vocabulary (autonomy part 2, 2026-10-21): a row id binds to the mod's row and
+// becomes the click; anything not offered dies here.
+const ROWS: VocabularyRow[] = [
+  {
+    id: 'r12',
+    target: 'Ruby Navarro',
+    target_id: '200',
+    target_kind: 'sim',
+    category: 'Friendly > Small Talk',
+    label: 'Ask about Day',
+    key: 'mixer_social_AskAboutDay',
+  },
+  {
+    id: 'r13',
+    target: 'Ruby Navarro',
+    target_id: '200',
+    target_kind: 'sim',
+    label: 'Insult',
+    key: 'mixer_social_Insult',
+    greyed: true,
+    reason: 'Distance test failed',
+  },
+  {
+    id: 'r14',
+    target: 'object_fridge',
+    target_id: '900',
+    target_kind: 'object',
+    label: 'Cook (picker)',
+    key: 'fridge_Cook',
+    picker: true,
+  },
+  {
+    id: 'r20',
+    target: 'object_stereo',
+    target_id: '950',
+    target_kind: 'object',
+    label: 'Listen to Music <choice>',
+    key: 'stereo_Listen',
+    options: ['Pop', 'Jazz'],
+  },
+  { id: 'r21', target: 'the phone', target_id: '', target_kind: 'phone', label: 'Pay Bills', key: 'phone_PayBills' },
+  { id: 'w1', target: 'The household', target_kind: 'self', label: 'go out', key: 'go_out', source: 'whitelist' },
+];
+
+describe('pie vocabulary rows', () => {
+  it("maps a row id ('12', 'R12', 'r12') to the click", () => {
+    for (const row of ['r12', 'R12', '12']) {
+      const validated = validateIntent({ kind: 'action', row, thought: 'Ruby.' }, entry(), lotKeys, VENUES, ROWS);
+      expect(validated.ok, row).toBe(true);
+      if (validated.ok) {
+        expect(validated.intent).toMatchObject({
+          action: 'mixer_social_AskAboutDay',
+          target_sim_id: '200',
+          row: 'r12',
+          pie: { target_id: '200', target_kind: 'sim', item: 'mixer_social_AskAboutDay', label: 'Ask about Day' },
+        });
+      }
+    }
+  });
+
+  it('rejects a missing, greyed or picker row and an option the row does not list', () => {
+    for (const [candidate, reason] of [
+      [{ kind: 'action', row: 'r99' }, 'not offered'],
+      [{ kind: 'action', row: 'r13' }, 'greyed out'],
+      [{ kind: 'action', row: 'r14' }, 'opens a picker'],
+      [{ kind: 'action', row: 'r20', option: 'Metal' }, 'needs one of its options'],
+      [{ kind: 'action', row: 'r20' }, 'needs one of its options'],
+    ] as const) {
+      const validated = validateIntent(candidate, entry(), lotKeys, VENUES, ROWS);
+      expect(validated.ok).toBe(false);
+      if (!validated.ok) {
+        expect(validated.reason).toContain(reason);
+        expect(validated.fallback.kind).toBe('continue');
+      }
+    }
+  });
+
+  it('an option rides the click as its item label', () => {
+    const validated = validateIntent({ kind: 'action', row: 'r20', option: 'jazz' }, entry(), lotKeys, VENUES, ROWS);
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.intent.pie).toEqual({
+        target_id: '950',
+        target_kind: 'object',
+        item: 'stereo_Listen',
+        label: 'Jazz',
+        option: 'Jazz',
+      });
+      expect(validated.intent.target_object_id).toBe('950');
+    }
+  });
+
+  it('a phone row carries no target', () => {
+    const validated = validateIntent({ kind: 'action', row: 'r21' }, entry(), lotKeys, VENUES, ROWS);
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.intent.target_sim_id).toBeUndefined();
+      expect(validated.intent.target_object_id).toBeUndefined();
+      expect(validated.intent.pie?.target_kind).toBe('phone');
+    }
+  });
+
+  it('a whitelist row resolves through the whitelist, destination included', () => {
+    const validated = validateIntent(
+      { kind: 'action', row: 'w1', destination: 'Rattlesnake Juice' },
+      entry(),
+      lotKeys,
+      VENUES,
+      ROWS,
+    );
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.intent.action).toBe('go_out');
+      expect(validated.intent.zone_id).toBe('77');
+      expect(validated.intent.pie).toBeUndefined();
+    }
+  });
+
+  it('without rows a row answer is ignored and the action decides', () => {
+    const validated = validateIntent({ kind: 'action', row: 'r12', action: 'pay_bills' }, entry(), lotKeys, VENUES);
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.intent.action).toBe('pay_bills');
+    }
+  });
+});
+
+describe('cleanId', () => {
+  it('reads the model\'s "null" words as no id', () => {
+    for (const word of ['', ' ', 'null', 'None', 'UNDEFINED', 'none']) {
+      expect(cleanId(word)).toBeUndefined();
+    }
+    expect(cleanId(' 42 ')).toBe('42');
+    expect(cleanId(42)).toBeUndefined();
+    const validated = validateIntent(
+      { kind: 'action', action: 'pay_bills', target_object_id: 'null', target_sim_id: 'none' },
+      entry(),
+      lotKeys,
+    );
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.intent.target_object_id).toBeUndefined();
+      expect(validated.intent.target_sim_id).toBeUndefined();
     }
   });
 });

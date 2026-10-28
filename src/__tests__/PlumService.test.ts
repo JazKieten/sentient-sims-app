@@ -986,6 +986,73 @@ describe('PlumService', () => {
     expect(toolCalls().map((call) => call.name)).toEqual(['push_action']);
   });
 
+  it('a night turn is detached, quiet and self-contained: plumModel, one text block, no player row, hidden rows', async () => {
+    ctx.settings.set(SettingsEnum.PLUM_DIRECTOR_MODEL, 'claude-haiku-5-5');
+    const journal = vi.spyOn(plum.wake, 'takeJournal');
+    client.queue.push(message([text('Corinne gets a story beat.')], 'end_turn'));
+    await plum.runTurn('<night_call sim="Corinne Stiles">...</night_call>', { night: true });
+
+    expect(client.requests).toHaveLength(1);
+    const [request] = client.requests;
+    expect(request.model).toBe('claude-opus-5-5');
+    expect(request.messages).toHaveLength(1);
+    const blocks = request.messages[0].content as Anthropic.Beta.Messages.BetaTextBlockParam[];
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].text.startsWith('<night_call')).toBe(true);
+    // No <live> block was built, so the director's trigger journal was not drained
+    expect(journal).not.toHaveBeenCalled();
+    expect(plum.messages).toEqual([]);
+    expect(plum.rows).toEqual([expect.objectContaining({ kind: 'director', hidden: true })]);
+    expect(eventsOfKind('assistant')).toEqual([]);
+    expect(eventsOfKind('status').filter((event) => event.state === 'thinking')).toEqual([]);
+  });
+
+  it('edit_intentions is offered once the autonomy slot exists, reaches it, and ends the night turn', async () => {
+    const applyEdits = vi.fn(() => ({ changed: "Corinne's list: dropped 0, rewrote 0, added 1 story row" }));
+    ctx.ext.intentions = { applyEdits };
+    const withAppTools = new PlumService(ctx, { clientFactory: () => client, now: () => now });
+    withAppTools.onModMessage({ kind: 'catalogue', tier: 'stream', enabled: true, tools: [lookAtLot] });
+    client.queue.push(
+      message(
+        [
+          text('Corinne means to finish her chapter today.'),
+          toolUse('tu_1', 'edit_intentions', {
+            sim_id: '100',
+            drop: [],
+            rewrite: [],
+            add: [
+              {
+                why: 'I want to finish my chapter',
+                say: 'Words first, coffee second.',
+                target: null,
+                from_hour: null,
+                to_hour: null,
+              },
+            ],
+          }),
+        ],
+        'tool_use',
+      ),
+    );
+    await withAppTools.runTurn('<night_call/>', { night: true });
+
+    expect(client.requests[0].tools.map((tool) => tool.name)).toContain('edit_intentions');
+    // Object arrays keep it non-strict (the grammar cap)
+    expect(client.requests[0].tools.find((tool) => tool.name === 'edit_intentions')?.strict).toBeUndefined();
+    expect(applyEdits).toHaveBeenCalledWith('100', {
+      drop: [],
+      rewrite: [],
+      add: [{ why: 'I want to finish my chapter', say: 'Words first, coffee second.' }],
+    });
+    // Fire and forget: no second model call
+    expect(client.requests).toHaveLength(1);
+    expect(withAppTools.rows.map((row) => [row.kind, row.hidden])).toEqual([
+      ['director', true],
+      ['tool', true],
+    ]);
+    delete ctx.ext.intentions;
+  });
+
   describe('on an external brain (plumBrain = claude-code)', () => {
     let down: string | undefined;
     let ports: { kind: string; live: string; text: string }[];
@@ -1021,6 +1088,21 @@ describe('PlumService', () => {
       expect(eventsOfKind('error')).toEqual([]);
       const status = eventsOfKind('status').pop();
       expect(status?.text).toContain('via Claude Code');
+    });
+
+    it('a night turn reaches the brain as kind night, detached, with no live block', async () => {
+      const seen: { kind: string; detached: boolean; live: string }[] = [];
+      ctx.ext.plumBrain = {
+        unavailable: () => undefined,
+        runTurn: (port) => {
+          seen.push({ kind: port.kind, detached: port.detached, live: port.live });
+          port.say('Corinne: one story beat.');
+          return Promise.resolve({});
+        },
+      };
+      await plum.runTurn('<night_call/>', { night: true });
+      expect(seen).toEqual([{ kind: 'night', detached: true, live: '' }]);
+      expect(plum.rows).toEqual([expect.objectContaining({ kind: 'director', hidden: true })]);
     });
 
     it('while the brain is down a turn answers 503 before it builds the live block', async () => {

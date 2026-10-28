@@ -62,6 +62,16 @@ export const FactPredicate = {
   EX_PARTNER: 'ex_partner',
   FAMILY_BIT: 'family_bit',
   KNOWS: 'knows',
+  // Renovation R5a, the private view's game facts. Rendered into no prompt yet (R5b decides
+  // where): a relationship bit the game holds between the two, and what the subject KNOWS
+  // about the other Sim (SimKnowledge: a trait, the career, the major, a secret, whether they
+  // know the other is taken). objectText is the game's tuning name.
+  REL_BIT: 'rel_bit',
+  KNOWS_TRAIT: 'knows_trait',
+  KNOWS_CAREER: 'knows_career',
+  KNOWS_MAJOR: 'knows_major',
+  KNOWS_SECRET: 'knows_secret',
+  KNOWS_STATUS: 'knows_status',
 } as const;
 
 export type FactPredicate = (typeof FactPredicate)[keyof typeof FactPredicate];
@@ -79,6 +89,12 @@ export const EDGE_PREDICATES: ReadonlySet<string> = new Set([
   FactPredicate.EX_PARTNER,
   FactPredicate.FAMILY_BIT,
   FactPredicate.KNOWS,
+  FactPredicate.REL_BIT,
+  FactPredicate.KNOWS_TRAIT,
+  FactPredicate.KNOWS_CAREER,
+  FactPredicate.KNOWS_MAJOR,
+  FactPredicate.KNOWS_SECRET,
+  FactPredicate.KNOWS_STATUS,
 ]);
 
 // A sim has exactly one of each of these at a time, so a new value RETIRES the old one
@@ -150,6 +166,13 @@ export const FACT_PREDICATE_HELP: Record<FactPredicate, string> = {
   family_bit:
     "The game's exact label for a family relationship. This is where step-, half- and in-law relations show up.",
   knows: 'Someone this Sim has met at least once.',
+  rel_bit:
+    'A relationship bit the game holds between this Sim and the other one (friends, enemies, an ex, a sentiment).',
+  knows_trait: 'A trait of the other Sim that this Sim has learned (getting to know them).',
+  knows_career: "The other Sim's career, which this Sim has learned.",
+  knows_major: "The other Sim's university major, which this Sim has learned.",
+  knows_secret: 'A secret of the other Sim that this Sim has found out.',
+  knows_status: 'This Sim knows whether the other Sim is in a relationship.',
 };
 
 export function isKnownPredicate(value: unknown): value is FactPredicate {

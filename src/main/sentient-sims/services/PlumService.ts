@@ -73,6 +73,7 @@ export const FIRE_AND_FORGET_TOOLS: ReadonlySet<string> = new Set([
   'director_note',
   'camera_focus',
   'notify',
+  'edit_intentions',
 ]);
 // The implicit camera focus after a push, click or whisper: fire and forget, short leash
 export const CAMERA_FOCUS_TIMEOUT_MS = 5000;
@@ -120,10 +121,15 @@ export type PlumTurnOptions = {
   // director off): it is a director turn too (the director's model, detached). A wake_me the
   // player asked for in chat stays a chat turn.
   script?: boolean;
+  // The night call (autonomy tier, NightCallService): one Sim's intention list for the new
+  // day. Detached, hidden and muted like a director tick, on plumModel, and self-contained:
+  // no <live> block (the trigger journal stays for the director), no note, no seed; its
+  // text carries everything and its result comes back through edit_intentions.
+  night?: boolean;
 };
 
 // The kind a `[Plum] turn` log line names (scripts/plum-cost.py groups by it)
-export type PlumTurnKind = 'chat' | 'director' | 'wake';
+export type PlumTurnKind = 'chat' | 'director' | 'wake' | 'night';
 
 // How a turn ended, for the caller that needs to know (DirectorService backs off an API 400)
 export type PlumTurnResult = {
@@ -390,9 +396,23 @@ export class PlumService {
     return Boolean(options.director || options.script);
   }
 
+  // Detached from the chat thread: the director's turns and the night call
+  private isDetached(options: PlumTurnOptions): boolean {
+    return Boolean(this.isDirectorTurn(options) || options.night);
+  }
+
+  // Kept out of the tab: no status, its words and tool calls stored as hidden rows
+  private static isQuiet(options: PlumTurnOptions): boolean {
+    return Boolean(options.director || options.night);
+  }
+
   // The text blocks every turn opens with: the <live> block, then for a detached turn the
   // director's note (its only memory), for a chat turn on a fresh thread the seed
-  private turnPrefix(detached: boolean): Anthropic.Beta.Messages.BetaTextBlockParam[] {
+  private turnPrefix(detached: boolean, options: PlumTurnOptions = {}): Anthropic.Beta.Messages.BetaTextBlockParam[] {
+    if (options.night) {
+      // The night text is the whole context; building <live> would drain the journal
+      return [];
+    }
     const blocks: Anthropic.Beta.Messages.BetaTextBlockParam[] = [
       { type: 'text', text: this.liveContextBlock({ detached }) },
     ];
@@ -432,6 +452,9 @@ export class PlumService {
   }
 
   private static kindOf(options: PlumTurnOptions): PlumTurnKind {
+    if (options.night) {
+      return 'night';
+    }
     if (options.director) {
       return 'director';
     }
@@ -444,7 +467,7 @@ export class PlumService {
       return {};
     }
     this.turnRunning = true;
-    this.quietTurn = Boolean(options.director);
+    this.quietTurn = PlumService.isQuiet(options);
     this.turnPushes = 0;
     try {
       const result = await this.runTurnInner(text, options);
@@ -486,8 +509,8 @@ export class PlumService {
     const client = this.clientFactory(apiKey);
     const model = this.modelFor(options);
     const kind = PlumService.kindOf(options);
-    const detached = this.isDirectorTurn(options);
-    if (!options.director && !options.wake) {
+    const detached = this.isDetached(options);
+    if (!detached && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
@@ -495,7 +518,10 @@ export class PlumService {
     // The tool results the last chat turn ended on come first, then <live> and the text
     const carried = detached ? undefined : this.thread.pendingResults;
     this.thread.pendingResults = undefined;
-    const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [...(carried ?? []), ...this.turnPrefix(detached)];
+    const content: Anthropic.Beta.Messages.BetaContentBlockParam[] = [
+      ...(carried ?? []),
+      ...this.turnPrefix(detached, options),
+    ];
     content.push({ type: 'text', text });
     // A detached turn's messages live and die with the turn; a chat turn's are the thread's.
     // Where this turn starts in them: a refusal rolls back to here, or the flagged text would
@@ -630,10 +656,10 @@ export class PlumService {
       return { error: { status: 503, message: reason } };
     }
     const kind = PlumService.kindOf(options);
-    const detached = this.isDirectorTurn(options);
+    const detached = this.isDetached(options);
     // The seed is the conversation BEFORE this turn (the turn's own text rides after it)
     const priorRows = this.thread.rows.slice(-SEED_ROWS);
-    if (!options.director && !options.wake) {
+    if (!detached && !options.wake) {
       // Kept for the history replay only: the tab already echoed the line when it was typed
       this.addRow({ kind: 'player', text });
       this.thread.lastPlayerLineAt = this.now();
@@ -641,7 +667,7 @@ export class PlumService {
     // The same opening blocks the API loop sends: <live>, then the director's note on a
     // detached turn (the brain keeps its own context, so nothing is dropped on its side; the
     // note is still what the API path would see, and the brain's seed is a chat matter)
-    const live = this.turnPrefix(detached)
+    const live = this.turnPrefix(detached, options)
       .map((block) => block.text)
       .join('\n\n');
     const startedAt = this.now();
@@ -667,7 +693,10 @@ export class PlumService {
       runTool: async (name, args) => {
         tools += 1;
         this.turnStatus('tool');
-        const outcome = await this.runTool(name, args, { maxPushes: options.maxPushes, hidden: options.director });
+        const outcome = await this.runTool(name, args, {
+          maxPushes: options.maxPushes,
+          hidden: PlumService.isQuiet(options),
+        });
         this.turnStatus('thinking');
         return outcome;
       },
@@ -739,7 +768,10 @@ export class PlumService {
     options: PlumTurnOptions = {},
   ): Promise<Anthropic.Beta.Messages.BetaToolResultBlockParam> {
     const args = (toolUse.input ?? {}) as Record<string, unknown>;
-    const outcome = await this.runTool(toolUse.name, args, { maxPushes: options.maxPushes, hidden: options.director });
+    const outcome = await this.runTool(toolUse.name, args, {
+      maxPushes: options.maxPushes,
+      hidden: PlumService.isQuiet(options),
+    });
     return {
       type: 'tool_result' as const,
       tool_use_id: toolUse.id,
@@ -1122,7 +1154,7 @@ export class PlumService {
   // queue). A director turn is detached and left nothing on the thread, so it never rolls it
   // (and never spends a summary call).
   private async rollIfLong(options: PlumTurnOptions): Promise<void> {
-    if (this.isDirectorTurn(options) || (this.thread.contextTokens ?? 0) < THREAD_ROLL_TOKENS) {
+    if (this.isDetached(options) || (this.thread.contextTokens ?? 0) < THREAD_ROLL_TOKENS) {
       return;
     }
     log.info(`[Plum] the conversation passed ${THREAD_ROLL_TOKENS / 1000}k tokens; rolling to a fresh thread`);
@@ -1237,7 +1269,7 @@ export class PlumService {
 
   // Plum's words in a turn: a row the tab shows, or a director row the thread keeps quietly
   private sayRow(text: string, options: PlumTurnOptions) {
-    if (options.director) {
+    if (PlumService.isQuiet(options)) {
       this.addRow({ kind: 'director', text, hidden: true });
       return;
     }

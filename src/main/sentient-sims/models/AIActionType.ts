@@ -39,6 +39,11 @@ export enum AIActionType {
   MEMORY_IMPORTANCE = 'memory_importance',
   // The feedback a mapper reads after testing an interaction or animation mapping
   MAPPING_REVIEW = 'mapping_review',
+  // The Jev day (2026-10-27): a typed decision (row pick, hands, scene impulse) on the
+  // Decisions API. Logged under this type; the endpoint is fixed, so an override is only a label.
+  DECISION = 'decision',
+  // The one-line first-person thought a decided beat earns when it mattered (cheap model)
+  BEAT_THOUGHT = 'beat_thought',
 }
 
 export const AllAIActionTypes: AIActionType[] = [
@@ -67,6 +72,8 @@ export const AllAIActionTypes: AIActionType[] = [
   AIActionType.ASK_DECISION,
   AIActionType.MEMORY_IMPORTANCE,
   AIActionType.MAPPING_REVIEW,
+  AIActionType.DECISION,
+  AIActionType.BEAT_THOUGHT,
 ];
 
 // The stages only the autonomy tier runs (release 4.5). The enum and the settings stay whole
@@ -79,6 +86,8 @@ export const TIER_ACTION_TYPES: AIActionType[] = [
   AIActionType.ASK_TRIAGE,
   AIActionType.ASK_ACTION_MATCH,
   AIActionType.ASK_DECISION,
+  AIActionType.DECISION,
+  AIActionType.BEAT_THOUGHT,
 ];
 
 // configId per action; missing key means "use the default provider config"
@@ -136,6 +145,10 @@ export function AIActionTypeName(actionType: AIActionType): string {
       return 'Memory Importance';
     case AIActionType.MAPPING_REVIEW:
       return 'Mapping Review';
+    case AIActionType.DECISION:
+      return 'Decision (Jev)';
+    case AIActionType.BEAT_THOUGHT:
+      return 'Beat Thought';
     default:
       return actionType;
   }
@@ -193,6 +206,10 @@ export function AIActionTypeDescription(actionType: AIActionType): string {
       return 'Rates how memorable each stored memory is, for retrieval (cheap model recommended)';
     case AIActionType.MAPPING_REVIEW:
       return 'Reads a tested interaction or animation mapping against the mapping guidelines';
+    case AIActionType.DECISION:
+      return 'Typed decisions (which row, which pie item, act after a scene) on the OpenRouter Decisions API';
+    case AIActionType.BEAT_THOUGHT:
+      return 'The one-line thought a sim has when a decided beat matters (cheap model recommended)';
     default:
       return '';
   }

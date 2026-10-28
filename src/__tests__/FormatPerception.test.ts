@@ -50,6 +50,17 @@ describe('formatPerception', () => {
     );
   });
 
+  it('an object with no verb left is still a thing in the room', () => {
+    const snapshot: PerceptionSnapshot = {
+      sim_id: '1',
+      location: { outdoors: false },
+      sims: [],
+      objects: [{ object_id: '5', action_keys: [], name: 'object_chairDining', tier: 'same_room', distance: 4.2 }],
+    };
+    expect(formatPerception(snapshot)).toContain('You can see: a chair (4m away).');
+    expect(formatPerception(snapshot)).not.toContain('could ,');
+  });
+
   it('counts multiple audible sims and keeps them anonymous', () => {
     const snapshot: PerceptionSnapshot = {
       sim_id: '1',

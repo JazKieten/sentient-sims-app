@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -13,6 +14,9 @@ const LIBRARY_VALIDATION_ENTITLEMENT = 'com.apple.security.cs.disable-library-va
 
 // Fallback install locations searched when the configured path is missing.
 const CANDIDATE_APP_PATHS = ['/Applications/EA Games/The Sims 4.app', '/Applications/The Sims 4.app'];
+
+// How many stray files one signing run will set aside before giving up.
+const MAX_STRAY_FILES = 8;
 
 export class GameSigningService {
   private ctx: ApiContext;
@@ -94,16 +98,22 @@ export class GameSigningService {
 
     const entitlementsPath = this.ctx.getAssetPath('game-entitlements.mac.plist');
     log.info(`Re-signing ${gameExePath} ad-hoc with entitlements ${entitlementsPath}`);
-    await execFileAsync('codesign', [
-      '--force',
-      '--sign',
-      '-',
-      '--entitlements',
-      entitlementsPath,
-      '--options',
-      'runtime',
-      gameExePath,
-    ]);
+    await signWithStrayFilesAside(
+      contentsDirFor(gameExePath),
+      async () => {
+        await execFileAsync('codesign', [
+          '--force',
+          '--sign',
+          '-',
+          '--entitlements',
+          entitlementsPath,
+          '--options',
+          'runtime',
+          gameExePath,
+        ]);
+      },
+      fileMover(),
+    );
     log.info('Game re-signed for overlay support');
   }
 
@@ -142,4 +152,88 @@ export class GameSigningService {
 
 function exePathFor(gameAppPath: string): string {
   return path.join(gameAppPath, 'Contents', 'MacOS', 'The Sims 4');
+}
+
+function contentsDirFor(gameExePath: string): string {
+  return path.dirname(path.dirname(gameExePath));
+}
+
+export interface FileMover {
+  // Moves the file out of the bundle and returns where it went.
+  setAside(filePath: string): string;
+  restore(asidePath: string, filePath: string): void;
+}
+
+// codesign treats every loose file in the bundle's Contents folder as nested
+// code and refuses to sign while one is unsigned ("code object is not signed
+// at all / In subcomponent: <path>"). An old overlay build left its imgui.ini
+// there and blocked every re-sign on that Mac (ticket 2026-10-29). The file
+// codesign names is set aside for the signing and put back after, so EA's
+// install stays as it was; nothing codesign did not name is touched.
+export async function signWithStrayFilesAside(
+  contentsDir: string,
+  runCodesign: () => Promise<void>,
+  mover: FileMover,
+): Promise<void> {
+  const setAside: Array<{ from: string; to: string }> = [];
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await runCodesign();
+        return;
+      } catch (error) {
+        const stray = strayFileNamedBy(String(error), contentsDir);
+        if (stray === null || attempt >= MAX_STRAY_FILES) {
+          throw error;
+        }
+        log.warn(`codesign refuses the stray file ${stray} in the game bundle; setting it aside while signing`);
+        setAside.push({ from: stray, to: mover.setAside(stray) });
+      }
+    }
+  } finally {
+    for (const { from, to } of setAside.reverse()) {
+      try {
+        mover.restore(to, from);
+      } catch (error) {
+        log.error(`Could not put ${from} back after signing (it is at ${to}): ${String(error)}`);
+      }
+    }
+  }
+}
+
+// The loose file a codesign failure names, if it is one we may set aside: a
+// plain file directly in Contents (never anything under MacOS, Frameworks or
+// Resources, and never Info.plist or PkgInfo, which the bundle needs).
+export function strayFileNamedBy(codesignOutput: string, contentsDir: string): string | null {
+  const match = /In subcomponent: (.+)$/m.exec(codesignOutput);
+  if (!match) {
+    return null;
+  }
+  const named = match[1].trim();
+  if (path.dirname(named) !== contentsDir) {
+    return null;
+  }
+  if (['Info.plist', 'PkgInfo'].includes(path.basename(named))) {
+    return null;
+  }
+  return named;
+}
+
+function fileMover(): FileMover {
+  let asideDir: string | null = null;
+  return {
+    setAside(filePath) {
+      if (!fs.statSync(filePath).isFile()) {
+        throw new Error(`${filePath} is not a plain file`);
+      }
+      asideDir = asideDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'sentient-sims-codesign-'));
+      const asidePath = path.join(asideDir, path.basename(filePath));
+      fs.renameSync(filePath, asidePath);
+      return asidePath;
+    },
+    restore(asidePath, filePath) {
+      fs.renameSync(asidePath, filePath);
+      log.info(`Put ${filePath} back after signing`);
+    },
+  };
 }

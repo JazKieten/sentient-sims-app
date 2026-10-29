@@ -29,3 +29,25 @@ export type AIExchangeDetail = AIExchangeSummary & {
   request: OpenAICompatibleRequest;
   responseText: string;
 };
+
+// One answer to a logged prompt: the original call, or the same prompt sent to another preset
+export type ReplayAnswer = {
+  configId?: string;
+  name: string;
+  apiType?: ApiType;
+  model?: string;
+  text: string;
+  durationMs: number;
+  // Actor calls only: what would air (SAY) and the private line (THINK), as the pipeline parses them
+  say?: string;
+  think?: string;
+  sayWords?: number;
+  error?: string;
+};
+
+export type ReplayResult = {
+  exchangeId: number;
+  label: string;
+  original: ReplayAnswer;
+  replays: ReplayAnswer[];
+};

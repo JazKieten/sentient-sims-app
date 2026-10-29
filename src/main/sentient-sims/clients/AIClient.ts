@@ -1,5 +1,5 @@
 import { SentientSimsAIError } from '../exceptions/SentientSimsAIError';
-import { AIExchangeDetail, AIExchangeSummary } from '../models/AIExchangeLog';
+import { AIExchangeDetail, AIExchangeSummary, ReplayResult } from '../models/AIExchangeLog';
 import { AIModel } from '../models/AIModel';
 import { ApiType } from '../models/ApiType';
 import { InteractionEventResult } from '../models/InteractionEventResult';
@@ -51,6 +51,17 @@ export class AIClient extends ApiClient {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * POST /ai/exchanges/:id/replay
+   * The same prompt sent to other provider presets, answers next to the original.
+   */
+  async replayExchange(exchangeId: number, configIds: string[]): Promise<ReplayResult> {
+    const response = await axiosClient.post<ReplayResult>(`${this.apiUrl}/ai/exchanges/${exchangeId}/replay`, {
+      configIds,
+    });
+    return response.data;
   }
 
   async getModels(apiType?: ApiType): Promise<AIModel[]> {

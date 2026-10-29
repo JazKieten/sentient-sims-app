@@ -143,6 +143,7 @@ function routes(app: Express, ctx: ApiContext) {
   const { bench, mappingController, devRoutes } = devOf(ctx);
   app.get('/ai/exchanges/:exchangeId', bench.getExchange);
   app.get('/ai/exchanges', bench.getExchanges);
+  app.post('/ai/exchanges/:exchangeId/replay', bench.replayExchange);
   // The tier-0 run-validity gate over the loaded save
   app.get('/bench/tier0', bench.getTier0);
   app.post('/bench/self-knowledge/:simId', bench.selfKnowledge);

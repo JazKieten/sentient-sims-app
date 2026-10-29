@@ -8,6 +8,7 @@ import { BatteryQuestion, buildQuestions, gradeBattery } from '../bench/selfKnow
 import { PLAYER_THREAD_FIXTURES } from '../bench/playerThreadFixtures';
 import { runPlayerThread } from '../bench/playerThreads';
 import { autonomyOf } from '../tiers/autonomy';
+import { MAX_REPLAY_CONFIGS, replayExchange } from '../bench/replayExchange';
 
 // DEV tier (release 4.5): the measurement routes (/bench/*) and the AI exchange log reader
 // (/ai/exchanges*), split out of AIController so the player builds carry none of them.
@@ -164,6 +165,24 @@ export class BenchController {
       return;
     }
     res.json(exchange);
+  };
+
+  // The same logged prompt sent to up to four other provider presets, answers side by side
+  @CatchErrors()
+  replayExchange = async (req: Request, res: Response) => {
+    const exchangeId = Number(req.params.exchangeId);
+    const exchange = this.ctx.aiExchangeLog.get(exchangeId);
+    if (!exchange) {
+      res.status(404).json({ error: `No AI exchange ${exchangeId}` });
+      return;
+    }
+    const { configIds } = (req.body ?? {}) as { configIds?: unknown };
+    const ids = Array.isArray(configIds) ? configIds.filter((id): id is string => typeof id === 'string') : [];
+    if (ids.length === 0 || ids.length > MAX_REPLAY_CONFIGS) {
+      res.status(400).json({ error: `configIds must name 1 to ${MAX_REPLAY_CONFIGS} provider presets` });
+      return;
+    }
+    res.json(await replayExchange(this.ctx, exchange, ids));
   };
 
   // Tier-0 run-validity gate over the loaded save: machinery text stored as a diary, and

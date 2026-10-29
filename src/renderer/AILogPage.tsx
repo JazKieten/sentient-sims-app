@@ -15,8 +15,12 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useMemo, useState } from 'react';
 import { AIExchangeSummary } from 'main/sentient-sims/models/AIExchangeLog';
 import { AIActionType, AIActionTypeName } from 'main/sentient-sims/models/AIActionType';
+import { AIProviderConfig } from 'main/sentient-sims/models/AIProviderConfig';
+import { SettingsEnum } from 'main/sentient-sims/models/SettingsEnum';
 import AppCard from './AppCard';
 import { LLMExchangeDetail } from './components/LLMExchangeDetail';
+import { ReplayPanel } from './components/ReplayPanel';
+import useSetting from './hooks/useSetting';
 import { useAIExchange, useAIExchanges } from './hooks/useAIExchanges';
 import { useDebugMode } from './providers/DebugModeProvider';
 
@@ -25,7 +29,24 @@ function formatTime(iso: string): string {
   return at.toLocaleTimeString(undefined, { hour12: false });
 }
 
-function ExchangeRow({ exchange }: { exchange: AIExchangeSummary }) {
+type ReplayPicks = {
+  configs: AIProviderConfig[];
+  selected: string[];
+  onSelectedChange: (ids: string[]) => void;
+};
+
+const REPLAY_PICKS_KEY = 'aiLog.replayPicks';
+
+function readReplayPicks(): string[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(REPLAY_PICKS_KEY) ?? '[]') as unknown;
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function ExchangeRow({ exchange, replay }: { exchange: AIExchangeSummary; replay: ReplayPicks }) {
   const [expanded, setExpanded] = useState(false);
   // Only fetch the (large) prompt once this row is actually opened
   const { exchange: detail, isLoading } = useAIExchange(expanded ? exchange.id : undefined);
@@ -66,6 +87,14 @@ function ExchangeRow({ exchange }: { exchange: AIExchangeSummary }) {
           </Box>
         ) : null}
         {detail ? (
+          <ReplayPanel
+            exchangeId={exchange.id}
+            configs={replay.configs}
+            selected={replay.selected}
+            onSelectedChange={replay.onSelectedChange}
+          />
+        ) : null}
+        {detail ? (
           <LLMExchangeDetail
             messages={detail.request.messages}
             responseText={detail.responseText}
@@ -88,6 +117,20 @@ export default function AILogPage() {
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState<AIActionType | 'all'>('all');
   const { exchanges, isLoading } = useAIExchanges(live);
+  const providerConfigs = useSetting<AIProviderConfig[]>(SettingsEnum.AI_PROVIDER_CONFIGS, []);
+  const [replaySelected, setReplaySelected] = useState<string[]>(readReplayPicks);
+  const replay: ReplayPicks = {
+    configs: providerConfigs.value,
+    selected: replaySelected,
+    onSelectedChange: (ids) => {
+      setReplaySelected(ids);
+      try {
+        localStorage.setItem(REPLAY_PICKS_KEY, JSON.stringify(ids));
+      } catch {
+        // a remembered pick is a convenience only
+      }
+    },
+  };
 
   const actionTypes = useMemo(() => {
     const present = new Set<AIActionType>();
@@ -175,7 +218,7 @@ export default function AILogPage() {
           </AppCard>
         ) : null}
         {filtered.map((exchange) => (
-          <ExchangeRow key={exchange.id} exchange={exchange} />
+          <ExchangeRow key={exchange.id} exchange={exchange} replay={replay} />
         ))}
       </Box>
     </>

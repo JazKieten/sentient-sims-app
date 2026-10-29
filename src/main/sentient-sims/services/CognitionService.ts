@@ -9,7 +9,7 @@ import { CognitionIntent, offeredActions, SOCIAL_ACTIONS, validateIntent } from 
 import { DISCRETIONARY_ACTIONS, isBelowChild, offLoadoutActions } from '../models/ActionLoadout';
 import { InteractionOutcomeEvent, VocabularyResult, VocabularyRow } from '../models/ActionIntent';
 import { CognitionHoldReleased } from '../models/ModLogWebsocketMessage';
-import type { IntentionRow } from '../models/IntentionRow';
+import { IntentionRow, rowActionText } from '../models/IntentionRow';
 import type { IntentionService } from './intentions/IntentionService';
 import { ACTION_OPTIONS_PIE_SYSTEM_PROMPT, BEAT_THOUGHT_SYSTEM_PROMPT } from '../pipeline/prompts/action';
 import { chosenKey, DecisionQuestion, IMPORTANCE_LEVELS, scoreLevel } from './DecisionService';
@@ -2187,12 +2187,13 @@ export class CognitionService {
         if (decision) {
           runtime.lastDecision = undefined;
         }
+        const action = rowActionText(entry.sim_name?.trim() ?? '', row, intent);
         if (decision && decision.importance >= this.ctx.settings.thoughtShowScore) {
           // The Jev day: an important beat gets its thought (text, or voiced at the top
           // tier) AFTER the click went out; it replaces the row's own line for this beat
-          this.queueThought(entry, row, decision, 'approved');
+          this.queueThought(entry, row, decision, 'approved', action);
         } else if (row?.say) {
-          this.voiceWhy(entry, row);
+          this.voiceWhy(entry, row, action);
         }
       }
       return true;
@@ -2206,8 +2207,9 @@ export class CognitionService {
 
   // The why, voiced (part 7, the design's D4): a fired row's `say` as a "(to self)" line
   // through the existing scene_line path (balloon, mouth, memories row), stored as the Sim's
-  // monologue. No model call: the line was written by a seed or the night call.
-  private voiceWhy(entry: SimStateEntry, row: IntentionRow) {
+  // monologue under `action` = what they do. No model call: the line was written by a seed
+  // or the night call.
+  private voiceWhy(entry: SimStateEntry, row: IntentionRow, action: string | undefined) {
     const say = row.say?.trim();
     const name = entry.sim_name?.trim();
     if (!say || !name || !this.ctx.settings.intentionVoiceWhy) {
@@ -2219,14 +2221,15 @@ export class CognitionService {
       log.debug(`[Rows] ${name.split(/\s+/)[0]} already said ${row.seedKey} today`);
       return;
     }
-    if (this.sayToSelf(entry, say, row.why)) {
+    if (this.sayToSelf(entry, say, action)) {
       intentions?.markSaid(entry.sim_id, row);
     }
   }
 
   // The voiced recipe: a "(to self)" line through the scene_line path (balloon, mouth,
-  // memories row), stored as the Sim's monologue. True when it went out.
-  private sayToSelf(entry: SimStateEntry, text: string, why?: string): boolean {
+  // memories row), stored as the Sim's monologue with the action they are doing. True when
+  // it went out.
+  private sayToSelf(entry: SimStateEntry, text: string, action?: string): boolean {
     const name = entry.sim_name?.trim();
     const say = text.trim();
     if (!name || !say) {
@@ -2248,7 +2251,7 @@ export class CognitionService {
           content: finalText,
           location_id: entry.location?.zone_id ?? 0,
           event_type: 'monologue',
-          action: why,
+          action,
         },
         participants: [{ id: entry.sim_id }],
         index: { owner: entry.sim_id },
@@ -2269,7 +2272,7 @@ export class CognitionService {
   // The silent recipe (the Jev day's text tier): the same monologue row, memories window
   // only. The mod keeps monologue rows off the subtitle/pause path, so nothing is voiced,
   // nothing pauses, no balloon.
-  private noteToSelf(entry: SimStateEntry, text: string, why: string | undefined, importance: number): boolean {
+  private noteToSelf(entry: SimStateEntry, text: string, action: string | undefined, importance: number): boolean {
     const name = entry.sim_name?.trim();
     const think = text.trim();
     if (!name || !think) {
@@ -2281,7 +2284,7 @@ export class CognitionService {
           content: `${name} (to self): ${think}`,
           location_id: entry.location?.zone_id ?? 0,
           event_type: 'monologue',
-          action: why,
+          action,
         },
         participants: [{ id: entry.sim_id }],
         index: { owner: entry.sim_id, importance },
@@ -2409,7 +2412,13 @@ export class CognitionService {
       // No attempt, no beat: the rows stay waiting. Four ticks, not one: live 2026-10-27 a
       // declined Sim was re-asked every 15 s with the same answer
       this.toCooldown(simId, JEV_NONE_COOLDOWN_TICKS);
-      this.queueThought(entry, first, runtime.lastDecision, 'declined');
+      this.queueThought(
+        entry,
+        first,
+        runtime.lastDecision,
+        'declined',
+        rowActionText(entry.sim_name?.trim() ?? '', first, undefined, 'declined'),
+      );
       return;
     }
     runtime.lastDecision = { rowId: chosen.id, choice: chosen.id, importance: level, at: Date.now() };
@@ -2595,6 +2604,7 @@ export class CognitionService {
     row: IntentionRow | undefined,
     decision: { importance: number },
     verdict: 'approved' | 'declined',
+    action: string | undefined,
   ) {
     if (decision.importance < this.ctx.settings.thoughtShowScore) {
       return;
@@ -2633,11 +2643,11 @@ export class CognitionService {
           return;
         }
         if (decision.importance >= this.ctx.settings.thoughtVoiceScore && this.ctx.settings.intentionVoiceWhy) {
-          if (this.sayToSelf(entry, text, row?.why)) {
+          if (this.sayToSelf(entry, text, action)) {
             return;
           }
         }
-        this.noteToSelf(entry, text, row?.why, decision.importance);
+        this.noteToSelf(entry, text, action, decision.importance);
       } catch (error) {
         log.warn(`[Rows] beat thought failed for sim ${entry.sim_id}`, error);
       }

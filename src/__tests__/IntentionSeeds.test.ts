@@ -9,7 +9,14 @@ import {
   shiftStartMinutes,
   storyRow,
 } from 'main/sentient-sims/services/intentions/IntentionSeeds';
-import { clockMinutes, describeRow, preconditionsHold, untilReached } from 'main/sentient-sims/models/IntentionRow';
+import {
+  actionWords,
+  clockMinutes,
+  describeRow,
+  preconditionsHold,
+  rowActionText,
+  untilReached,
+} from 'main/sentient-sims/models/IntentionRow';
 
 // Autonomy part 5: the seeds of a Sim's intention list, in priority order, and the merge
 // that keeps a row's status across reports.
@@ -333,5 +340,42 @@ describe('the night call rows (part 6) and the say line (part 7)', () => {
     // Story (rank 3) sits after bills (1) and before a want (9); a rank of 0 puts it first
     expect(orderRows([seeded[1], story, seeded[0]]).map((row) => row.source)).toEqual(['bills', 'story', 'want']);
     expect(orderRows([seeded[0], { ...story, rank: 0 }]).map((row) => row.source)).toEqual(['story', 'bills']);
+  });
+});
+
+// The memories window's Action box for a row's line or thought: what the Sim does, never
+// the first-person why (a want's text used to land there and read as dialogue)
+describe('rowActionText', () => {
+  const want = {
+    id: 'i1',
+    seedKey: 'want:1',
+    source: 'want' as const,
+    what: { kind: 'pie' as const, candidates: ['stereo_Listen'], label: 'I want music, the whole scene.' },
+    why: 'I want music, the whole scene.',
+    say: 'I want music, the whole scene.',
+    preconditions: [],
+    until: { kind: 'want_absent' as const },
+    status: 'waiting' as const,
+    attempts: 0,
+    history: [],
+  };
+
+  it('turns keys into words', () => {
+    expect(actionWords('mixer_social_AskAboutDay')).toBe('Ask About Day');
+    expect(actionWords('stereo_Listen')).toBe('Listen (stereo)');
+    expect(actionWords('listen_to_music')).toBe('listen to music');
+    expect(actionWords('Friendly > Ask About Day')).toBe('Ask About Day');
+  });
+
+  it('names the clicked item, else the whitelist verb, else the row, never the why', () => {
+    expect(rowActionText('Jake Flores', want, { action: 'stereo_Listen', pie: { item: 'stereo_Listen' } })).toBe(
+      'Jake Flores: Listen (stereo)',
+    );
+    expect(rowActionText('Jake Flores', want, { action: 'listen_to_music' })).toBe('Jake Flores: listen to music');
+    expect(rowActionText('Jake Flores', want)).toBe('Jake Flores: Listen (stereo)');
+    expect(rowActionText('Jake Flores', { ...want, target: { sim_id: '2', name: 'Adrian' } }, undefined, 'declined')).toBe(
+      'Jake Flores: Listen (stereo) (with Adrian) (decided against)',
+    );
+    expect(rowActionText('Jake Flores', { ...want, what: { kind: 'note' } })).toBeUndefined();
   });
 });

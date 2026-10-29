@@ -342,3 +342,57 @@ export function cleanIdWord(value: unknown): string | undefined {
   const trimmed = value.trim();
   return NIL_WORDS.has(trimmed.toLowerCase()) ? undefined : trimmed;
 }
+
+// A menu key or whitelist verb as words: 'mixer_social_AskAboutDay' -> 'Ask About Day',
+// 'stereo_Listen' -> 'Listen (stereo)', 'listen_to_music' -> 'listen to music'. A tuning key
+// keeps its CamelCase tail and names the lowercase object prefix in brackets; a label that
+// is already words ("Friendly > Ask About Day") keeps its last segment.
+export function actionWords(key: string): string {
+  const trimmed = key.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.includes(' ')) {
+    return trimmed.slice(trimmed.lastIndexOf('>') + 1).trim();
+  }
+  const parts = trimmed.split('_').filter(Boolean);
+  const first = parts.findIndex((part) => /^[A-Z]/.test(part));
+  if (first < 0) {
+    return parts.join(' ');
+  }
+  const words = parts
+    .slice(first)
+    .join(' ')
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2');
+  const object = parts.slice(0, first).filter((part) => !['mixer', 'social', 'solo', 'sim'].includes(part));
+  return object.length > 0 ? `${words} (${object.join(' ')})` : words;
+}
+
+// The sentence the memories window's Action box shows for a row's own line or thought:
+// what the Sim does, never the row's first-person `why` (a want's text, or the night call's
+// wish). From the dispatch when there is one (the menu item clicked, else the whitelist
+// verb), else from the row itself; the target's name rides along.
+export function rowActionText(
+  name: string,
+  row: IntentionRow | undefined,
+  dispatch?: { action?: string; pie?: { item?: string; option?: string } },
+  verdict: 'approved' | 'declined' = 'approved',
+): string | undefined {
+  let phrase = '';
+  if (dispatch?.pie?.option) {
+    phrase = actionWords(dispatch.pie.option);
+  } else if (dispatch?.pie?.item) {
+    phrase = actionWords(dispatch.pie.item);
+  } else if (dispatch?.action) {
+    phrase = actionWords(dispatch.action);
+  } else if (row?.what.kind === 'pie' && row.what.candidates[0]) {
+    phrase = actionWords(row.what.candidates[0]);
+  } else if (row?.what.kind === 'action' && row.what.actions[0]) {
+    phrase = actionWords(row.what.actions[0]);
+  }
+  if (!phrase) {
+    return undefined;
+  }
+  const target = row?.target?.name ? ` (with ${row.target.name})` : '';
+  return verdict === 'declined' ? `${name}: ${phrase}${target} (decided against)` : `${name}: ${phrase}${target}`;
+}

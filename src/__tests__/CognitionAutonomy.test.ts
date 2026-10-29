@@ -938,6 +938,8 @@ describe('the legacy tick flag, the voiced why and the night call (parts 6 and 7
     expect(memories[0].memory).toMatchObject({
       event_type: 'monologue',
       content: `Elliot Calloway (to self): ${BILLS_SAY}`,
+      // The Action box names the action, not the row's first-person why
+      action: 'Elliot Calloway: pay bills',
     });
   });
 

@@ -36,7 +36,6 @@ import { canSpeak } from '../util/speechCapability';
 import { SceneAbortedError } from '../exceptions/SceneAbortedError';
 import { GenerationCallControl } from './GenerationService';
 import { GenerationOptions, PromptRequestBuilderOptions } from './PromptRequestBuilderService';
-import { containsPlayerSim } from '../util/eventContainsPlayerSim';
 import { ApiType } from '../models/ApiType';
 import {
   defaultClassificationPrompt,
@@ -902,12 +901,9 @@ ${factsBlock}
     }
   }
 
-  // gateEvent is the un-narrowed event: a group social narrowed to an NPC-NPC pair still
-  // belongs to the player's conversation, so player-sim eligibility is judged on the group
-  async resolveInteractionPreAction(
-    event: InteractionEvent,
-    gateEvent: SSEvent = event,
-  ): Promise<ResolvedInteractionPreAction> {
+  // Who gets a scene is the mod's call (voice_all_sims, active_sim_only): an event with
+  // no played Sim in it is an NPC scene the mod chose to send
+  async resolveInteractionPreAction(event: InteractionEvent): Promise<ResolvedInteractionPreAction> {
     let description: InteractionDescription | undefined;
     if (event.testing_action) {
       description = {
@@ -919,11 +915,6 @@ ${factsBlock}
 
     if (description?.ignored === true) {
       return { result: { status: InteractionEventStatus.IGNORED } };
-    }
-
-    const hasPlayerSim = containsPlayerSim(gateEvent);
-    if (!hasPlayerSim && !description?.always_run) {
-      return { result: { status: InteractionEventStatus.NOT_PLAYER_SIM } };
     }
 
     if (!description) {
@@ -991,7 +982,7 @@ ${factsBlock}
 
   async handleInteraction(event: InteractionEvent, deadline: RequestDeadline = {}) {
     const primaryEvent = toPrimaryInteractionEvent(event);
-    const resolved = await this.resolveInteractionPreAction(primaryEvent, event);
+    const resolved = await this.resolveInteractionPreAction(primaryEvent);
     if (resolved.result) {
       return resolved.result;
     }
@@ -1101,11 +1092,6 @@ ${factsBlock}
     if (!this.ctx.animations.isNsfwEnabled()) {
       log.info(`[WickedWhims] ${event.ww_event_type} skipped: NSFW is off for an OpenAI stage`);
       return { status: InteractionEventStatus.NSFW_DISABLED };
-    }
-
-    if (!containsPlayerSim(event)) {
-      log.info(`[WickedWhims] ${event.ww_event_type} skipped: no player sim in it`);
-      return { status: InteractionEventStatus.NOOP };
     }
 
     let preAction;

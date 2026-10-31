@@ -137,7 +137,7 @@ export class GenerationQueueService {
     }
 
     const event = toPrimaryInteractionEvent(request.event);
-    const resolved = await this.ctx.ai.resolveInteractionPreAction(event, request.event);
+    const resolved = await this.ctx.ai.resolveInteractionPreAction(event);
     if (resolved.result) {
       return { status: 'noop' };
     }

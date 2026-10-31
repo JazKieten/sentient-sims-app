@@ -405,7 +405,7 @@ former voiceWhy body); an important decline is thought about too; under the thre
 as before. BudgetGate: `recordLatency(ms, minMs)` and `seed(ms)` so sub-2 s Jev deliberations count. Tests:
 DecisionService.test.ts, the Jev-day block in CognitionAutonomy.test.ts, IntentionService.test.ts
 (candidates/recordPick), StoryClicks.test.ts (seed), JevDayToggle.test.ts. THE ONE SWITCH: `jevDayAutonomy`
-(SettingsEnum.JEV_DAY_AUTONOMY, default true; renderer/settings/JevDaySettingsComponent.tsx, a Switch on the
+(SettingsEnum.JEV_DAY_AUTONOMY, default false since 2026-10-31 for the public testing cut; renderer/settings/JevDaySettingsComponent.tsx, a Switch on the
 autonomy tier's settings rows): off = release/4.6's autonomy in this same build, because the getters
 `cognitionLegacyTick` (true), `intentionRowsEnabled`, `cognitionGateEnabled`, `intentionNightCallEnabled`,
 `jevSceneImpulse` (false), `cognitionVocabulary` ('whitelist') and `decisionProvider` ('off') all answer from

@@ -55,6 +55,7 @@ describe('Settings', () => {
   });
 
   it('autonomy parts 6 and 7 defaults: legacy tick off, night call on, the why voiced', () => {
+    ctx.settings.set(SettingsEnum.JEV_DAY_AUTONOMY, true);
     expect(ctx.settings.cognitionLegacyTick).toBe(false);
     expect(ctx.settings.intentionNightCallEnabled).toBe(true);
     expect(ctx.settings.intentionVoiceWhy).toBe(true);

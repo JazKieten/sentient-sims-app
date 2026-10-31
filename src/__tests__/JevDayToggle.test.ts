@@ -5,9 +5,17 @@ import { mockApiContext } from './util';
 // The one switch (2026-10-27): on = the Jev day, off = release/4.6's autonomy. Every getter
 // the two autonomies differ on answers from it.
 describe('jevDayAutonomy', () => {
-  it('on by default: rows, pie, gate, night call and Jev', () => {
+  it("off by default: release/4.6's autonomy", () => {
+    const ctx = mockApiContext();
+    expect(ctx.settings.jevDayAutonomy).toBe(false);
+    expect(ctx.settings.cognitionLegacyTick).toBe(true);
+    expect(ctx.settings.intentionRowsEnabled).toBe(false);
+  });
+
+  it('on: rows, pie, gate, night call and Jev', () => {
     const ctx = mockApiContext();
     ctx.settings.openrouterKey = 'or-key';
+    ctx.settings.set(SettingsEnum.JEV_DAY_AUTONOMY, true);
     expect(ctx.settings.jevDayAutonomy).toBe(true);
     expect(ctx.settings.cognitionLegacyTick).toBe(false);
     expect(ctx.settings.intentionRowsEnabled).toBe(true);

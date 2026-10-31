@@ -368,8 +368,9 @@ export function defaultStore(cwd?: string) {
       },
       [SettingsEnum.JEV_DAY_AUTONOMY.toString()]: {
         type: 'boolean',
-        // The one switch between the Jev day and release/4.6's autonomy (see SettingsEnum)
-        default: true,
+        // The one switch between the Jev day and release/4.6's autonomy (see SettingsEnum);
+        // off by default, so a tester starts on 4.6's autonomy
+        default: false,
       },
       [SettingsEnum.DECISION_PROVIDER.toString()]: {
         type: 'string',
@@ -1429,7 +1430,7 @@ export class SettingsService {
   // cognition lanes read these each tick). The stored per-feature values stay in the store
   // for a dev who flips them with the switch on.
   get jevDayAutonomy(): boolean {
-    return this.get(SettingsEnum.JEV_DAY_AUTONOMY) !== false;
+    return this.get(SettingsEnum.JEV_DAY_AUTONOMY) === true;
   }
 
   get cognitionVocabulary(): 'pie' | 'whitelist' {

@@ -8,7 +8,7 @@ import useSetting from '../hooks/useSetting';
 // per-tick monologue, scores and three-stage Action Scene over the whitelist). Flipping it
 // takes effect on the next tick; no restart.
 export default function JevDaySettingsComponent() {
-  const jevDay = useSetting<boolean>(SettingsEnum.JEV_DAY_AUTONOMY, true);
+  const jevDay = useSetting<boolean>(SettingsEnum.JEV_DAY_AUTONOMY, false);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', marginBottom: 2 }}>
